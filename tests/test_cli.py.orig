@@ -1,0 +1,218 @@
+import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from colab_cli.cli import main
+from colab_cli.client import Assignment, PostAssignmentResponse
+
+
+@pytest.fixture
+def mock_get_credentials(mocker):
+    return mocker.patch("colab_cli.cli.get_credentials")
+
+
+@pytest.fixture
+def mock_client_class(mocker):
+    return mocker.patch("colab_cli.cli.Client")
+
+
+@pytest.fixture
+def mock_store_class(mocker):
+    return mocker.patch("colab_cli.cli.StateStore")
+
+
+def test_cli_new_tpu(mock_get_credentials, mock_client_class, mock_store_class):
+    mock_get_credentials.return_value = MagicMock()
+    mock_client = mock_client_class.return_value
+
+    mock_res = MagicMock()
+    mock_res.__class__ = PostAssignmentResponse
+    mock_res.runtime_proxy_info.token = "t1"
+    mock_res.runtime_proxy_info.url = "u1"
+    mock_res.endpoint = "e1"
+    mock_client.assign.return_value = mock_res
+
+    mock_store = mock_store_class.return_value
+
+    with patch.object(sys, "argv", ["colab", "new", "my-session", "-tpu", "v5e1"]):
+        main()
+
+    added_state = mock_store.add.call_args[0][0]
+    assert added_state.name == "my-session"
+    assert added_state.variant == "TPU"
+    assert added_state.accelerator == "V5E1"
+
+
+def test_cli_new_gpu(mock_get_credentials, mock_client_class, mock_store_class):
+    mock_get_credentials.return_value = MagicMock()
+    mock_client = mock_client_class.return_value
+
+    mock_res = MagicMock()
+    mock_res.__class__ = Assignment
+    mock_res.runtime_proxy_token = "t2"
+    mock_res.endpoint = "e2"
+    del mock_res.runtime_proxy_info
+    mock_client.assign.return_value = mock_res
+
+    mock_store = mock_store_class.return_value
+
+    with patch.object(
+        sys, "argv", ["colab", "--logtostderr", "new", "gpu-sess", "-gpu", "A100"]
+    ):
+        main()
+
+    added_state = mock_store.add.call_args[0][0]
+    assert added_state.name == "gpu-sess"
+    assert added_state.variant == "GPU"
+    assert added_state.accelerator == "A100"
+    assert added_state.token == "t2"
+
+
+@pytest.mark.parametrize(
+    "gpu_flag,expected_acc",
+    [
+        ("H100", "H100"),
+        ("l4", "L4"),
+        ("t4", "T4"),
+        ("g4", "T4"),
+    ],
+)
+def test_cli_new_gpu_variants(
+    mock_get_credentials, mock_client_class, mock_store_class, gpu_flag, expected_acc
+):
+    mock_get_credentials.return_value = MagicMock()
+    mock_client = mock_client_class.return_value
+
+    mock_res = MagicMock()
+    mock_res.__class__ = PostAssignmentResponse
+    mock_res.runtime_proxy_info.token = "t1"
+    mock_res.runtime_proxy_info.url = "u1"
+    mock_res.endpoint = "e1"
+    mock_client.assign.return_value = mock_res
+
+    with patch.object(sys, "argv", ["colab", "new", "s", "-gpu", gpu_flag]):
+        main()
+
+    added_state = mock_store_class.return_value.add.call_args[0][0]
+    assert added_state.accelerator == expected_acc
+
+
+def test_cli_sessions(mock_get_credentials, mock_client_class, mock_store_class):
+    mock_get_credentials.return_value = MagicMock()
+    mock_client = mock_client_class.return_value
+
+    mock_assignment = MagicMock()
+    mock_assignment.endpoint = "e1"
+    mock_assignment.variant.value = "GPU"
+    mock_assignment.accelerator.value = "NONE"  # should map to CPU
+    mock_client.list_assignments.return_value = [mock_assignment]
+
+    mock_store = mock_store_class.return_value
+    mock_session_state = MagicMock()
+    mock_session_state.name = "s1"
+    mock_session_state.endpoint = "e1"
+    mock_store.list.return_value = {"s1": mock_session_state}
+
+    with patch.object(sys, "argv", ["colab", "sessions"]):
+        main()
+
+    mock_client.list_assignments.assert_called_once()
+    mock_store.list.assert_called_once()
+
+
+def test_cli_status(mock_get_credentials, mock_client_class, mock_store_class):
+    mock_store = mock_store_class.return_value
+
+    mock_session_state = MagicMock()
+    mock_session_state.name = "s1"
+    mock_session_state.accelerator = "NONE"  # Should map to CPU
+    mock_session_state.variant = "DEFAULT"
+    mock_store.get.return_value = mock_session_state
+    mock_store.list.return_value = {"s1": mock_session_state}
+
+    # Test with explicit session
+    with patch.object(sys, "argv", ["colab", "status", "-s", "s1"]):
+        main()
+    mock_store.get.assert_called_with("s1")
+
+    # Test with missing session
+    mock_store.get.return_value = None
+    with patch.object(sys, "argv", ["colab", "status", "-s", "missing"]):
+        main()
+
+    # Test list all sessions
+    with patch.object(sys, "argv", ["colab", "status"]):
+        main()
+
+    # Test list all sessions when empty
+    mock_store.list.return_value = {}
+    with patch.object(sys, "argv", ["colab", "status"]):
+        main()
+
+
+def test_cli_stop(mock_get_credentials, mock_client_class, mock_store_class):
+    mock_store = mock_store_class.return_value
+    mock_session_state = MagicMock()
+    mock_session_state.endpoint = "e1"
+    mock_store.get.return_value = mock_session_state
+
+    mock_client = mock_client_class.return_value
+
+    with patch.object(sys, "argv", ["colab", "stop", "-s", "s1"]):
+        main()
+
+    mock_client.unassign.assert_called_with("e1")
+    mock_store.remove.assert_called_with("s1")
+
+    # Test not found
+    mock_store.get.return_value = None
+    with patch.object(sys, "argv", ["colab", "stop", "-s", "missing"]):
+        main()
+    # Unassign shouldn't be called again
+    assert mock_client.unassign.call_count == 1
+
+    def test_cli_sessions_prune(mock_get_credentials, mock_client_class, mock_store_class):
+    mock_get_credentials.return_value = MagicMock()
+    mock_client = mock_client_class.return_value
+
+    mock_assignment = MagicMock()
+    mock_assignment.endpoint = "active_endpoint"
+    mock_assignment.variant.value = "GPU"
+    mock_assignment.accelerator.value = "NONE"
+    mock_client.list_assignments.return_value = [mock_assignment]
+
+    mock_store = mock_store_class.return_value
+    mock_session_state1 = MagicMock()
+    mock_session_state1.name = "s1"
+    mock_session_state1.endpoint = "active_endpoint"
+
+    mock_session_state2 = MagicMock()
+    mock_session_state2.name = "s2"
+    mock_session_state2.endpoint = "stale_endpoint"
+
+    mock_store.list.side_effect = [
+        {"s1": mock_session_state1, "s2": mock_session_state2},
+        {"s1": mock_session_state1}
+    ]
+
+    with patch.object(sys, "argv", ["colab", "sessions"]):
+        main()
+
+    mock_store.remove.assert_called_once_with("s2")
+
+    def test_cli_help(capsys):
+    with patch.object(sys, "argv", ["colab", "help"]):
+        try:
+            main()
+        except SystemExit:
+            pass
+    captured = capsys.readouterr()
+    assert "usage: colab" in captured.out
+
+
+def test_cli_no_args(capsys):
+    with patch.object(sys, "argv", ["colab"]):
+        main()
+    captured = capsys.readouterr()
+    assert "usage: colab" in captured.out
