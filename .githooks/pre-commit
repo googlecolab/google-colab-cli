@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+ARGS=(hook-impl --config=.pre-commit-config.yaml --hook-type=pre-commit)
+# end templated
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ARGS+=(--hook-dir "$HERE" -- "$@")
+
+exec uv run --active --index https://pypi.org/simple --with pre-commit,pre-commit-uv pre-commit "${ARGS[@]}"
