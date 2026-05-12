@@ -28,8 +28,8 @@ import requests
 # Standard Colab Headers
 ACCEPT_JSON_HEADER = {"key": "Accept", "value": "application/json"}
 COLAB_CLIENT_AGENT_HEADER = {
-    "key": "X-Goog-Colab-Client-Agent",
-    "value": "python-colab-client",
+    "key": "X-Colab-Client-Agent",
+    "value": "colab-cli",
 }
 COLAB_XSRF_TOKEN_HEADER = {"key": "X-Goog-Colab-Token", "value": ""}
 
