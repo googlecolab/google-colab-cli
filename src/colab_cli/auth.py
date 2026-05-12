@@ -16,6 +16,7 @@ import enum
 import json
 import logging
 import os
+import warnings
 from typing import Optional
 
 import google.auth
@@ -116,7 +117,26 @@ def _get_adc_credentials() -> Credentials:
     (`openid` and `cloud-platform` are required by `gcloud` itself; `userinfo.email`
     is required by the session backend; `colaboratory` is required by this RPC).
     """
-    creds, _ = google.auth.default(scopes=list(PUBLIC_SCOPES))
+    # `google.auth._default` emits a UserWarning when ADC user credentials
+    # don't have a quota project pinned ("Your application has authenticated
+    # using end user credentials from Google Cloud SDK without a quota
+    # project. You might receive a 'quota exceeded' or 'API not enabled'
+    # error.").
+    #
+    # That heuristic does not apply to this CLI: every call we make to
+    # `colab.pa.googleapis.com` carries `X-Goog-User-Project: 1014160490159`
+    # (Colab's project id) — see AGENTS.md item 18 — so the user's
+    # quota-project setting is irrelevant. The warning shows up on every
+    # single `colab` invocation under ADC, which is pure noise. Filter it,
+    # but keep the scope as tight as possible: only this exact message,
+    # only during this one call.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"Your application has authenticated using end user credentials.*",
+            category=UserWarning,
+        )
+        creds, _ = google.auth.default(scopes=list(PUBLIC_SCOPES))
     # Some credential subclasses ignore the `scopes=` kwarg in `default()`
     # (e.g. user creds), so re-apply via `with_scopes` when supported.
     if getattr(creds, "requires_scopes", False):
