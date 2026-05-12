@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""`colab run <script.py> [args...]` — shebang-friendly one-shot execution.
+"""
+`colab run <script.py> [args...]` — shebang-friendly one-shot execution.
 
 Combines `colab new` + `colab exec` + `colab stop` into a single fire-and-forget
 invocation. The Python script's body runs in a freshly-allocated Colab kernel
@@ -53,6 +54,7 @@ from colab_cli.state import SessionState
 from colab_cli.utils import get_status_code, is_terminal_error
 
 
+# TODO(sethtroisi): dedupe this logic with similar in session.py
 def _resolve_accelerator(gpu: Optional[str], tpu: Optional[str]):
     """Mirror the mapping logic in `commands.session.new`. Centralised so the
     two commands stay in lock-step on supported accelerator names.
@@ -93,7 +95,7 @@ def _build_script_payload(script_path: str, script_args: List[str]) -> str:
 
     # `repr()` produces a safe, round-trippable Python literal for arbitrary
     # strings (handles quotes, backslashes, non-ASCII).
-    argv_literal = "[" + ", ".join(repr(x) for x in [basename, *script_args]) + "]"
+    argv_literal = f"[{', '.join(repr(x) for x in [basename] + script_args)}]"
 
     return (
         "import sys, warnings\n"
