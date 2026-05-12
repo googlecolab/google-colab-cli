@@ -34,5 +34,6 @@ def mock_common_state(mocker):
     mocker.patch("colab_cli.commands.session.ColabRuntime")
     mocker.patch("colab_cli.commands.execution.ColabRuntime")
     mocker.patch("colab_cli.commands.automation.ColabRuntime")
+    mocker.patch("colab_cli.commands.run.ColabRuntime")
 
     return mock_state
