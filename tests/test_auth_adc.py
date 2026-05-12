@@ -125,3 +125,80 @@ def test_get_credentials_adc_tolerates_with_scopes_failure(mocker):
 
     # Falls back to using the original (un-rescoped) creds.
     mock_session_cls.assert_called_once_with(mock_creds)
+
+
+def test_get_credentials_adc_suppresses_quota_project_warning(mocker, recwarn):
+    """`google-auth` emits a UserWarning ("Your application has authenticated
+    using end user credentials from Google Cloud SDK without a quota project.
+    You might receive a 'quota exceeded' or 'API not enabled' error.") whenever
+    ADC user credentials lack a quota project.
+
+    For this CLI the warning is strictly false: we send
+    `X-Goog-User-Project: 1014160490159` (Colab's project) ourselves
+    (AGENTS.md item 18), so google-auth's heuristic does not apply. Suppress
+    it locally around the `google.auth.default()` call so it never reaches
+    the user's terminal on every `colab` invocation.
+    """
+    import warnings
+
+    mock_creds = MagicMock()
+    mock_creds.requires_scopes = False
+
+    # Simulate google-auth emitting the noisy warning during default(), as
+    # google.auth._default does for `_CLOUD_SDK_CREDENTIALS_WARNING`.
+    def fake_default(*args, **kwargs):
+        warnings.warn(
+            "Your application has authenticated using end user credentials "
+            "from Google Cloud SDK without a quota project. You might receive "
+            'a "quota exceeded" or "API not enabled" error. See the following '
+            "page for troubleshooting: "
+            "https://cloud.google.com/docs/authentication/adc-troubleshooting/user-creds. ",
+            UserWarning,
+        )
+        return mock_creds, "proj"
+
+    mocker.patch("google.auth.default", side_effect=fake_default)
+    mocker.patch("colab_cli.auth.requests.AuthorizedSession")
+
+    get_credentials(provider=AuthProvider.ADC)
+
+    # The quota-project warning must be filtered out; nothing else.
+    matching = [
+        w
+        for w in recwarn.list
+        if issubclass(w.category, UserWarning)
+        and "without a quota project" in str(w.message)
+    ]
+    assert matching == [], (
+        "Expected the quota-project UserWarning to be suppressed, but it "
+        f"was visible: {[str(w.message) for w in matching]}"
+    )
+
+
+def test_get_credentials_adc_does_not_suppress_unrelated_warnings(mocker, recwarn):
+    """Suppression must be tightly scoped to the quota-project warning text
+    so that any future genuinely-relevant `google.auth` warning still
+    surfaces to the user."""
+    import warnings
+
+    mock_creds = MagicMock()
+    mock_creds.requires_scopes = False
+
+    def fake_default(*args, **kwargs):
+        warnings.warn("some genuinely concerning new warning", UserWarning)
+        return mock_creds, "proj"
+
+    mocker.patch("google.auth.default", side_effect=fake_default)
+    mocker.patch("colab_cli.auth.requests.AuthorizedSession")
+
+    get_credentials(provider=AuthProvider.ADC)
+
+    matching = [
+        w
+        for w in recwarn.list
+        if issubclass(w.category, UserWarning)
+        and "genuinely concerning" in str(w.message)
+    ]
+    assert len(matching) == 1, (
+        "Unrelated UserWarnings from google.auth must NOT be suppressed."
+    )
