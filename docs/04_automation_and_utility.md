@@ -62,14 +62,19 @@ How each provider supplies the scope:
 
     ```
     gcloud auth application-default login \
-        --scopes=https://www.googleapis.com/auth/userinfo.email,\
+        --scopes=openid,\
+    https://www.googleapis.com/auth/cloud-platform,\
+    https://www.googleapis.com/auth/userinfo.email,\
     https://www.googleapis.com/auth/colaboratory
     ```
 
-    Both scopes are required: `userinfo.email` for the session backend at
+    `userinfo.email` is required for the session backend at
     `colab.research.google.com` (otherwise assign/unassign/sessions return
-    HTTP 401), and `colaboratory` for the `RuntimeService` at
-    `colab.pa.googleapis.com` (otherwise keep-alive returns HTTP 403).
+    HTTP 401); `colaboratory` is required for the `RuntimeService` at
+    `colab.pa.googleapis.com` (otherwise keep-alive returns HTTP 403);
+    `openid` and `cloud-platform` are mandated by `gcloud` itself
+    (`gcloud auth application-default login` rejects scope lists that
+    omit `cloud-platform` with `Invalid value for [--scopes]`).
 
 `colab new` performs a one-shot keep-alive pre-flight after `assign`
 succeeds so missing-scope failures surface immediately (with per-provider

@@ -6,7 +6,7 @@
 Eleven scenarios that exercise common workflows, plus a final "bridging back to the browser" example. Every `colab` invocation below was actually executed; the text inside each `output` block was captured verbatim from stdout/stderr.
 
 **Methodology**
-- Auth: `--auth=adc`. To set up: `gcloud auth application-default login --scopes=https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`.
+- Auth: `--auth=adc`. To set up: `gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`.
 - Accelerator: every session uses **CPU**. Provisioning real accelerators is gated by per-account quota and would not work for most readers; the workflows themselves are accelerator-agnostic, so where a demo's narrative mentions a GPU or TPU the prose flags the substitution.
 - Interactive subcommands — `colab auth`, `colab drivemount`, and unpiped `colab repl` / `colab console` — are **not run** here because they require human interaction at a TTY. Demos that would normally use them include an inline note explaining what they do and the workflow continues with the non-interactive parts.
 - `enable_update_check` is set to `false` in `~/.config/colab-cli/settings.json` for the duration of recording so the daily upgrade banner doesn't pollute output.

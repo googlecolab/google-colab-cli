@@ -42,9 +42,11 @@ elif command -v gcloud > /dev/null && gcloud auth application-default print-acce
         AUTH_FLAGS="--auth=adc"
     else
         echo "Error: ADC token lacks the required scopes."
-        echo "Re-issue ADC creds with both required scopes:"
+        echo "Re-issue ADC creds with all required scopes:"
         echo "  gcloud auth application-default login \\"
-        echo "      --scopes=https://www.googleapis.com/auth/userinfo.email,\\"
+        echo "      --scopes=openid,\\"
+        echo "              https://www.googleapis.com/auth/cloud-platform,\\"
+        echo "              https://www.googleapis.com/auth/userinfo.email,\\"
         echo "              https://www.googleapis.com/auth/colaboratory"
         exit 1
     fi
@@ -53,7 +55,9 @@ else
     echo "Options:"
     echo "  - OAuth2: run 'uv run colab --auth=oauth2 sessions' to bootstrap"
     echo "  - ADC:    gcloud auth application-default login \\"
-    echo "                --scopes=https://www.googleapis.com/auth/userinfo.email,\\"
+    echo "                --scopes=openid,\\"
+    echo "                        https://www.googleapis.com/auth/cloud-platform,\\"
+    echo "                        https://www.googleapis.com/auth/userinfo.email,\\"
     echo "                        https://www.googleapis.com/auth/colaboratory"
     exit 1
 fi

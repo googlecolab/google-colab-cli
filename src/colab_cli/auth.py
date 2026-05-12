@@ -112,7 +112,9 @@ def _get_adc_credentials() -> Credentials:
     support `with_scopes`; user credentials minted by
     `gcloud auth application-default login` do not. For the latter, the user
     must re-run `gcloud auth application-default login` with
-    `--scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/colaboratory`.
+    `--scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`
+    (`openid` and `cloud-platform` are required by `gcloud` itself; `userinfo.email`
+    is required by the session backend; `colaboratory` is required by this RPC).
     """
     creds, _ = google.auth.default(scopes=list(PUBLIC_SCOPES))
     # Some credential subclasses ignore the `scopes=` kwarg in `default()`

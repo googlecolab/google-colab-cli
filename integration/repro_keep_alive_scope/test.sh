@@ -65,7 +65,9 @@ elif command -v gcloud > /dev/null && gcloud auth application-default print-acce
         echo "Skipping: ADC token lacks required scopes (need both"
         echo "          userinfo.email and colaboratory). Re-issue with:"
         echo "          gcloud auth application-default login \\"
-        echo "              --scopes=https://www.googleapis.com/auth/userinfo.email,\\"
+        echo "              --scopes=openid,\\"
+        echo "                      https://www.googleapis.com/auth/cloud-platform,\\"
+        echo "                      https://www.googleapis.com/auth/userinfo.email,\\"
         echo "                      https://www.googleapis.com/auth/colaboratory"
         exit 0  # environment-not-applicable
     fi
@@ -74,7 +76,9 @@ else
     echo "          Bootstrap options:"
     echo "          - OAuth2: 'uv run colab --auth=oauth2 sessions' (browser consent)"
     echo "          - ADC:    gcloud auth application-default login \\"
-    echo "                        --scopes=https://www.googleapis.com/auth/userinfo.email,\\"
+    echo "                        --scopes=openid,\\"
+    echo "                                https://www.googleapis.com/auth/cloud-platform,\\"
+    echo "                                https://www.googleapis.com/auth/userinfo.email,\\"
     echo "                                https://www.googleapis.com/auth/colaboratory"
     exit 0  # environment-not-applicable
 fi
@@ -97,7 +101,9 @@ if ! uv run colab $AUTH_FLAGS --config "$SESSION_FILE" new -s "$SESSION_NAME"; t
     echo "[FAILURE] 'colab new' failed. If this is a SCOPE_NOT_PERMITTED error,"
     echo "          the colaboratory scope is missing from your auth provider."
     echo "          For ADC: gcloud auth application-default login \\"
-    echo "                       --scopes=https://www.googleapis.com/auth/cloud-platform,\\"
+    echo "                       --scopes=openid,\\"
+    echo "                                https://www.googleapis.com/auth/cloud-platform,\\"
+    echo "                                https://www.googleapis.com/auth/userinfo.email,\\"
     echo "                                https://www.googleapis.com/auth/colaboratory"
     exit 1
 fi
