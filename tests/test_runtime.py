@@ -77,6 +77,48 @@ def test_colab_runtime_execute_code():
     }
 
 
+def test_colab_runtime_execute_code_default_no_timeout():
+    """By default, execute_code should NOT pass a timeout (relies on jupyter
+    kernel client default), preserving existing behavior for fast / streaming
+    workloads."""
+    runtime = ColabRuntime("http://url", "token123")
+    mock_kc = MagicMock()
+    runtime._kernel_client = mock_kc
+
+    mock_kc.execute.return_value = {"outputs": []}
+    runtime.execute_code("print(1)")
+
+    _, kwargs = mock_kc.execute.call_args
+    assert "timeout" not in kwargs
+
+
+def test_colab_runtime_execute_code_with_timeout():
+    """When a timeout is supplied, it must be forwarded to kernel_client.execute."""
+    runtime = ColabRuntime("http://url", "token123")
+    mock_kc = MagicMock()
+    runtime._kernel_client = mock_kc
+
+    mock_kc.execute.return_value = {"outputs": []}
+    runtime.execute_code("print(1)", timeout=600)
+
+    _, kwargs = mock_kc.execute.call_args
+    assert kwargs.get("timeout") == 600
+
+
+def test_colab_runtime_execute_interactive_with_timeout():
+    """timeout must also be plumbed through the execute_interactive branch
+    (used when an output_hook is supplied)."""
+    runtime = ColabRuntime("http://url", "token123")
+    mock_kc = MagicMock()
+    runtime._kernel_client = mock_kc
+
+    mock_kc.execute_interactive.return_value = {"content": {"status": "ok"}}
+    runtime.execute_code("print(1)", output_hook=lambda o: None, timeout=600)
+
+    _, kwargs = mock_kc.execute_interactive.call_args
+    assert kwargs.get("timeout") == 600
+
+
 def test_colab_runtime_stop():
     runtime = ColabRuntime("http://url", "token123")
     mock_kc = MagicMock()

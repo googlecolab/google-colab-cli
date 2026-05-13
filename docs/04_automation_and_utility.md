@@ -2,6 +2,7 @@
 log:
 2026-05-07: Added a developer-only `colab whoami` subcommand (hidden from `colab --help`). Mints an access token via the same `auth.get_credentials(...)` path the rest of the CLI uses (honoring the global `--auth=...` flag), refreshes the credentials, then queries `https://oauth2.googleapis.com/tokeninfo` to print the email, scopes, audience, and expiry of whatever the CLI is about to send. Built specifically to short-circuit the "why is my call to colab.pa.googleapis.com 403-ing" debugging loop — the answer is almost always "missing scope" or "wrong identity", both of which `whoami` makes immediately visible. Hidden via `app.command(hidden=True)`; reachable via `colab whoami` or `colab whoami --help`. Suppressed from the daily-update banner check (added to `_AUTO_UPDATE_SUPPRESSED` in `cli.py`) so the banner doesn't obscure the auth output.
 2026-05-11: Removed the local-file update source (`update_file_path` setting and `_fetch_local` helper); `colab update` now consults PyPI only. Switched the default `update_url` to the canonical PyPI JSON API (`https://pypi.org/pypi/google-colab-cli/json`), which already exposes the `info.version` schema the auto-update subsystem expects. Re-added `colab update --install` as a public self-install path that runs `pip install -U google-colab-cli` against the current `sys.executable`; Linux-only (other platforms exit non-zero with an explanatory message), and a silent no-op when the cached `latest_version` is already at or below the current install.
+2026-05-12: Added an optional `timeout=` parameter to `ColabRuntime.execute_code` that flows through to both the `execute()` and `execute_interactive()` branches. `colab auth` and `colab drivemount` now pass `timeout=600` (10 min) via a shared `INTERACTIVE_AUTOMATION_TIMEOUT_SEC` constant in `commands/automation.py`. Background: `jupyter_kernel_client` defaults to a 10s wall-clock timeout that is consumed even when the kernel is idle waiting on `input_request`. With the drivefs hook intercepting that request and prompting the user to OAuth in their browser, any user that takes >10s to click through (essentially everyone) hit `TimeoutError` and saw "drivemount failed" even though the mount had actually succeeded server-side. The fix is scoped narrowly to the two human-in-the-loop subcommands; non-interactive paths (`colab exec`, `colab run`, `colab install`, `colab repl --pipe`, `colab console --pipe`) keep the upstream default since they receive continuous iopub traffic that resets the practical inactivity ceiling.
 ---
 
 # Design: Automation and Utility (`auth`, `install`, `log`, `pay`, `version`, `update`, `whoami`)
@@ -114,6 +115,11 @@ remediation guidance) rather than silently after ~1 minute via the daemon.
     (`/tun/m/credentials-propagation/`), prompts the user with the Google OAuth
     consent URL if needed, and dispatches the required `colab_reply` message to
     the `stdin` channel to unlock the kernel thread.
+-   **Timeout**: The kernel is silent (no iopub traffic) the entire time the
+    user is OAuthing in their browser. To avoid the upstream 10s
+    `jupyter_kernel_client` default raising `TimeoutError` mid-flow, this
+    subcommand passes `timeout=INTERACTIVE_AUTOMATION_TIMEOUT_SEC` (600s) to
+    `ColabRuntime.execute_code`. Same applies to `colab auth`.
 
 ### 4. Logging and Notebook Capture (`colab log`)
 

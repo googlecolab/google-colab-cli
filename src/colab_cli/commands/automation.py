@@ -26,8 +26,22 @@ from colab_cli.auth import get_credentials
 from colab_cli.utils import get_status_code
 
 
+# Default execute() timeout for human-in-the-loop automations (auth /
+# drivemount). The kernel goes silent while the user completes a browser
+# OAuth flow, which can routinely take 30s+; the upstream 10s default
+# raises ``TimeoutError`` mid-flow even though the mount actually succeeds.
+# 10 minutes is long enough for any realistic interactive auth ceremony
+# without leaving CI hangs unbounded.
+INTERACTIVE_AUTOMATION_TIMEOUT_SEC = 600
+
+
 def run_automation(
-    name: str, op: str, code: str, allow_stdin: bool = False, path: str = None
+    name: str,
+    op: str,
+    code: str,
+    allow_stdin: bool = False,
+    path: str = None,
+    timeout: Optional[float] = None,
 ):
     from colab_cli.common import state
 
@@ -130,7 +144,7 @@ def run_automation(
         else:
             state.history.log_event(name, "automation", {"op": op, "code": code})
 
-        outputs = runtime.execute_code(code, allow_stdin=allow_stdin)
+        outputs = runtime.execute_code(code, allow_stdin=allow_stdin, timeout=timeout)
         state.history.log_event(
             name, "automation_result", {"op": op, "outputs": outputs}
         )
@@ -166,7 +180,13 @@ def auth(
     name = state.resolve_session(session)
     code = "import os\nos.environ['USE_AUTH_EPHEM'] = '0'\nfrom google.colab import auth\nauth.authenticate_user()"
     typer.echo(f"[colab] Starting Google Auth flow on {name}...")
-    run_automation(name, "auth", code, allow_stdin=True)
+    run_automation(
+        name,
+        "auth",
+        code,
+        allow_stdin=True,
+        timeout=INTERACTIVE_AUTOMATION_TIMEOUT_SEC,
+    )
 
 
 def drivemount(
@@ -181,7 +201,14 @@ def drivemount(
     name = state.resolve_session(session)
     code = f"from google.colab import drive\ndrive.mount('{path}')"
     typer.echo(f"[colab] Mounting Google Drive to '{path}' on {name}...")
-    run_automation(name, "drivemount", code, allow_stdin=True, path=path)
+    run_automation(
+        name,
+        "drivemount",
+        code,
+        allow_stdin=True,
+        path=path,
+        timeout=INTERACTIVE_AUTOMATION_TIMEOUT_SEC,
+    )
 
 
 def install(
