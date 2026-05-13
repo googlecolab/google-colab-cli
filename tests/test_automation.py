@@ -98,3 +98,28 @@ def test_cli_drivemount(mock_state, mock_runtime_class, mock_session):
 
     assert "drive.mount('/foo/bar')" in called_code
     assert mock_runtime.colab_request_hook is not None
+    # Drivemount waits for the user to OAuth in their browser; the kernel
+    # goes silent during that wait and the default 10s execute() timeout
+    # would raise TimeoutError mid-flow. Insist on a generous timeout
+    # (>= 5 minutes) being forwarded to runtime.execute_code.
+    _, kwargs = mock_runtime.execute_code.call_args
+    assert kwargs.get("timeout") is not None and kwargs["timeout"] >= 300
+
+
+@patch("colab_cli.commands.automation.ColabRuntime")
+@patch("colab_cli.common.state")
+def test_cli_auth_uses_long_timeout(mock_state, mock_runtime_class, mock_session):
+    """`colab auth` walks the user through a paste-the-code flow that
+    routinely takes >10s, so it must pass a generous timeout to
+    runtime.execute_code or the call will TimeoutError mid-flow."""
+    mock_state.store.get.return_value = mock_session
+    mock_state.resolve_session.return_value = "test-session"
+
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = [{"text": "Authenticated"}]
+
+    result = runner.invoke(app, ["auth", "-s", "test-session"])
+    assert result.exit_code == 0
+
+    _, kwargs = mock_runtime.execute_code.call_args
+    assert kwargs.get("timeout") is not None and kwargs["timeout"] >= 300

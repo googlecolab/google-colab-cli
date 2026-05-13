@@ -161,8 +161,21 @@ class ColabRuntime:
         allow_stdin: bool = False,
         stdin_hook: Any = None,
         output_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
+        timeout: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
+        # ``jupyter_kernel_client`` defaults ``timeout`` to ``REQUEST_TIMEOUT``
+        # (10 seconds) on both ``execute`` and ``execute_interactive``. That
+        # value is a wall-clock budget that shrinks every time the poll loop
+        # iterates -- as long as iopub/stdin events arrive back-to-back the
+        # call survives, but a single >10s quiet stretch (e.g. a kernel
+        # blocked on ``input_request`` while the user OAuths in the browser)
+        # will raise ``TimeoutError`` even though the underlying execution is
+        # still healthy. Callers that know they need a longer ceiling can
+        # pass ``timeout=`` here; otherwise we forward whatever the upstream
+        # default is (currently 10s).
         kwargs = {"allow_stdin": allow_stdin}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
 
         # Wrap stdin_hook to log inputs
         original_stdin_hook = stdin_hook
