@@ -10,6 +10,9 @@ A command-line interface for Google Colab. Create sessions, run code, manage fil
 uv tool install git+https://github.com/googlecolab/google-colab-cli
 ```
 
+Note: If you have a non-standard default package index (Googlers), you may also need to add `--index https://pypi.org/simple`.
+
+
 ## Quick start
 
 ```bash
