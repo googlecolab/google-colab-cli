@@ -25,20 +25,24 @@ steps:
     args:
       - -c
       - |
-        set -euo pipefail
+        set -e
         git fetch --tags --force --unshallow 2>/dev/null || git fetch --tags --force
         echo "TAG_NAME=${TAG_NAME}"
         echo "git describe: $(git describe --tags --always)"
 
   # 2. Build sdist + wheel into dist/ using uv.
+  #    Use the non-slim bookworm variant: hatch-vcs derives the version
+  #    by shelling out to `git describe`, which requires a git binary
+  #    in the build container. The -slim variant omits git and breaks
+  #    the build with a setuptools-scm "not a git repository" error.
   - id: build
-    name: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+    name: ghcr.io/astral-sh/uv:python3.13-bookworm
     entrypoint: bash
     args:
       - -c
       - |
-        set -euo pipefail
-        uv build --out-dir dist
+        set -e
+        uv build
         ls -la dist/
 
   # 3. Publish artifacts to Artifact Registry via twine + the
@@ -50,7 +54,7 @@ steps:
     args:
       - -c
       - |
-        set -euo pipefail
+        set -e
         pip install --quiet --root-user-action=ignore \
           twine keyrings.google-artifactregistry-auth
         twine upload \
