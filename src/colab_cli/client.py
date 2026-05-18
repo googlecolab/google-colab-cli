@@ -75,6 +75,13 @@ def uuid_to_web_safe_base64(uuid_val: uuid.UUID) -> str:
     return transformed + padding
 
 
+class RuntimeVersionLabel(str, Enum):
+    V202604 = "2026.04"
+    V202601 = "2026.01"
+    V202510 = "2025.10"
+    V202507 = "2025.07"
+
+
 class Accelerator(str, Enum):
     NONE = "NONE"
     G4 = "G4"
@@ -240,14 +247,15 @@ class Client:
         notebook_hash: uuid.UUID,
         variant: Optional[Variant] = None,
         accelerator: Optional[Accelerator] = None,
+        runtime_version_label: Optional[RuntimeVersionLabel] = None,
     ) -> Union[PostAssignmentResponse, Assignment]:
-        assignment = self._get_assignment(notebook_hash, variant, accelerator)
+        assignment = self._get_assignment(notebook_hash, variant, accelerator, runtime_version_label)
         if isinstance(assignment, Assignment):
             return assignment
 
         try:
             res = self._post_assignment(
-                notebook_hash, assignment.token, variant, accelerator
+                notebook_hash, assignment.token, variant, accelerator, runtime_version_label
             )
         except ColabRequestError as e:
             if get_status_code(e) == 412:
@@ -261,6 +269,7 @@ class Client:
         notebook_hash: uuid.UUID,
         variant: Optional[Variant] = None,
         accelerator: Optional[Accelerator] = None,
+        runtime_version_label: Optional[RuntimeVersionLabel] = None,
     ) -> str:
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/assign")
         params = {"nbh": uuid_to_web_safe_base64(notebook_hash)}
@@ -268,6 +277,8 @@ class Client:
             params["variant"] = variant.value
         if accelerator:
             params["accelerator"] = accelerator.value
+        if runtime_version_label:
+            params["runtime_version_label"] = runtime_version_label.value
 
         req = requests.Request("GET", url, params=params)
         prep = req.prepare()
@@ -278,8 +289,9 @@ class Client:
         notebook_hash: uuid.UUID,
         variant: Optional[Variant] = None,
         accelerator: Optional[Accelerator] = None,
+        runtime_version_label: Optional[RuntimeVersionLabel] = None,
     ) -> Union[GetAssignmentResponse, Assignment]:
-        url = self._build_assign_url(notebook_hash, variant, accelerator)
+        url = self._build_assign_url(notebook_hash, variant, accelerator, runtime_version_label)
         return self._issue_request(url, schema=Union[GetAssignmentResponse, Assignment])
 
     def _post_assignment(
@@ -288,8 +300,9 @@ class Client:
         xsrf_token: str,
         variant: Optional[Variant] = None,
         accelerator: Optional[Accelerator] = None,
+        runtime_version_label: Optional[RuntimeVersionLabel] = None,
     ) -> PostAssignmentResponse:
-        url = self._build_assign_url(notebook_hash, variant, accelerator)
+        url = self._build_assign_url(notebook_hash, variant, accelerator, runtime_version_label)
         headers = {COLAB_XSRF_TOKEN_HEADER["key"]: xsrf_token}
         return self._issue_request(
             url, method="POST", headers=headers, schema=PostAssignmentResponse

@@ -22,6 +22,7 @@ import typer
 from typing_extensions import Annotated
 
 from colab_cli.client import (
+    RuntimeVersionLabel,
     Accelerator,
     ColabRequestError,
     PostAssignmentResponse,
@@ -129,6 +130,15 @@ def new(
             ),
         ),
     ] = None,
+    runtime_version: Annotated[
+        Optional[str],
+        typer.Option(
+            help=(
+                "Runtime version. Supported: 2026.04, 2026.01, 2025.10, 2025.07."
+                "\n\nIf omitted uses latest version."
+            ),
+        ),
+    ] = None,
 ):
     """Create a new session"""
     from colab_cli.common import state
@@ -150,11 +160,20 @@ def new(
             "g4": Accelerator.G4,
         }
         accelerator = mapping.get(gpu.lower(), Accelerator.A100)
+    
+    if runtime_version:
+        mapping = {
+            "2026.04": RuntimeVersionLabel.V202604,
+            "2026.01": RuntimeVersionLabel.V202601,
+            "2025.10": RuntimeVersionLabel.V202510,
+            "2025.07": RuntimeVersionLabel.V202507,
+        }
+        runtime_version_label = mapping.get(runtime_version)
 
     typer.echo(f"[colab] Creating session '{name}'...")
     try:
         res = state.client.assign(
-            uuid.uuid4(), variant=variant, accelerator=accelerator
+            uuid.uuid4(), variant=variant, accelerator=accelerator, runtime_version_label=runtime_version_label
         )
     except ColabRequestError as e:
         # The Colab backend returns 400 when the caller is not entitled to the
