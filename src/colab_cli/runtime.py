@@ -154,6 +154,12 @@ class ColabRuntime:
                     raise e
 
         return self._kernel_client
+    
+    def restart(
+        self,
+        timeout: Optional[float] = None,
+    ):
+        self.kernel_client.restart(timeout=timeout)
 
     def execute_code(
         self,
