@@ -1,5 +1,5 @@
 [project]
-name = "colab"
+name = "google-colab-cli"
 dynamic = ["version"]
 description = "CLI for interacting with Colab."
 readme = "README.md"
