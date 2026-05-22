@@ -42,7 +42,7 @@ from colab_cli.state import Settings
 def get_app_version() -> str:
     """Return the installed package version, falling back to the git short hash."""
     try:
-        return installed_version("colab")
+        return installed_version("google-colab-cli")
     except (PackageNotFoundError, InvalidVersion):
         pass
 
