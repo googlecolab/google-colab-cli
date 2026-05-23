@@ -274,7 +274,10 @@ def restart(
         on_session_started=on_sess_started,
     )
 
-    runtime.restart(timeout=INTERACTIVE_AUTOMATION_TIMEOUT_SEC)
+    try:
+        runtime.restart()
+    finally:
+        runtime.stop()
 
 
 def sessions_command():
