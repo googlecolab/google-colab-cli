@@ -137,52 +137,6 @@ wheels = [
 ]
 
 [[package]]
-name = "colab"
-source = { editable = "." }
-dependencies = [
-    { name = "google-auth" },
-    { name = "google-auth-oauthlib" },
-    { name = "jupyter-kernel-client" },
-    { name = "nbformat" },
-    { name = "packaging" },
-    { name = "prompt-toolkit" },
-    { name = "pydantic" },
-    { name = "pygments" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "pytest-mock" },
-    { name = "requests" },
-    { name = "rich" },
-    { name = "typer" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "google-auth", specifier = ">=2.49.1" },
-    { name = "google-auth-oauthlib", specifier = ">=1.3.0" },
-    { name = "jupyter-kernel-client", git = "https://github.com/googlecolab/jupyter-kernel-client.git" },
-    { name = "nbformat", specifier = ">=5.10.4" },
-    { name = "packaging", specifier = ">=24.0" },
-    { name = "prompt-toolkit", specifier = ">=3.0.52" },
-    { name = "pydantic", specifier = ">=2.12.5" },
-    { name = "pygments", specifier = ">=2.19.2" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "pytest-mock", specifier = ">=3.15.1" },
-    { name = "requests", specifier = ">=2.32.5" },
-    { name = "rich", specifier = ">=14.3.3" },
-    { name = "typer", specifier = ">=0.24.1" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = ">=0.15.6" }]
-
-[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -347,6 +301,52 @@ sdist = { url = "https://files.pythonhosted.org/packages/ac/b4/1b19567e4c567b796
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2f/56/909fd5632226d3fba31d7aeffd4754410735d49362f5809956fe3e9af344/google_auth_oauthlib-1.3.0-py3-none-any.whl", hash = "sha256:386b3fb85cf4a5b819c6ad23e3128d975216b4cac76324de1d90b128aaf38f29", size = 19308, upload-time = "2026-02-27T14:12:47.865Z" },
 ]
+
+[[package]]
+name = "google-colab-cli"
+source = { editable = "." }
+dependencies = [
+    { name = "google-auth" },
+    { name = "google-auth-oauthlib" },
+    { name = "jupyter-kernel-client" },
+    { name = "nbformat" },
+    { name = "packaging" },
+    { name = "prompt-toolkit" },
+    { name = "pydantic" },
+    { name = "pygments" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+    { name = "requests" },
+    { name = "rich" },
+    { name = "typer" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "google-auth", specifier = ">=2.49.1" },
+    { name = "google-auth-oauthlib", specifier = ">=1.3.0" },
+    { name = "jupyter-kernel-client", git = "https://github.com/googlecolab/jupyter-kernel-client.git" },
+    { name = "nbformat", specifier = ">=5.10.4" },
+    { name = "packaging", specifier = ">=24.0" },
+    { name = "prompt-toolkit", specifier = ">=3.0.52" },
+    { name = "pydantic", specifier = ">=2.12.5" },
+    { name = "pygments", specifier = ">=2.19.2" },
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-mock", specifier = ">=3.15.1" },
+    { name = "requests", specifier = ">=2.32.5" },
+    { name = "rich", specifier = ">=14.3.3" },
+    { name = "typer", specifier = ">=0.24.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ruff", specifier = ">=0.15.6" }]
 
 [[package]]
 name = "idna"

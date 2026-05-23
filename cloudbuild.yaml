@@ -1,0 +1,73 @@
+# Cloud Build pipeline triggered on git tag push.
+#
+# Builds an sdist + wheel for colab-cli using `uv build`, then publishes both
+# to the Artifact Registry Python repository at
+#   us-central1-python.pkg.dev/colab-cli-external/colab-cli/
+#
+# The build runs against the tagged commit (TAG_NAME is set by the trigger).
+# Version is derived from the git tag by hatch-vcs, so the checkout must have
+# tags available (Cloud Build's default GitHub checkout includes them).
+#
+# Trigger: GitHub push to refs/tags/v* on googlecolab/google-colab-cli (main).
+substitutions:
+  _AR_LOCATION: us-central1
+  _AR_REPOSITORY: colab-cli
+  _AR_PROJECT: colab-cli-external
+
+steps:
+  # 1. Ensure hatch-vcs sees the tag. Cloud Build's default GitHub checkout
+  #    is shallow and may omit tag refs; unshallow + force-fetch tags so
+  #    `git describe` returns the clean tag (e.g. v0.4.0 -> 0.4.0) rather
+  #    than a dev-suffixed pseudo-version.
+  - id: show-version
+    name: gcr.io/cloud-builders/git
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        git fetch --tags --force --unshallow 2>/dev/null || git fetch --tags --force
+        echo "TAG_NAME=${TAG_NAME}"
+        echo "git describe: $(git describe --tags --always)"
+
+  # 2. Build sdist + wheel into dist/ using uv.
+  #    Use the non-slim bookworm variant: hatch-vcs derives the version
+  #    by shelling out to `git describe`, which requires a git binary
+  #    in the build container. The -slim variant omits git and breaks
+  #    the build with a setuptools-scm "not a git repository" error.
+  - id: build
+    name: ghcr.io/astral-sh/uv:python3.13-bookworm
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        uv build
+        ls -la dist/
+
+  # 3. Publish artifacts to Artifact Registry via twine + the
+  #    google-artifactregistry-auth keyring plugin (uses ADC from the
+  #    Cloud Build service account).
+  - id: publish
+    name: python:3.13-slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        pip install --quiet --root-user-action=ignore \
+          twine keyrings.google-artifactregistry-auth
+        twine upload \
+          --repository-url "https://${_AR_LOCATION}-python.pkg.dev/${_AR_PROJECT}/${_AR_REPOSITORY}/" \
+          --verbose \
+          dist/*
+
+# Surface the built artifacts in the Cloud Build UI / logs.
+artifacts:
+  objects:
+    location: gs://${PROJECT_ID}_cloudbuild/colab-cli/${TAG_NAME}
+    paths:
+      - dist/*
+
+options:
+  logging: CLOUD_LOGGING_ONLY
