@@ -306,6 +306,7 @@ wheels = [
 name = "google-colab-cli"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "google-auth" },
     { name = "google-auth-oauthlib" },
     { name = "jupyter-kernel-client" },
@@ -320,6 +321,8 @@ dependencies = [
     { name = "requests" },
     { name = "rich" },
     { name = "typer" },
+    { name = "typing-extensions" },
+    { name = "websocket-client" },
 ]
 
 [package.dev-dependencies]
@@ -329,6 +332,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.0" },
     { name = "google-auth", specifier = ">=2.49.1" },
     { name = "google-auth-oauthlib", specifier = ">=1.3.0" },
     { name = "jupyter-kernel-client", git = "https://github.com/googlecolab/jupyter-kernel-client.git" },
@@ -343,6 +347,8 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.5" },
     { name = "rich", specifier = ">=14.3.3" },
     { name = "typer", specifier = ">=0.24.1" },
+    { name = "typing-extensions", specifier = ">=4.0" },
+    { name = "websocket-client", specifier = ">=1.0" },
 ]
 
 [package.metadata.requires-dev]
