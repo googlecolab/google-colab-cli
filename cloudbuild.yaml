@@ -1,8 +1,13 @@
 # Cloud Build pipeline triggered on git tag push.
 #
-# Builds an sdist + wheel for colab-cli using `uv build`, then publishes both
-# to the Artifact Registry Python repository at
-#   us-central1-python.pkg.dev/colab-cli-external/colab-cli/
+# Builds an sdist + wheel for google-colab-cli using `uv build`, then publishes
+# both to the OSS Exit Gate Artifact Registry repository:
+#   https://us-python.pkg.dev/oss-exit-gate-prod/google-colab-cli--pypi
+# and triggers an Exit Gate release by uploading a manifest to:
+#   gs://oss-exit-gate-prod-projects-bucket/google-colab-cli/pypi/manifests/
+#
+# OSS Exit Gate consumes the artifacts from AR and publishes them to PyPI under
+# the google-colab-cli project. See go/oss-exit-gate-release-python.
 #
 # The build runs against the tagged commit (TAG_NAME is set by the trigger).
 # Version is derived from the git tag by hatch-vcs, so the checkout must have
@@ -10,14 +15,17 @@
 #
 # Trigger: GitHub push to refs/tags/v* on googlecolab/google-colab-cli (main).
 substitutions:
-  _AR_LOCATION: us-central1
-  _AR_REPOSITORY: colab-cli
-  _AR_PROJECT: colab-cli-external
+  _AR_LOCATION: us
+  _AR_REPOSITORY: google-colab-cli--pypi
+  _AR_PROJECT: oss-exit-gate-prod
+  _EG_PROJECT_NAME: google-colab-cli
+  _EG_REGISTRY: pypi
+  _EG_TRIGGER_BUCKET: oss-exit-gate-prod-projects-bucket
 
 steps:
   # 1. Ensure hatch-vcs sees the tag. Cloud Build's default GitHub checkout
   #    is shallow and may omit tag refs; unshallow + force-fetch tags so
-  #    `git describe` returns the clean tag (e.g. v0.4.0 -> 0.4.0) rather
+  #    `git describe` returns the clean tag (e.g. v0.5.5 -> 0.5.5) rather
   #    than a dev-suffixed pseudo-version.
   - id: show-version
     name: gcr.io/cloud-builders/git
@@ -45,10 +53,11 @@ steps:
         uv build
         ls -la dist/
 
-  # 3. Publish artifacts to Artifact Registry via twine + the
+  # 3. Publish artifacts to the OSS Exit Gate AR repository via twine + the
   #    google-artifactregistry-auth keyring plugin (uses ADC from the
-  #    Cloud Build service account).
-  - id: publish
+  #    Cloud Build service account, which is registered as a builder in
+  #    the project's project.txtpb).
+  - id: publish-to-ar
     name: python:3.13-slim
     entrypoint: bash
     args:
@@ -62,10 +71,34 @@ steps:
           --verbose \
           dist/*
 
+  # 4. Trigger the OSS Exit Gate release by uploading a manifest file to the
+  #    project's GCS trigger bucket. `publish_all: true` tells the Exit Gate to
+  #    publish every artifact currently in our AR repo, which is correct here
+  #    because the trigger fires on a single tag push and only the artifacts
+  #    for that tag are in AR at this moment (Exit Gate auto-cleans on success).
+  #
+  #    Note: this step runs in the same Cloud Build as the AR upload. This is
+  #    fine for BCID L0 (no attestations). When/if we move to BCID L1+ this
+  #    must be split into a separate build that fires after this one succeeds;
+  #    see go/oss-exit-gate-faq#why-manifest.
+  - id: trigger-release
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        MANIFEST="${_EG_PROJECT_NAME}-${TAG_NAME}.json"
+        echo '{"publish_all": true}' > "$${MANIFEST}"
+        echo "Manifest contents:"
+        cat "$${MANIFEST}"
+        gcloud storage cp "$${MANIFEST}" \
+          "gs://${_EG_TRIGGER_BUCKET}/${_EG_PROJECT_NAME}/${_EG_REGISTRY}/manifests/$${MANIFEST}"
+
 # Surface the built artifacts in the Cloud Build UI / logs.
 artifacts:
   objects:
-    location: gs://${PROJECT_ID}_cloudbuild/colab-cli/${TAG_NAME}
+    location: gs://${PROJECT_ID}_cloudbuild/google-colab-cli/${TAG_NAME}
     paths:
       - dist/*
 
