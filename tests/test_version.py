@@ -27,6 +27,10 @@ def test_version_installed():
         result = runner.invoke(app, ["version"])
         assert result.exit_code == 0
         assert "Version: 0.2.0" in result.output
+        # Guard against a silent regression if the PyPI distribution name
+        # changes again: importlib.metadata.version() must be called with
+        # the distribution name exactly as it appears in pyproject.toml.
+        mock_version.assert_called_with("google-colab-cli")
 
 
 def test_version_git_fallback():
