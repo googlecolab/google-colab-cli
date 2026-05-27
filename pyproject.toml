@@ -14,9 +14,6 @@ dependencies = [
     "prompt-toolkit>=3.0.52",
     "pydantic>=2.12.5",
     "pygments>=2.19.2",
-    "pytest>=9.0.2",
-    "pytest-cov>=7.0.0",
-    "pytest-mock>=3.15.1",
     "requests>=2.32.5",
     "rich>=14.3.3",
     "typer>=0.24.1",
@@ -48,5 +45,8 @@ jupyter-kernel-client = { git = "https://github.com/googlecolab/jupyter-kernel-c
 
 [dependency-groups]
 dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "pytest-mock>=3.15.1",
     "ruff>=0.15.6",
 ]
