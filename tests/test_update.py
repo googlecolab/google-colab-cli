@@ -127,7 +127,7 @@ def test_pypi_upgrade_uses_pip_hint(app_version, fake_settings, mock_pypi):
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 0
     assert "available: 1.1.0 (current: 1.0.0)" in result.output
-    assert "Run 'pip install --upgrade colab' to update." in result.output
+    assert "Run 'pip install --upgrade google-colab-cli' to update." in result.output
 
 
 def test_explicit_update_omits_disable_hint(app_version, fake_settings, mock_pypi):

@@ -140,7 +140,7 @@ def check_for_updates(quiet: bool = False) -> None:
             announce_upgrade(
                 pypi_v,
                 current,
-                "pip install --upgrade colab",
+                "pip install --upgrade google-colab-cli",
                 show_disable_hint=quiet,
             )
         elif not quiet:
