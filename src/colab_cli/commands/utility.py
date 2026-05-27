@@ -62,14 +62,27 @@ def url(
 ):
     """Print a browser URL that connects to an existing session.
 
-    Format: ``https://<host>/notebooks/empty.ipynb?dbu=<urlencoded path>``,
+    Format: ``https://<host>/notebooks/empty.ipynb?dbu=<urlencoded path>#datalabBackendUrl=<host>/tun/m/<endpoint>``,
     where the path is ``/tun/m/<endpoint>``. When opened, the Colab frontend
     skips ``/tun/m/assign`` and attaches the kernel to our existing VM.
 
-    The ``dbu`` query parameter is the ``datalab_backend_url`` development
-    flag. Because it's a development flag, URL-overriding it may be gated
-    by the Colab frontend; some users may need to use the hash-based
-    ``#datalabBackendUrl=...`` form instead.
+    Two backend-URL signals are embedded:
+
+    - ``?dbu=<urlencoded path>`` — the ``datalab_backend_url`` development
+      query flag. The frontend resolves the value against
+      ``window.location.origin``.
+
+    - ``#datalabBackendUrl=<full URL>`` — the hash-fragment form. Some
+      frontend code paths consult this first and ignore ``dbu``, so we
+      emit both for robustness. The fragment value is a FULL URL (with
+      scheme + host) and is intentionally NOT URL-encoded — browsers do
+      not decode the fragment before passing ``location.hash`` to page
+      JS, and Colab's hash parser expects the raw string.
+
+    The fragment's host always matches ``--host`` (the page origin), so
+    Colab's same-origin enforcement on the embedded backend URL doesn't
+    block the connection, and sandbox/dev users get a sandbox fragment
+    automatically.
     """
     # Imported here (not at module top) to mirror the lazy-state pattern used
     # elsewhere in this module and avoid a circular import via colab_cli.common.
@@ -83,14 +96,26 @@ def url(
         typer.echo(f"[colab] Session '{name}' not found.", err=True)
         raise typer.Exit(code=1)
 
-    # Strip a trailing slash so we don't produce `https://host//notebooks/...`.
+    # Strip a trailing slash so we don't produce `https://host//notebooks/...`
+    # or `https://host//tun/m/...` in the fragment URL.
     host_clean = host.rstrip("/")
-    # `dbu` value is the path `/tun/m/<endpoint>`. URL-encode it (incl. the
-    # slashes via `safe=""`) so the value survives any downstream non-strict
-    # query-string re-parsing — this is also the form shown in real Colab
-    # connect URLs in the wild.
-    dbu_value = quote(f"/tun/m/{s.endpoint}", safe="")
-    connect_url = f"{host_clean}/notebooks/empty.ipynb?dbu={dbu_value}"
+    backend_path = f"/tun/m/{s.endpoint}"
+    # `dbu` value is the backend path. URL-encode it (incl. the slashes via
+    # `safe=""`) so the value survives any downstream non-strict query-string
+    # re-parsing — this is also the form shown in real Colab connect URLs.
+    dbu_value = quote(backend_path, safe="")
+    # `#datalabBackendUrl=` value is the FULL backend URL, raw (un-encoded):
+    # the browser does not decode the fragment before passing it to page JS,
+    # and Colab's hash parser calls `new URL(rawString)` directly. Pinning
+    # the host to `host_clean` (not hardcoding research.google.com) keeps
+    # this aligned with the page origin so same-origin enforcement passes
+    # for sandbox / dev hosts too.
+    fragment_value = f"{host_clean}{backend_path}"
+    connect_url = (
+        f"{host_clean}/notebooks/empty.ipynb"
+        f"?dbu={dbu_value}"
+        f"#datalabBackendUrl={fragment_value}"
+    )
 
     # Print the URL on its own line with no `[colab]` prefix so the output
     # is pipeable (`colab url -s s1 | xclip`, etc.).
