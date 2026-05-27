@@ -17,17 +17,26 @@ frontend to an existing colab-cli session.
 
 URL format:
 
-    https://<host>/notebooks/empty.ipynb?dbu=<urlencoded-/tun/m/endpoint>
+    https://<host>/notebooks/empty.ipynb?dbu=<urlencoded-/tun/m/endpoint>#datalabBackendUrl=<host>/tun/m/<endpoint>
 
-The `dbu` query parameter is the Colab frontend's `datalab_backend_url`
-development flag; the frontend resolves the value against
-`window.location.origin` and attaches the kernel to the supplied
-`/tun/m/<endpoint>` path instead of allocating a fresh VM.
+Two backend-URL signals are embedded:
 
-Note: `dbu` is a development flag, so URL-overriding it may be gated by
-the Colab frontend; some users may need to use the hash-based
-`#datalabBackendUrl=...` form instead (we don't support that today; file
-an issue if you need it).
+-   `?dbu=<urlencoded path>` -- the Colab frontend's
+    `datalab_backend_url` development query flag. The frontend resolves
+    the value against `window.location.origin` and attaches the kernel
+    to the supplied `/tun/m/<endpoint>` path instead of allocating a
+    fresh VM.
+
+-   `#datalabBackendUrl=<full URL>` -- the hash-fragment form. Some
+    Colab frontend code paths consult this first and ignore `dbu`, so we
+    emit both for robustness. The fragment value is a FULL URL (with
+    scheme + host) and is intentionally NOT URL-encoded -- browsers do
+    not decode fragment values before passing them to page JS, and
+    Colab's hash parser expects the raw string.
+
+The fragment's host always matches the page origin (`--host`), so
+same-origin enforcement in the frontend doesn't block the connection
+and sandbox/dev users get a sandbox fragment automatically.
 """
 
 from unittest.mock import MagicMock, patch
@@ -59,10 +68,11 @@ def _parse_url_output(output: str) -> str:
 def test_url_explicit_session(mock_common_state):
     """`colab url -s NAME` prints the connect URL for that session.
 
-    Format: ``https://<host>/notebooks/empty.ipynb?dbu=<urlencoded path>``.
+    Format: ``https://<host>/notebooks/empty.ipynb?dbu=<urlencoded path>#datalabBackendUrl=<host>/tun/m/<endpoint>``.
     The path must land on `empty.ipynb` so the user sees a usable notebook
     UI; the `dbu` query param tells the frontend to skip /tun/m/assign and
-    attach to our existing endpoint.
+    attach to our existing endpoint; the `#datalabBackendUrl=` fragment
+    is the alternative signal some frontend code paths consult.
     """
     s = _make_session(name="my-sess", endpoint="ep-XYZ")
     mock_common_state.store.get.return_value = s
@@ -89,6 +99,12 @@ def test_url_explicit_session(mock_common_state):
     # And we DO actually URL-encode the slashes so the value survives any
     # downstream re-parsing that treats the query string non-strictly.
     assert "dbu=%2Ftun%2Fm%2Fep-XYZ" in url
+
+    # Fragment: raw (not URL-encoded), full URL form, host matches page origin.
+    assert (
+        parsed.fragment
+        == "datalabBackendUrl=https://colab.research.google.com/tun/m/ep-XYZ"
+    )
 
 
 def test_url_resolves_unique_session(mock_common_state):
@@ -120,10 +136,16 @@ def test_url_session_not_found(mock_common_state):
 
 
 def test_url_custom_host(mock_common_state):
-    """`--host` overrides the default frontend host. `dbu` is a path-only
-    value (resolved against `window.location.origin` in the frontend), so
-    the host swap only affects the page origin, not the embedded backend
-    path."""
+    """`--host` overrides the default frontend host AND the host used in
+    the `#datalabBackendUrl=` fragment.
+
+    `dbu` itself is a path-only value (resolved against
+    `window.location.origin` in the frontend), so the host swap only
+    affects the page origin, not the embedded backend path. But the
+    fragment carries a full URL, and the Colab frontend enforces
+    same-origin between page and embedded backend URL -- so the fragment
+    host MUST match `--host` for the swap to work end-to-end.
+    """
     s = _make_session(endpoint="ep1")
     mock_common_state.store.get.return_value = s
     mock_common_state.resolve_session.return_value = "s1"
@@ -138,11 +160,17 @@ def test_url_custom_host(mock_common_state):
     assert parsed.netloc == "colab.sandbox.google.com"
     assert parsed.path == "/notebooks/empty.ipynb"
     assert parse_qs(parsed.query).get("dbu") == ["/tun/m/ep1"]
+    # Fragment host tracks --host (NOT pinned to research.google.com).
+    assert (
+        parsed.fragment
+        == "datalabBackendUrl=https://colab.sandbox.google.com/tun/m/ep1"
+    )
 
 
 def test_url_host_normalises_trailing_slash(mock_common_state):
     """`--host https://example.com/` (with trailing slash) must not produce
-    a double slash before `/notebooks/empty.ipynb`."""
+    a double slash anywhere -- not before `/notebooks/empty.ipynb` in the
+    page URL, AND not before `/tun/m/...` in the fragment value."""
     s = _make_session(endpoint="ep2")
     mock_common_state.store.get.return_value = s
     mock_common_state.resolve_session.return_value = "s1"
@@ -154,6 +182,11 @@ def test_url_host_normalises_trailing_slash(mock_common_state):
     assert result.exit_code == 0
     assert "https://colab.research.google.com//notebooks/" not in result.output
     assert "https://colab.research.google.com/notebooks/empty.ipynb" in result.output
+    # Same guarantee for the fragment URL.
+    assert "https://colab.research.google.com//tun/" not in result.output
+    assert (
+        "datalabBackendUrl=https://colab.research.google.com/tun/m/ep2" in result.output
+    )
 
 
 def test_url_endpoint_with_special_chars_is_encoded(mock_common_state):
@@ -208,6 +241,76 @@ def test_url_no_open_by_default(mock_common_state):
 
     assert result.exit_code == 0
     mock_open.assert_not_called()
+
+
+def test_url_fragment_is_not_url_encoded(mock_common_state):
+    """The `#datalabBackendUrl=...` fragment value is a full URL and must
+    be embedded raw (no percent-encoding). Browsers do not decode the
+    fragment before passing `location.hash` to page JS, and the Colab
+    parser expects to call `new URL(rawString)` directly. If we encoded
+    `:` -> `%3A` or `/` -> `%2F` here, the parser would see
+    `https%3A%2F%2Fcolab...` and fail.
+
+    Concretely we should see the literal `://` and unescaped `/` in the
+    fragment, NOT their percent-encoded counterparts.
+    """
+    s = _make_session(endpoint="ep-RAW")
+    mock_common_state.store.get.return_value = s
+    mock_common_state.resolve_session.return_value = "s1"
+
+    result = runner.invoke(app, ["url", "-s", "s1"])
+    assert result.exit_code == 0, result.output
+    url = _parse_url_output(result.output)
+    parsed = urlparse(url)
+
+    # The fragment must contain the literal scheme + slashes...
+    assert "datalabBackendUrl=https://" in url
+    assert "/tun/m/ep-RAW" in parsed.fragment
+    # ...and MUST NOT contain percent-encoded versions of `:`, `/`.
+    assert "%3A" not in parsed.fragment
+    assert "%2F" not in parsed.fragment
+
+
+def test_url_both_signals_present(mock_common_state):
+    """Invariant: every printed URL has BOTH `?dbu=` and `#datalabBackendUrl=`.
+
+    Either alone is unreliable across Colab frontend revisions; we emit
+    both so the frontend can use whichever it consults first.
+    """
+    s = _make_session(endpoint="ep-BOTH")
+    mock_common_state.store.get.return_value = s
+    mock_common_state.resolve_session.return_value = "s1"
+
+    result = runner.invoke(app, ["url", "-s", "s1"])
+    assert result.exit_code == 0, result.output
+    url = _parse_url_output(result.output)
+    assert "?dbu=" in url
+    assert "#datalabBackendUrl=" in url
+
+
+def test_url_open_flag_includes_fragment(mock_common_state):
+    """`--open` opens the SAME URL it printed, including the fragment.
+
+    `webbrowser.open()` must receive the URL with the `#datalabBackendUrl=`
+    fragment intact -- otherwise the browser may attach to a fresh VM via
+    `/tun/m/assign` instead of our existing session.
+    """
+    s = _make_session(endpoint="ep-OPEN2")
+    mock_common_state.store.get.return_value = s
+    mock_common_state.resolve_session.return_value = "s1"
+
+    with patch("webbrowser.open") as mock_open:
+        result = runner.invoke(app, ["url", "-s", "s1", "--open"])
+
+    assert result.exit_code == 0, result.output
+    mock_open.assert_called_once()
+    opened_url = mock_open.call_args[0][0]
+    assert (
+        "#datalabBackendUrl=https://colab.research.google.com/tun/m/ep-OPEN2"
+        in opened_url
+    )
+    # And it's the same URL that got printed.
+    assert opened_url in result.output
 
 
 def test_url_output_is_pipeable(mock_common_state):
