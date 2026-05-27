@@ -119,15 +119,32 @@ def test_pypi_no_upgrade(
     assert expected_message in result.output
 
 
-def test_pypi_upgrade_uses_pip_hint(app_version, fake_settings, mock_pypi):
+def test_pypi_upgrade_uses_pip_hint(mocker, app_version, fake_settings, mock_pypi):
     app_version("1.0.0")
     mock_pypi({"info": {"version": "1.1.0"}})
     fake_settings()
+    mocker.patch("sys.executable", "/usr/bin/python")
+    mocker.patch("colab_cli.auto_update.platform.system", return_value="Linux")
 
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 0
     assert "available: 1.1.0 (current: 1.0.0)" in result.output
     assert "Run 'pip install --upgrade google-colab-cli' to update." in result.output
+
+
+def test_pypi_upgrade_uses_uv_hint(mocker, app_version, fake_settings, mock_pypi):
+    app_version("1.0.0")
+    mock_pypi({"info": {"version": "1.1.0"}})
+    fake_settings()
+    mocker.patch(
+        "sys.executable", "/home/user/.local/share/uv/tools/google-colab-cli/bin/python"
+    )
+    mocker.patch("colab_cli.auto_update.platform.system", return_value="Linux")
+
+    result = runner.invoke(app, ["update"])
+    assert result.exit_code == 0
+    assert "available: 1.1.0 (current: 1.0.0)" in result.output
+    assert "Run 'uv tool install -U google-colab-cli' to update." in result.output
 
 
 def test_explicit_update_omits_disable_hint(app_version, fake_settings, mock_pypi):

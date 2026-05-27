@@ -23,6 +23,7 @@ callback (``cli.py``) calls ``check_for_updates`` once per day and
 """
 
 import json
+import platform
 import subprocess
 import urllib.request
 from datetime import datetime, timezone
@@ -34,6 +35,9 @@ import typer
 
 from colab_cli.common import state
 from colab_cli.state import Settings
+
+# PyPI distribution name (different from the importable package name `colab`).
+PYPI_PACKAGE_NAME = "google-colab-cli"
 
 
 # ---------- Version detection -------------------------------------------
@@ -122,6 +126,15 @@ def announce_upgrade(
 # ---------- Orchestration -----------------------------------------------
 
 
+def _get_install_command() -> str:
+    """Return the recommended installation command based on the environment."""
+    import sys
+
+    if platform.system() == "Linux" and "/uv/tools/" in sys.executable:
+        return f"uv tool install -U {PYPI_PACKAGE_NAME}"
+    return f"pip install --upgrade {PYPI_PACKAGE_NAME}"
+
+
 def check_for_updates(quiet: bool = False) -> None:
     """Check PyPI for updates and print a message if a new version is available.
 
@@ -140,7 +153,7 @@ def check_for_updates(quiet: bool = False) -> None:
             announce_upgrade(
                 pypi_v,
                 current,
-                "pip install --upgrade google-colab-cli",
+                _get_install_command(),
                 show_disable_hint=quiet,
             )
         elif not quiet:
@@ -209,10 +222,6 @@ def run_background_check() -> None:
 
 
 # ---------- Self-install ------------------------------------------------
-
-
-# PyPI distribution name (different from the importable package name `colab`).
-PYPI_PACKAGE_NAME = "google-colab-cli"
 
 
 def self_install() -> None:
