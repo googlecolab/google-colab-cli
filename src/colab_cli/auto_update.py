@@ -216,10 +216,16 @@ PYPI_PACKAGE_NAME = "google-colab-cli"
 
 
 def self_install() -> None:
-    """Run ``pip install -U <PYPI_PACKAGE_NAME>`` to upgrade the CLI in place."""
+    """Upgrade the CLI in place, detecting uv vs pip."""
     import sys
 
-    cmd = [sys.executable, "-m", "pip", "install", "-U", PYPI_PACKAGE_NAME]
+    # If the executable path contains "/uv/", we assume it was installed via
+    # `uv tool install` and use `uv` to upgrade it.
+    if "/uv/tools/" in sys.executable:
+        cmd = ["uv", "tool", "install", "-U", PYPI_PACKAGE_NAME]
+    else:
+        cmd = [sys.executable, "-m", "pip", "install", "-U", PYPI_PACKAGE_NAME]
+
     typer.echo(f"[colab] Running: {' '.join(cmd)}")
     result = subprocess.run(cmd)
     if result.returncode != 0:

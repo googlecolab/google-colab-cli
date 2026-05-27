@@ -398,6 +398,7 @@ def test_install_flag_runs_pip_install_upgrade(
     mock_pypi({"info": {"version": "1.1.0"}})
     fake_settings()
     mocker.patch("colab_cli.commands.utility.platform.system", return_value="Linux")
+    mocker.patch("sys.executable", "/usr/bin/python")
     run = mocker.patch(
         "colab_cli.auto_update.subprocess.run",
         return_value=mocker.Mock(returncode=0),
@@ -409,7 +410,32 @@ def test_install_flag_runs_pip_install_upgrade(
     args, _ = run.call_args
     # Use sys.executable to avoid PATH ambiguity / virtualenv mixups.
     cmd = args[0]
-    assert cmd[1:] == ["-m", "pip", "install", "-U", "google-colab-cli"]
+    assert cmd == ["/usr/bin/python", "-m", "pip", "install", "-U", "google-colab-cli"]
+
+
+def test_install_flag_runs_uv_tool_install(
+    mocker, app_version, fake_settings, mock_pypi
+):
+    """`colab update --install` shells out to `uv tool install -U google-colab-cli`
+    when sys.executable contains '/uv/'."""
+    app_version("1.0.0")
+    mock_pypi({"info": {"version": "1.1.0"}})
+    fake_settings()
+    mocker.patch("colab_cli.commands.utility.platform.system", return_value="Linux")
+    mocker.patch(
+        "sys.executable", "/home/user/.local/share/uv/tools/google-colab-cli/bin/python"
+    )
+    run = mocker.patch(
+        "colab_cli.auto_update.subprocess.run",
+        return_value=mocker.Mock(returncode=0),
+    )
+
+    result = runner.invoke(app, ["update", "--install"])
+    assert result.exit_code == 0
+    assert run.call_count == 1
+    args, _ = run.call_args
+    cmd = args[0]
+    assert cmd == ["uv", "tool", "install", "-U", "google-colab-cli"]
 
 
 def test_install_flag_errors_on_non_linux(
