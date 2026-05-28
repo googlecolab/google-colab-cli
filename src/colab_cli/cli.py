@@ -105,6 +105,8 @@ def callback(
         "help",
         "url",
         "whoami",
+        "README",
+        "AGENT",
     }
     if ctx.invoked_subcommand not in _AUTO_UPDATE_SUPPRESSED:
         auto_update.run_background_check()

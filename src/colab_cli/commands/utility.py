@@ -379,6 +379,48 @@ def update_command(
     auto_update.self_install()
 
 
+def _print_resource(filename: str) -> None:
+    import importlib.resources
+    import os
+
+    content = None
+    try:
+        # Try reading from package resources
+        ref = importlib.resources.files("colab_cli").joinpath(filename)
+        if ref.is_file():
+            content = ref.read_text(encoding="utf-8")
+    except Exception:
+        pass
+
+    if not content:
+        # Fallback to local file for development
+        local_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), f"../../../{filename}")
+        )
+        if os.path.exists(local_path):
+            try:
+                with open(local_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception:
+                pass
+
+    if content:
+        typer.echo(content)
+    else:
+        typer.echo(f"[colab] {filename} content not available.", err=True)
+        raise typer.Exit(code=1)
+
+
+def readme():
+    """Print the bundled README.md file"""
+    _print_resource("README.md")
+
+
+def agent():
+    """Print the bundled AGENTS.md file"""
+    _print_resource("AGENTS.md")
+
+
 def register(app: typer.Typer):
     app.command()(pay)
     app.command()(log)
@@ -388,3 +430,7 @@ def register(app: typer.Typer):
     # Developer-only debugging aid; hidden from `colab --help` but still
     # reachable via `colab whoami` / `colab whoami --help`.
     app.command(name="whoami", hidden=True)(whoami)
+    app.command(name="readme")(readme)
+    app.command(name="README", hidden=True)(readme)
+    app.command(name="agent")(agent)
+    app.command(name="AGENT", hidden=True)(agent)
