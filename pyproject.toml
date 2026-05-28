@@ -34,6 +34,10 @@ source = "vcs"
 [tool.hatch.build.targets.wheel]
 packages = ["src/colab_cli"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"README.md" = "colab_cli/README.md"
+"AGENTS.md" = "colab_cli/AGENTS.md"
+
 [tool.uv]
 package = true
 
