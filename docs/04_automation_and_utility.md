@@ -1,5 +1,6 @@
 ---
 log:
+2026-05-27: Refactored `colab README` and `colab AGENT` to bundle `README.md` and `AGENTS.md` via Hatchling's `force-include` and read them using `importlib.resources` instead of `importlib.metadata`. `colab AGENT` now correctly prints `AGENTS.md`.
 2026-05-27: Extended `colab update --install` to detect if the CLI was installed via `uv tool install` (by checking if `sys.executable` contains `/uv/`) and if so, use `uv tool install -U google-colab-cli` to upgrade.
 2026-05-27: Updated auto-update upgrade hint to recommend `pip install --upgrade google-colab-cli` instead of `colab`, aligning with the PyPI package name.
 2026-05-27: `colab url` now emits BOTH the `?dbu=<urlencoded path>` query parameter (existing) AND a new `#datalabBackendUrl=<full URL>` hash fragment (new). Format: `https://<host>/notebooks/empty.ipynb?dbu=%2Ftun%2Fm%2F<endpoint>#datalabBackendUrl=<host>/tun/m/<endpoint>`. Why both: some Colab frontend code paths consult the hash fragment first and ignore `dbu` entirely, so the previously-emitted query-only form failed silently for those users (the frontend fell through to allocating a fresh VM via `/tun/m/assign`). The fragment value is a FULL URL with scheme + host (NOT just the path) and is emitted RAW (no URL encoding) because browsers don't decode the fragment before passing `location.hash` to page JS — Colab's parser calls `new URL(rawString)` directly. The fragment host always matches `--host` so Colab's same-origin enforcement on embedded backend URLs doesn't block the connection, and sandbox/dev users (`--host https://colab.sandbox.google.com`) get a sandbox fragment automatically. Three new test cases in `tests/test_url.py` cover the raw-encoding requirement (`%3A`/`%2F` must NOT appear in the fragment), the both-signals-present invariant, and `--open` propagating the fragment to `webbrowser.open()`. Integration-verified live against synthetic session state with three host shapes (default, sandbox, trailing-slash); all produced correctly-shaped URLs with no `//` artifacts.
@@ -241,6 +242,19 @@ remediation guidance) rather than silently after ~1 minute via the daemon.
       - openid
     ```
 
+### 9. README and AGENT (`colab README`, `colab AGENT`)
+
+-   **Action**: Print the bundled `README.md` or `AGENTS.md` file.
+-   **Implementation**:
+    -   Uses `importlib.resources.files("colab_cli").joinpath(...)` to read the
+        bundled `README.md` (for `colab README`) or `AGENTS.md` (for `colab AGENT`)
+        from the package resources.
+    -   The files are bundled into the package via Hatchling's `force-include`
+        configuration in `pyproject.toml`.
+    -   If reading from resources fails (e.g. during development when not
+        installed), it falls back to reading the files from the project root.
+    -   Prints the content to stdout.
+
 ## Implementation Details
 
 -   **Code Injection**: Use a standard `run_code(session, code)` helper via
@@ -286,3 +300,10 @@ TDD is mandatory for all automation features.
 -   **Test Case**: `creds.refresh()` is called before `creds.token` is read
     (regression against silently-`None` tokens for service-account /
     GCE-metadata creds).
+
+### 4. `README` and `AGENT` Commands
+
+-   **Test Case**: Verify `colab README` prints the expected content when package metadata is available.
+-   **Test Case**: Verify `colab AGENT` prints the same content.
+-   **Test Case**: Verify fallback to local `README.md` file when metadata is not available.
+-   **Test Case**: Verify error exit when both metadata and local file are unavailable.
