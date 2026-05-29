@@ -27,7 +27,6 @@ from colab_cli.client import (
     PostAssignmentResponse,
     Variant,
 )
-from colab_cli.commands.automation import INTERACTIVE_AUTOMATION_TIMEOUT_SEC
 from colab_cli.utils import get_status_code
 from colab_cli.state import SessionState
 from colab_cli.runtime import ColabRuntime
@@ -247,11 +246,12 @@ def new(
     typer.echo("[colab] Session READY.")
 
 
-def restart( 
+def restart_kernel(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
     ] = None,
 ):
+    """Restart a session's kernel"""
     from colab_cli.common import state
 
     name = state.resolve_session(session)
@@ -505,7 +505,7 @@ def keep_alive(
 def register(app: typer.Typer):
     app.command()(new)
     app.command(name="sessions")(sessions_command)
-    app.command()(restart)
+    app.command(name="restart-kernel")(restart_kernel)
     app.command()(status)
     app.command()(stop)
     app.command(hidden=True)(keep_alive)

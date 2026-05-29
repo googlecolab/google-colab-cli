@@ -234,7 +234,7 @@ def run_command(
         ),
     ] = False,
 ):
-    """Run a Python script on a fresh Colab VM, then release the VM.
+    """Run a Python script on a fresh Colab VM, then release the VM
 
     Designed to be used as a shebang interpreter, e.g.
 
