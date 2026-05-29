@@ -16,6 +16,8 @@ End-to-end tests that run against a **live Colab backend** (unlike the mocked un
 | `repro_keep_alive_scope/` | Slow soak test (~95s): runs the daemon long enough for one ping past the pre-flight, asserts no `keep_alive_error` events. |
 | `repro_variable_persistence/` | Variables persist across `colab exec` calls in the same session. |
 | `repro_piped_console/` | Fast smoke test (~5s including session creation): `echo cmd \| colab console -s s` runs the command and exits within 30s. Regression test for the 2026-05-07 EOF-handler fix. |
+| `repro_bundled_oauth/` | Fast smoke test (~5s): verifies that the fallback OAuth configuration is loaded and starts the OAuth flow with the default client ID when local config is missing. |
+
 
 ## Running
 ```bash

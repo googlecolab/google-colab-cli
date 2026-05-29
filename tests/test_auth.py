@@ -27,9 +27,11 @@ def mock_deps(mocker):
     m_flow_cls = mocker.patch("colab_cli.auth.InstalledAppFlow")
     m_request = mocker.patch("colab_cli.auth.Request")
     m_session = mocker.patch("colab_cli.auth.requests.AuthorizedSession")
+    m_resources = mocker.patch("colab_cli.auth.resources")
 
-    # By default, pretend oauth config doesn't exist
+    # By default, pretend oauth config doesn't exist anywhere
     m_exists.return_value = False
+    m_resources.files.return_value.joinpath.return_value.is_file.return_value = False
 
     return {
         "exists": m_exists,
@@ -38,11 +40,15 @@ def mock_deps(mocker):
         "flow_cls": m_flow_cls,
         "request": m_request,
         "session": m_session,
+        "resources": m_resources,
     }
 
 
 def test_get_credentials_no_config(mock_deps):
-    with pytest.raises(FileNotFoundError, match="Client OAuth config not found"):
+    with pytest.raises(
+        FileNotFoundError,
+        match="Client OAuth config not found.*and no inlined config available",
+    ):
         get_credentials("missing_config.json", provider=AuthProvider.OAUTH2)
 
 
@@ -105,3 +111,25 @@ def test_get_credentials_no_token(mock_deps):
 
     mock_deps["flow_cls"].from_client_config.assert_called_once()
     mock_flow.run_local_server.assert_called_once()
+
+
+def test_get_credentials_fallback_config(mock_deps):
+    # Setup: config_path doesn't exist, but fallback file does
+    mock_deps["exists"].return_value = False
+    m_file = mock_deps["resources"].files.return_value.joinpath.return_value
+    m_file.is_file.return_value = True
+    m_file.read_text.return_value = '{"installed":{"client_id":"fallback_id"}}'
+
+    # Valid creds in token
+    mock_deps["exists"].side_effect = lambda path: path == TOKEN_CONFIG_PATH
+    mock_creds = MagicMock()
+    mock_creds.valid = True
+    mock_deps["creds_cls"].from_authorized_user_file.return_value = mock_creds
+
+    res = get_credentials("missing_config.json", provider=AuthProvider.OAUTH2)
+
+    mock_deps["resources"].files.assert_called_once_with("colab_cli")
+    m_file.is_file.assert_called_once()
+    m_file.read_text.assert_called_once()
+    mock_deps["creds_cls"].from_authorized_user_file.assert_called_once()
+    assert res == mock_deps["session"].return_value

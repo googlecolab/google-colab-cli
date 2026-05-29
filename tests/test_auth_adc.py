@@ -70,10 +70,8 @@ def test_get_credentials_adc_does_not_invoke_other_providers(mocker):
     mock_flow.from_client_config.assert_not_called()
 
 
-def test_get_credentials_adc_requests_colaboratory_scope(mocker):
-    """The RuntimeService at colab.pa.googleapis.com requires the
-    `colaboratory` scope. ADC must request it via google.auth.default().
-    """
+def test_get_credentials_adc_requests_required_scopes(mocker):
+    """ADC must request required scopes via google.auth.default()."""
     mock_creds = MagicMock()
     # Pretend creds don't need re-scoping (e.g., user creds from gcloud).
     mock_creds.requires_scopes = False
@@ -87,12 +85,13 @@ def test_get_credentials_adc_requests_colaboratory_scope(mocker):
     scopes = mock_default.call_args.kwargs.get("scopes")
     assert scopes is not None, "google.auth.default() must be called with scopes="
     assert "https://www.googleapis.com/auth/colaboratory" in scopes
+    assert "https://www.googleapis.com/auth/cloud-platform" in scopes
     assert "https://www.googleapis.com/auth/userinfo.email" in scopes
 
 
 def test_get_credentials_adc_reapplies_scopes_for_scopable_creds(mocker):
     """For credential subclasses that support `with_scopes` (service accounts,
-    GCE/GKE, etc.), we must call it so the colaboratory scope sticks even if
+    GCE/GKE, etc.), we must call it so the scopes stick even if
     google.auth.default() ignored the kwarg.
     """
     rescoped = MagicMock(name="rescoped_creds")
@@ -106,7 +105,7 @@ def test_get_credentials_adc_reapplies_scopes_for_scopable_creds(mocker):
 
     mock_creds.with_scopes.assert_called_once()
     applied_scopes = mock_creds.with_scopes.call_args.args[0]
-    assert "https://www.googleapis.com/auth/colaboratory" in applied_scopes
+    assert "https://www.googleapis.com/auth/cloud-platform" in applied_scopes
     # The session is built from the *rescoped* creds, not the original.
     mock_session_cls.assert_called_once_with(rescoped)
 

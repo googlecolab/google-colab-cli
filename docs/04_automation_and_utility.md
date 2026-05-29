@@ -1,6 +1,7 @@
 ---
 log:
 2026-06-01: Enabled `colab update --install` self-update on macOS in addition to Linux. Refactored platform check logic to keep the implementation DRY and updated both tests and documentation. Also, on these platforms, an additional message is shown recommending `colab update --install` to upgrade in place, positioned above the standard `pip`/`uv` installation command.
+2026-05-29: Added default OAuth2 client config (`oauth_config.json`) as a bundled package resource and restored fallback loading logic in `get_credentials()`. The CLI now falls back to using these default credentials when no explicit local config is found. Added `integration/repro_bundled_oauth` integration test.
 2026-05-27: Refactored `colab README` and `colab AGENT` to bundle `README.md` and `AGENTS.md` via Hatchling's `force-include` and read them using `importlib.resources` instead of `importlib.metadata`. `colab AGENT` now correctly prints `AGENTS.md`.
 2026-05-27: Extended `colab update --install` to detect if the CLI was installed via `uv tool install` (by checking if `sys.executable` contains `/uv/`) and if so, use `uv tool install -U google-colab-cli` to upgrade.
 2026-05-27: Updated auto-update upgrade hint to recommend `pip install --upgrade google-colab-cli` instead of `colab`, aligning with the PyPI package name.
@@ -24,9 +25,9 @@ backend, selected via the global `--auth=<provider>` flag:
 
 1.  **`oauth2`** (default): Standard public InstalledAppFlow via
     `google-auth-oauthlib`. Opens a browser for consent, caches the refresh
-    token at `~/.config/colab-cli/token.json`. Requires a client OAuth
-    config at `~/.colab-cli-oauth-config.json` or a path passed via
-    `-c/--client-oauth-config`.
+    token at `~/.config/colab-cli/token.json`. If no local config is provided
+    via `-c/--client-oauth-config` or found at `~/.colab-cli-oauth-config.json`,
+    it falls back to a bundled `oauth_config.json` containing default OAuth credentials.
 2.  **`adc`**: Application Default Credentials via `google.auth.default()`.
     Honors the standard ADC discovery chain
     (`GOOGLE_APPLICATION_CREDENTIALS`, `gcloud auth application-default
