@@ -1,5 +1,6 @@
 ---
 log:
+2026-06-01: Improved `colab update` output. On Linux platforms, an additional message is shown recommending `colab update --install` to upgrade in place, positioned above the standard `pip`/`uv` installation command.
 2026-05-27: Refactored `colab README` and `colab AGENT` to bundle `README.md` and `AGENTS.md` via Hatchling's `force-include` and read them using `importlib.resources` instead of `importlib.metadata`. `colab AGENT` now correctly prints `AGENTS.md`.
 2026-05-27: Extended `colab update --install` to detect if the CLI was installed via `uv tool install` (by checking if `sys.executable` contains `/uv/`) and if so, use `uv tool install -U google-colab-cli` to upgrade.
 2026-05-27: Updated auto-update upgrade hint to recommend `pip install --upgrade google-colab-cli` instead of `colab`, aligning with the PyPI package name.
@@ -185,8 +186,10 @@ remediation guidance) rather than silently after ~1 minute via the daemon.
             the cache.
 -   **Notification**: If a new version is found, a non-intrusive message is
     printed to the console with a `Run 'pip install --upgrade google-colab-cli' to
-    update.` hint. The cached banner shown between fetches uses the generic
-    `Run 'colab update' to update.` hint.
+    update.` hint. On Linux platforms where `--install` self-update is supported,
+    an additional hint `You can run 'colab update --install' to upgrade in place.`
+    is displayed above the pip/uv install command. The cached banner shown between
+    fetches uses the generic `Run 'colab update' to update.` hint.
 -   **Self-install (`--install`)**: An opt-in `--install` flag (default
     `False`) makes `colab update` upgrade the CLI in place (**Linux only**).
     It detects how the CLI was installed:

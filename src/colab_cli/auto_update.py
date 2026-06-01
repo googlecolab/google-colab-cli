@@ -113,6 +113,8 @@ def announce_upgrade(
     typer.echo(
         f"\n[colab] A new version of Colab CLI is available: {latest} (current: {current})"
     )
+    if platform.system() == "Linux" and ("pip" in install_cmd or "uv" in install_cmd):
+        typer.echo("[colab] You can run 'colab update --install' to upgrade in place.")
     typer.echo(f"[colab] Run '{install_cmd}' to update.")
     if show_disable_hint:
         typer.echo(
