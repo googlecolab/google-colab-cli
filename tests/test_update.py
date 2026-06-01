@@ -163,7 +163,7 @@ def test_pypi_upgrade_uses_uv_hint(mocker, app_version, fake_settings, mock_pypi
     assert idx_install < idx_uv
 
 
-def test_pypi_upgrade_uses_pip_hint_non_linux(
+def test_pypi_upgrade_uses_pip_hint_macos(
     mocker, app_version, fake_settings, mock_pypi
 ):
     app_version("1.0.0")
@@ -171,6 +171,30 @@ def test_pypi_upgrade_uses_pip_hint_non_linux(
     fake_settings()
     mocker.patch("sys.executable", "/usr/bin/python")
     mocker.patch("colab_cli.auto_update.platform.system", return_value="Darwin")
+
+    result = runner.invoke(app, ["update"])
+    assert result.exit_code == 0
+    assert "available: 1.1.0 (current: 1.0.0)" in result.output
+    assert "You can run 'colab update --install' to upgrade in place." in result.output
+    assert "Run 'pip install --upgrade google-colab-cli' to update." in result.output
+
+    idx_install = result.output.find(
+        "You can run 'colab update --install' to upgrade in place."
+    )
+    idx_pip = result.output.find(
+        "Run 'pip install --upgrade google-colab-cli' to update."
+    )
+    assert idx_install < idx_pip
+
+
+def test_pypi_upgrade_uses_pip_hint_windows(
+    mocker, app_version, fake_settings, mock_pypi
+):
+    app_version("1.0.0")
+    mock_pypi({"info": {"version": "1.1.0"}})
+    fake_settings()
+    mocker.patch("sys.executable", "/usr/bin/python")
+    mocker.patch("colab_cli.auto_update.platform.system", return_value="Windows")
 
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 0
@@ -448,7 +472,7 @@ def test_install_flag_runs_pip_install_upgrade(
     app_version("1.0.0")
     mock_pypi({"info": {"version": "1.1.0"}})
     fake_settings()
-    mocker.patch("colab_cli.commands.utility.platform.system", return_value="Linux")
+    mocker.patch("colab_cli.auto_update.platform.system", return_value="Linux")
     mocker.patch("sys.executable", "/usr/bin/python")
     run = mocker.patch(
         "colab_cli.auto_update.subprocess.run",
@@ -472,7 +496,7 @@ def test_install_flag_runs_uv_tool_install(
     app_version("1.0.0")
     mock_pypi({"info": {"version": "1.1.0"}})
     fake_settings()
-    mocker.patch("colab_cli.commands.utility.platform.system", return_value="Linux")
+    mocker.patch("colab_cli.auto_update.platform.system", return_value="Linux")
     mocker.patch(
         "sys.executable", "/home/user/.local/share/uv/tools/google-colab-cli/bin/python"
     )
@@ -489,21 +513,41 @@ def test_install_flag_runs_uv_tool_install(
     assert cmd == ["uv", "tool", "install", "-U", "google-colab-cli"]
 
 
-def test_install_flag_errors_on_non_linux(
+def test_install_flag_errors_on_unsupported_platform(
     mocker, app_version, fake_settings, mock_pypi
 ):
-    """`--install` is gated to Linux; on other platforms the command must
+    """`--install` is gated to Linux and macOS; on other platforms the command must
     exit non-zero with an explanatory message and skip the pip subprocess."""
     app_version("1.0.0")
     mock_pypi({"info": {"version": "1.1.0"}})
     fake_settings()
-    mocker.patch("colab_cli.commands.utility.platform.system", return_value="Darwin")
+    mocker.patch("colab_cli.auto_update.platform.system", return_value="Windows")
     run = mocker.patch("colab_cli.auto_update.subprocess.run")
 
     result = runner.invoke(app, ["update", "--install"])
     assert result.exit_code != 0
     assert run.call_count == 0
-    assert "only supported on Linux" in result.output
+    assert "only supported on Linux and macOS" in result.output
+
+
+def test_install_flag_runs_on_macos(mocker, app_version, fake_settings, mock_pypi):
+    """`colab update --install` shells out to pip/uv when running on macOS."""
+    app_version("1.0.0")
+    mock_pypi({"info": {"version": "1.1.0"}})
+    fake_settings()
+    mocker.patch("colab_cli.auto_update.platform.system", return_value="Darwin")
+    mocker.patch("sys.executable", "/usr/bin/python")
+    run = mocker.patch(
+        "colab_cli.auto_update.subprocess.run",
+        return_value=mocker.Mock(returncode=0),
+    )
+
+    result = runner.invoke(app, ["update", "--install"])
+    assert result.exit_code == 0
+    assert run.call_count == 1
+    args, _ = run.call_args
+    cmd = args[0]
+    assert cmd == ["/usr/bin/python", "-m", "pip", "install", "-U", "google-colab-cli"]
 
 
 def test_install_flag_no_op_when_already_up_to_date(
@@ -514,7 +558,7 @@ def test_install_flag_no_op_when_already_up_to_date(
     app_version("1.1.0")
     mock_pypi({"info": {"version": "1.1.0"}})
     fake_settings()
-    mocker.patch("colab_cli.commands.utility.platform.system", return_value="Linux")
+    mocker.patch("colab_cli.auto_update.platform.system", return_value="Linux")
     run = mocker.patch("colab_cli.auto_update.subprocess.run")
 
     result = runner.invoke(app, ["update", "--install"])
@@ -529,7 +573,7 @@ def test_install_flag_propagates_pip_failure(
     app_version("1.0.0")
     mock_pypi({"info": {"version": "1.1.0"}})
     fake_settings()
-    mocker.patch("colab_cli.commands.utility.platform.system", return_value="Linux")
+    mocker.patch("colab_cli.auto_update.platform.system", return_value="Linux")
     mocker.patch(
         "colab_cli.auto_update.subprocess.run",
         return_value=mocker.Mock(returncode=2),

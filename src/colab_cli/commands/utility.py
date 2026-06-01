@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import platform
 from typing import Optional
 
 import typer
@@ -362,9 +361,10 @@ def update_command(
     if not install:
         return
 
-    if platform.system() != "Linux":
+    if not auto_update.is_self_install_supported():
         typer.echo(
-            "[colab] '--install' self-install is only supported on Linux.", err=True
+            "[colab] '--install' self-install is only supported on Linux and macOS.",
+            err=True,
         )
         raise typer.Exit(code=1)
 
