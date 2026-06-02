@@ -58,7 +58,7 @@ def test_cli_exec_file(mock_store, mock_runtime_class, mock_common_state, tmp_pa
     mock_runtime.execute_code.assert_any_call(
         "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
     )
-    mock_runtime.execute_code.assert_any_call("print('hello')", output_hook=ANY)
+    mock_runtime.execute_code.assert_any_call("print('hello')", output_hook=ANY, timeout=None)
 
 
 def test_cli_exec_stdin(mock_store, mock_runtime_class, mock_common_state):
@@ -80,7 +80,7 @@ def test_cli_exec_stdin(mock_store, mock_runtime_class, mock_common_state):
     assert mock_session.last_execution[1] is None
     assert mock_session.last_execution[2] is not None
     mock_store.add.assert_called_with(mock_session)
-    mock_runtime.execute_code.assert_any_call("print(42)", output_hook=ANY)
+    mock_runtime.execute_code.assert_any_call("print(42)", output_hook=ANY, timeout=None)
 
 
 def test_cli_exec_not_found(mock_common_state):
@@ -176,3 +176,24 @@ def test_cli_exec_lost_session_prunes(
     assert result.exit_code == 1
     assert "appears to be lost" in result.output
     mock_common_state.prune_session.assert_called_once_with("lost-sess")
+
+
+def test_cli_exec_timeout(mock_store, mock_runtime_class, mock_common_state, tmp_path):
+    mock_session = MagicMock()
+    mock_session.url = "http://url"
+    mock_session.token = "token123"
+    mock_session.name = "s1"
+    mock_session.kernel_id = None
+    mock_session.session_id = None
+    mock_store.get.return_value = mock_session
+
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = [{"text": "hello\n"}]
+
+    script = tmp_path / "script.py"
+    script.write_text("print('hello')")
+
+    result = runner.invoke(app, ["exec", "-s", "s1", "-f", str(script), "--timeout", "3600"])
+    assert result.exit_code == 0
+    mock_runtime.execute_code.assert_any_call("print('hello')", output_hook=ANY, timeout=3600.0)
