@@ -20,6 +20,7 @@ import warnings
 from typing import Optional
 
 import google.auth
+import typer
 from google.auth.transport import requests
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -137,6 +138,33 @@ def _get_adc_credentials() -> Credentials:
             category=UserWarning,
         )
         creds, _ = google.auth.default(scopes=list(PUBLIC_SCOPES))
+
+    if not creds.valid:
+        from google.auth import compute_engine
+
+        if isinstance(creds, compute_engine.Credentials):
+            creds = None
+        else:
+            logger.warning("Failed to obtain valid ADC credentials.")
+            try:
+                logger.warning("Trying to refresh ADC credentials")
+                creds.refresh(Request())
+            except Exception as e:
+                logger.warning(f"Failed to refresh token: {e}")
+                creds = None
+
+    if not creds:
+        typer.echo(
+            "No valid default credentials found. To authenticate, run:\n\n"
+            "  gcloud auth application-default login \\\n"
+            "      --scopes=openid,"
+            "https://www.googleapis.com/auth/cloud-platform,"
+            "https://www.googleapis.com/auth/userinfo.email,"
+            "https://www.googleapis.com/auth/colaboratory\n",
+            err=True,
+        )
+        exit(1)
+
     # Some credential subclasses ignore the `scopes=` kwarg in `default()`
     # (e.g. user creds), so re-apply via `with_scopes` when supported.
     if getattr(creds, "requires_scopes", False):
