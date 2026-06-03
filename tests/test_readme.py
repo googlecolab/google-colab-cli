@@ -46,23 +46,23 @@ def test_readme_from_resources(mock_resources):
     mock_resources.return_value.joinpath.assert_called_with("README.md")
 
 
-def test_agent_from_resources(mock_resources):
-    mock_agents = MagicMock()
-    mock_agents.is_file.return_value = True
-    mock_agents.read_text.return_value = "Fake AGENTS content"
+def test_skill_from_resources(mock_resources):
+    mock_skill = MagicMock()
+    mock_skill.is_file.return_value = True
+    mock_skill.read_text.return_value = "Fake SKILL content"
 
     def joinpath_side_effect(name):
-        if name == "AGENTS.md":
-            return mock_agents
+        if name == "COLAB_SKILL.md":
+            return mock_skill
         return MagicMock(is_file=MagicMock(return_value=False))
 
     mock_resources.return_value.joinpath.side_effect = joinpath_side_effect
 
-    result = runner.invoke(app, ["AGENT"])
+    result = runner.invoke(app, ["SKILL"])
     assert result.exit_code == 0
-    assert result.output.strip() == "Fake AGENTS content"
+    assert result.output.strip() == "Fake SKILL content"
     mock_resources.assert_called_once_with("colab_cli")
-    mock_resources.return_value.joinpath.assert_called_with("AGENTS.md")
+    mock_resources.return_value.joinpath.assert_called_with("COLAB_SKILL.md")
 
 
 def test_readme_fallback_to_file(mock_resources):
