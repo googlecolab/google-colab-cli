@@ -416,9 +416,9 @@ def readme():
     _print_resource("README.md")
 
 
-def agent():
-    """Print the bundled AGENTS.md file"""
-    _print_resource("AGENTS.md")
+def skill():
+    """Print the bundled COLAB_SKILL.md file"""
+    _print_resource("COLAB_SKILL.md")
 
 
 def register(app: typer.Typer):
@@ -432,5 +432,5 @@ def register(app: typer.Typer):
     app.command(name="whoami", hidden=True)(whoami)
     app.command(name="readme")(readme)
     app.command(name="README", hidden=True)(readme)
-    app.command(name="agent")(agent)
-    app.command(name="AGENT", hidden=True)(agent)
+    app.command(name="skill")(skill)
+    app.command(name="SKILL", hidden=True)(skill)
