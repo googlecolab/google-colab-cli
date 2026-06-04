@@ -98,10 +98,10 @@ class TestIpynbExec(unittest.TestCase):
                 "os.chdir", mock_runtime.execute_code.call_args_list[0].args[0]
             )
             mock_runtime.execute_code.assert_any_call(
-                "print('cell 1')", output_hook=ANY
+                "print('cell 1')", output_hook=ANY, timeout=10.0
             )
             mock_runtime.execute_code.assert_any_call(
-                "print('cell 2')", output_hook=ANY
+                "print('cell 2')", output_hook=ANY, timeout=10.0
             )
 
     @patch("colab_cli.commands.execution.ColabRuntime")

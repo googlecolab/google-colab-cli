@@ -29,6 +29,7 @@ colab run [OPTIONS] SCRIPT [SCRIPT_ARGS]...
 | `--gpu` | str | None | Same set as `colab new --gpu` (T4, L4, G4, H100, A100). |
 | `--tpu` | str | None | Same set as `colab new --tpu` (v5e1, v6e1). |
 | `--keep` | bool | False | Do **not** stop the session after the script finishes. |
+| `--timeout` | float | 10.0 | Timeout in seconds for code execution to prevent hanging on silent tasks. |
 
 ### Shebang usage
 With `--keep` and `--gpu` baked into the shebang line, an entire one-file workload becomes:
