@@ -26,6 +26,7 @@ Execution involves sending Python code (or shell commands) to the Jupyter kernel
     - If file path is local: Read content, send as code.
     - If file path is remote: Execute `!python <path>`.
 - **Multi-Modal Output**: Handle `display_data` messages (e.g., `image/png`, `text/html`). For the CLI, we'll save images to temporary files and print their paths, or if the terminal supports it (e.g., iTerm2), inline them.
+- **Timeout Configuration**: Exposes a `--timeout` flag (default 10s) to allow long-running silent tasks (like model compilation or data downloading) to execute without being prematurely killed.
 
 ### 3. Console (`colab console`)
 - **Implementation**: Connects directly to the backend terminal endpoint (`/colab/tty`) via WebSockets using `websocket-client`.

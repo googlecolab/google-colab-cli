@@ -504,3 +504,28 @@ def test_run_prelude_suppresses_ipython_exit_warning(
     # Look for the warnings filter targeting IPython's exit-warning text.
     assert "warnings.filterwarnings" in body
     assert "To exit: use" in body
+
+
+def test_run_with_timeout_flag(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    mock_spawn_keep_alive,
+    assign_response,
+    script_path,
+):
+    """`colab run --timeout 3600 script.py` must pass timeout down to the runtime."""
+    mock_client.assign.return_value = assign_response
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.setdefault("s", s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+
+    result = runner.invoke(app, ["run", "--timeout", "3600", str(script_path)])
+    assert result.exit_code == 0, result.output
+
+    code_calls = mock_runtime.execute_code.call_args_list
+    body_call = next(c for c in code_calls if "hello from script" in c.args[0])
+    assert body_call.kwargs.get("timeout") == 3600.0
