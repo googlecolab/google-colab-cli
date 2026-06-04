@@ -234,8 +234,8 @@ def run_command(
         ),
     ] = False,
     timeout: Annotated[
-        Optional[float], typer.Option("--timeout", help="Timeout in seconds for code execution (default: 10s)")
-    ] = None,
+        Optional[float], typer.Option("--timeout", help="Timeout in seconds for code execution")
+    ] = 10.0,
 ):
     """Run a Python script on a fresh Colab VM, then release the VM
 

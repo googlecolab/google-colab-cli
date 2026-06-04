@@ -109,8 +109,8 @@ def exec_command(
         Optional[str], typer.Option("--output-image", help="Path to save plot")
     ] = None,
     timeout: Annotated[
-        Optional[float], typer.Option("--timeout", help="Timeout in seconds for code execution (default: 10s)")
-    ] = None,
+        Optional[float], typer.Option("--timeout", help="Timeout in seconds for code execution")
+    ] = 10.0,
 ):
     """Execute code in a session"""
     from colab_cli.common import state
