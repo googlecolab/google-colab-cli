@@ -4,6 +4,14 @@ A command-line interface for Google Colab. Provision high-performance CPU, GPU, 
 
 Designed to support seamless developer productivity, headless automation, and AI agent integrations.
 
+<video src="https://github.com/googlecolab/google-colab-cli/raw/main/docs/demo.webm" controls width="100%"></video>
+
+> [!NOTE]
+> **Platform support:** the Colab CLI currently supports **Linux and macOS** only. Windows is not supported at this time.
+
+> [!TIP]
+> Looking for in-notebook, interactive agent-assisted coding instead of a terminal workflow? See the [Colab MCP Server](https://github.com/googlecolab/colab-mcp).
+
 ---
 
 ## Key Features
