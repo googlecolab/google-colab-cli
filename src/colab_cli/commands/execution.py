@@ -109,8 +109,9 @@ def exec_command(
         Optional[str], typer.Option("--output-image", help="Path to save plot")
     ] = None,
     timeout: Annotated[
-        Optional[float], typer.Option("--timeout", help="Timeout in seconds for code execution")
-    ] = 10.0,
+        Optional[float],
+        typer.Option("--timeout", help="Timeout in seconds for code execution"),
+    ] = 30.0,
 ):
     """Execute code in a session"""
     from colab_cli.common import state
@@ -208,9 +209,9 @@ def exec_command(
             state.store.add(s)
 
             outputs = runtime.execute_code(
-                code, 
+                code,
                 output_hook=lambda o: display_output(o, output_image),
-                timeout=timeout
+                timeout=timeout,
             )
             if "cell" in block:
                 save_output(outputs, block["cell"])

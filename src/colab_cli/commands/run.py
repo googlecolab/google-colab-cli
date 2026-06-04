@@ -234,8 +234,9 @@ def run_command(
         ),
     ] = False,
     timeout: Annotated[
-        Optional[float], typer.Option("--timeout", help="Timeout in seconds for code execution")
-    ] = 10.0,
+        Optional[float],
+        typer.Option("--timeout", help="Timeout in seconds for code execution"),
+    ] = 30.0,
 ):
     """Run a Python script on a fresh Colab VM, then release the VM
 
@@ -390,9 +391,7 @@ def run_command(
 
         try:
             outputs = runtime.execute_code(
-                payload, 
-                output_hook=_make_run_output_hook(),
-                timeout=timeout
+                payload, output_hook=_make_run_output_hook(), timeout=timeout
             )
         except Exception:
             # Genuine transport-level failure. Cleanup still happens via the

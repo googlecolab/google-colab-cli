@@ -58,7 +58,9 @@ def test_cli_exec_file(mock_store, mock_runtime_class, mock_common_state, tmp_pa
     mock_runtime.execute_code.assert_any_call(
         "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
     )
-    mock_runtime.execute_code.assert_any_call("print('hello')", output_hook=ANY, timeout=10.0)
+    mock_runtime.execute_code.assert_any_call(
+        "print('hello')", output_hook=ANY, timeout=30.0
+    )
 
 
 def test_cli_exec_stdin(mock_store, mock_runtime_class, mock_common_state):
@@ -80,7 +82,9 @@ def test_cli_exec_stdin(mock_store, mock_runtime_class, mock_common_state):
     assert mock_session.last_execution[1] is None
     assert mock_session.last_execution[2] is not None
     mock_store.add.assert_called_with(mock_session)
-    mock_runtime.execute_code.assert_any_call("print(42)", output_hook=ANY, timeout=10.0)
+    mock_runtime.execute_code.assert_any_call(
+        "print(42)", output_hook=ANY, timeout=30.0
+    )
 
 
 def test_cli_exec_not_found(mock_common_state):
@@ -194,6 +198,10 @@ def test_cli_exec_timeout(mock_store, mock_runtime_class, mock_common_state, tmp
     script = tmp_path / "script.py"
     script.write_text("print('hello')")
 
-    result = runner.invoke(app, ["exec", "-s", "s1", "-f", str(script), "--timeout", "3600"])
+    result = runner.invoke(
+        app, ["exec", "-s", "s1", "-f", str(script), "--timeout", "3600"]
+    )
     assert result.exit_code == 0
-    mock_runtime.execute_code.assert_any_call("print('hello')", output_hook=ANY, timeout=3600.0)
+    mock_runtime.execute_code.assert_any_call(
+        "print('hello')", output_hook=ANY, timeout=3600.0
+    )
