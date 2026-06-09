@@ -4,6 +4,24 @@ dynamic = ["version"]
 description = "CLI for interacting with Colab."
 readme = "README.md"
 requires-python = ">=3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = [
+    "colab",
+    "google-colab",
+    "jupyter",
+    "notebook",
+    "cli",
+]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development",
+]
 dependencies = [
     "click>=8.0",
     "google-auth>=2.49.1",
@@ -23,6 +41,11 @@ dependencies = [
 
 [project.scripts]
 colab = "colab_cli.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/googlecolab/google-colab-cli"
+Repository = "https://github.com/googlecolab/google-colab-cli"
+Issues = "https://github.com/googlecolab/google-colab-cli/issues"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
