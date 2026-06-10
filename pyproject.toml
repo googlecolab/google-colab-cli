@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "click>=8.0",
+    "filelock>=3.29.2",
     "google-auth>=2.49.1",
     "google-auth-oauthlib>=1.3.0",
     "jupyter-kernel-client",
