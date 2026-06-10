@@ -1,3 +1,8 @@
+---
+log:
+2026-06-10: Replaced the POSIX-only `fcntl.flock` file locking in `_LockedFileStore` with the cross-platform `filelock` library (reported broken on Windows). Reads use `ReadWriteLock.read_lock()` (shared) and writes use `write_lock()` (exclusive), preserving the original `LOCK_SH`/`LOCK_EX` semantics. The lock is constructed with `is_singleton=False` so two `StateStore` instances for the same path in one process don't collapse into a single reentrant lock (which would raise `RuntimeError` on multi-threaded write contention). Added shared-read, cross-process exclusion, and multi-thread/multi-process regression tests.
+---
+
 # Design: Session Management (`new`, `status`, `stop`, `sessions`)
 
 ## Overview
@@ -88,6 +93,12 @@ To prevent Colab VMs from being deleted due to idle timeouts (standard is ~90 mi
 - Use `requests` for robust HTTP interactions and `pydantic` for schema validation.
 - Handle authentication headers (likely `Authorization: Bearer <token>` or cookies).
 
+### State Persistence & File Locking
+- **Stores**: `StateStore` (`sessions.json`) and `SettingsStore` (`settings.json`) both derive from `_LockedFileStore`, which guards concurrent access across independent `colab` invocations and the detached keep-alive daemon.
+- **Cross-platform locking**: Locking uses the [`filelock`](https://pypi.org/project/filelock/) library rather than `fcntl.flock`. `fcntl` is POSIX-only and is unavailable on Windows, so the original implementation crashed on import there. `filelock` provides the same advisory cross-process locking on Linux, macOS, and Windows.
+- **Shared vs. exclusive**: Each store owns a `filelock.ReadWriteLock` bound to a sidecar file (`<path>.lock`). Reads acquire `read_lock()` (shared — multiple concurrent readers allowed) and writes acquire `write_lock()` (exclusive). This preserves the `LOCK_SH`/`LOCK_EX` distinction of the previous `fcntl` implementation.
+- **`is_singleton=False`**: The `ReadWriteLock` is created with `is_singleton=False`. With `filelock`'s default (`True`), two `ReadWriteLock` objects for the same path *within a single process* are deduplicated into one reentrant lock; its reentrancy guard then raises `RuntimeError` when two threads each construct their own `StateStore` and contend for the write lock. Disabling the singleton registry makes each store's lock independent so they serialize via the underlying file lock instead.
+
 ## Testing Strategy
 TDD is mandatory for all session management features.
 
@@ -100,3 +111,8 @@ TDD is mandatory for all session management features.
 ### 2. State Store Validation
 - **Test Case**: Verify `StateStore` correctly handles file locking and multiple concurrent reads/writes.
 - **Test Case**: Verify `--config` override correctly directs all operations to the specified file path.
+- **Test Case (cross-platform locking)**: Verify the store locks via `filelock.ReadWriteLock` on the `<path>.lock` sidecar and does not import the POSIX-only `fcntl`.
+- **Test Case (shared/exclusive semantics)**: Verify reads go through `read_lock()` and writes through `write_lock()`.
+- **Test Case (cross-process exclusion)**: Hold the write lock from a separate process and confirm the store's in-process write blocks until release.
+- **Test Case (concurrent readers)**: Hold a read lock from a separate process and confirm the store can still complete a read concurrently.
+- **Test Case (multi-thread regression)**: Two `StateStore` instances writing from different threads must serialize without raising `RuntimeError` (guards the `is_singleton=False` choice).

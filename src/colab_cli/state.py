@@ -15,9 +15,10 @@
 import contextlib
 import json
 import os
-import fcntl
 from datetime import datetime
 from typing import Dict, Optional, Tuple, Iterator, IO
+
+import filelock
 from pydantic import BaseModel
 
 
@@ -46,6 +47,15 @@ class Settings(BaseModel):
 class _LockedFileStore:
     def __init__(self, path: str):
         self.path = path
+        self.lock_path = "%s.lock" % self.path
+        # ReadWriteLock gives us shared (concurrent) readers and exclusive
+        # writers -- the cross-platform equivalent of fcntl LOCK_SH/LOCK_EX.
+        # is_singleton=False keeps each store's lock independent: with the
+        # default (True), two StateStore instances for the same path in one
+        # process are merged into a single reentrant lock, whose reentrancy
+        # guard then raises RuntimeError when two threads contend for the write
+        # lock. We want them to actually serialize via the underlying file lock.
+        self._rwlock = filelock.ReadWriteLock(self.lock_path, is_singleton=False)
         self._ensure_dir()
 
     def _ensure_dir(self):
@@ -63,21 +73,15 @@ class _LockedFileStore:
         if not os.path.exists(self.path):
             yield None
             return
-        with open(self.path, "r") as f:
-            fcntl.flock(f, fcntl.LOCK_SH)
-            try:
+        with self._rwlock.read_lock():
+            with open(self.path, "r") as f:
                 yield f
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
 
     @contextlib.contextmanager
     def _lock_exclusive(self) -> Iterator[IO]:
-        with open(self.path, "a+") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            try:
+        with self._rwlock.write_lock():
+            with open(self.path, "a+") as f:
                 yield f
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
 
 
 class SettingsStore(_LockedFileStore):

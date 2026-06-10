@@ -277,6 +277,15 @@ wheels = [
 ]
 
 [[package]]
+name = "filelock"
+version = "3.29.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ec/fa/b7dc8a63243aafe57bf53611bd26fa3e0dee2d613590656d44e0a59b7828/filelock-3.29.2.tar.gz", hash = "sha256:779d2f5443b584750c6b90457abffd49235bfb0e66ce82ef5a680867e518ca1c", size = 61449, upload-time = "2026-06-10T14:45:23.072Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/c1/91b0faf8de6938ae72da425e0c6f322d270c044e5ffc372e6f0f89ed1564/filelock-3.29.2-py3-none-any.whl", hash = "sha256:f5d3feb44b2b8824832587543af5226822fe86baf086678ede47aa177fe47ca5", size = 42129, upload-time = "2026-06-10T14:45:21.896Z" },
+]
+
+[[package]]
 name = "google-auth"
 version = "2.49.1"
 source = { registry = "https://pypi.org/simple" }
@@ -307,6 +316,7 @@ name = "google-colab-cli"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
+    { name = "filelock" },
     { name = "google-auth" },
     { name = "google-auth-oauthlib" },
     { name = "jupyter-kernel-client" },
@@ -333,6 +343,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
+    { name = "filelock", specifier = ">=3.29.2" },
     { name = "google-auth", specifier = ">=2.49.1" },
     { name = "google-auth-oauthlib", specifier = ">=1.3.0" },
     { name = "jupyter-kernel-client", git = "https://github.com/googlecolab/jupyter-kernel-client.git" },
