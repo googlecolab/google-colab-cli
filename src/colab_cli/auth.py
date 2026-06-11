@@ -52,7 +52,46 @@ PUBLIC_SCOPES = [
 
 
 TOKEN_CONFIG_PATH = os.path.expanduser("~/.config/colab-cli/token.json")
-OAUTH_SERVER_PORT = 8200
+
+# Remote copy-paste OAuth flow.
+#
+# We deliberately do NOT use a localhost redirect (`run_local_server`) or the
+# out-of-band (OOB) redirect `urn:ietf:wg:oauth:2.0:oob`. OOB was blocked by
+# Google in 2022 ("The out-of-band (OOB) flow has been blocked in order to
+# keep users secure") and a localhost server is environment-dependent (fails
+# on headless/remote/container hosts, requires an auto-openable browser, etc.).
+#
+# Instead we use the same mechanism `gcloud auth application-default login`
+# uses: a real registered HTTPS landing page that displays the authorization
+# code for the user to copy & paste, combined with the `token_usage=remote`
+# consent parameter. This works identically in local and remote environments.
+#
+# The landing page below is registered to Google's cloud-SDK OAuth client
+# (`764086051850-...`), which is also the client shipped in
+# `colab_cli/oauth_config.json`; reusing another client id with this redirect
+# yields `redirect_uri_mismatch`.
+REMOTE_REDIRECT_URI = "https://sdk.cloud.google.com/applicationdefaultauthcode.html"
+
+
+def _run_remote_flow(client_config: dict) -> Credentials:
+    """Run the remote copy-paste OAuth2 flow.
+
+    Prints an authorization URL, waits for the user to sign in and paste back
+    the authorization code shown on Google's landing page, then exchanges the
+    code for credentials. See ``REMOTE_REDIRECT_URI`` for why this is preferred
+    over a localhost server or the blocked OOB flow.
+    """
+    flow = InstalledAppFlow.from_client_config(client_config, PUBLIC_SCOPES)
+    flow.redirect_uri = REMOTE_REDIRECT_URI
+    auth_url, _ = flow.authorization_url(prompt="consent", token_usage="remote")
+
+    typer.echo("\nTo authorize colab-cli, visit this URL in any browser:\n", err=True)
+    typer.echo("  " + auth_url + "\n", err=True)
+    typer.echo("After approving, Google will display an authorization code.", err=True)
+    code = input("Enter the authorization code: ").strip()
+
+    flow.fetch_token(code=code)
+    return flow.credentials
 
 
 def _get_google_auth_credentials(config_path: str) -> Credentials:
@@ -100,8 +139,7 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
                 creds = None
 
         if not creds:
-            flow = InstalledAppFlow.from_client_config(client_config, PUBLIC_SCOPES)
-            creds = flow.run_local_server(port=OAUTH_SERVER_PORT)
+            creds = _run_remote_flow(client_config)
 
         # Save the credentials for the next run
         try:
@@ -149,7 +187,6 @@ def _get_adc_credentials() -> Credentials:
             category=UserWarning,
         )
         creds, _ = google.auth.default(scopes=list(PUBLIC_SCOPES))
-
 
     if not creds.valid:
         from google.auth import compute_engine

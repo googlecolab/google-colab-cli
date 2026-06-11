@@ -1,5 +1,6 @@
 ---
 log:
+2026-06-11: Replaced the `oauth2` provider's `run_local_server()` (localhost redirect) with a remote copy-paste flow (`_run_remote_flow` in `auth.py`). The CLI now prints an authorization URL built with `redirect_uri=https://sdk.cloud.google.com/applicationdefaultauthcode.html` and `token_usage=remote`, then reads the pasted authorization code via `input()` and exchanges it with `flow.fetch_token(code=...)`. This is the same flow `gcloud auth application-default login` uses and works identically in local and remote/headless/container environments, removing the heuristic of whether to auto-open a browser. Confirmed server-side acceptance with a live GET probe against the bundled cloud-SDK client (`764086051850-...`); the OOB redirect and a non-bundled client id were both verified to be rejected (`OOB flow has been blocked` / `redirect_uri_mismatch`) via `integration/repro_oob_probe`. Unit tests in `tests/test_auth.py` assert no localhost server is started, the redirect URI + `token_usage=remote` are set, and the pasted code is exchanged.
 2026-06-01: Enabled `colab update --install` self-update on macOS in addition to Linux. Refactored platform check logic to keep the implementation DRY and updated both tests and documentation. Also, on these platforms, an additional message is shown recommending `colab update --install` to upgrade in place, positioned above the standard `pip`/`uv` installation command.
 2026-05-29: Added default OAuth2 client config (`oauth_config.json`) as a bundled package resource and restored fallback loading logic in `get_credentials()`. The CLI now falls back to using these default credentials when no explicit local config is found. Added `integration/repro_bundled_oauth` integration test.
 2026-05-27: Refactored `colab README` and `colab AGENT` to bundle `README.md` and `AGENTS.md` via Hatchling's `force-include` and read them using `importlib.resources` instead of `importlib.metadata`. `colab AGENT` now correctly prints `AGENTS.md`.
@@ -23,11 +24,25 @@ managing local state, or inspecting the environment.
 The CLI supports two authentication strategies for talking to the Colab
 backend, selected via the global `--auth=<provider>` flag:
 
-1.  **`oauth2`** (default): Standard public InstalledAppFlow via
-    `google-auth-oauthlib`. Opens a browser for consent, caches the refresh
-    token at `~/.config/colab-cli/token.json`. If no local config is provided
-    via `-c/--client-oauth-config` or found at `~/.colab-cli-oauth-config.json`,
-    it falls back to a bundled `oauth_config.json` containing default OAuth credentials.
+1.  **`oauth2`** (default): Public `InstalledAppFlow` via
+    `google-auth-oauthlib`, but run with a **remote copy-paste flow** rather
+    than a localhost server. The CLI prints an authorization URL (with
+    `token_usage=remote`) using the registered HTTPS landing page
+    `https://sdk.cloud.google.com/applicationdefaultauthcode.html`; the user
+    signs in, copies the code Google displays, and pastes it back at the
+    prompt. The refresh token is cached at `~/.config/colab-cli/token.json`.
+    This is the same mechanism `gcloud auth application-default login` uses,
+    and it behaves identically on local, remote, headless, and container
+    hosts (no auto-opened browser, no bound port). We deliberately do **not**
+    use `run_local_server()` (environment-dependent) or the out-of-band (OOB)
+    redirect `urn:ietf:wg:oauth:2.0:oob` (blocked by Google in 2022 — see
+    `_run_remote_flow` / `REMOTE_REDIRECT_URI` in `auth.py`). The
+    `sdk.cloud.google.com` redirect is registered to the cloud-SDK OAuth
+    client (`764086051850-...`), which is also the client shipped in the
+    bundled `oauth_config.json`; reusing it with any other client id yields
+    `redirect_uri_mismatch`. If no local config is provided via
+    `-c/--client-oauth-config` or found at `~/.colab-cli-oauth-config.json`,
+    it falls back to that bundled `oauth_config.json`.
 2.  **`adc`**: Application Default Credentials via `google.auth.default()`.
     Honors the standard ADC discovery chain
     (`GOOGLE_APPLICATION_CREDENTIALS`, `gcloud auth application-default

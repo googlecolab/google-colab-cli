@@ -16,7 +16,12 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from colab_cli.auth import TOKEN_CONFIG_PATH, AuthProvider, get_credentials
+from colab_cli.auth import (
+    REMOTE_REDIRECT_URI,
+    TOKEN_CONFIG_PATH,
+    AuthProvider,
+    get_credentials,
+)
 
 
 @pytest.fixture
@@ -96,21 +101,39 @@ def test_get_credentials_expired_token_refresh(mock_deps):
     assert res == mock_deps["session"].return_value
 
 
-def test_get_credentials_no_token(mock_deps):
+def test_get_credentials_no_token(mock_deps, mocker):
+    """With no cached token, the remote copy-paste flow runs and exchanges code."""
     mock_deps["exists"].side_effect = lambda path: path == "dummy_config.json"
 
     mock_flow = MagicMock()
     mock_creds_new = MagicMock()
     mock_creds_new.to_json.return_value = '{"token":"new"}'
-    mock_flow.run_local_server.return_value = mock_creds_new
+    mock_flow.authorization_url.return_value = ("https://auth.example/url", "state")
+    mock_flow.credentials = mock_creds_new
     mock_deps["flow_cls"].from_client_config.return_value = mock_flow
+
+    # User pastes the authorization code at the prompt.
+    mocker.patch("colab_cli.auth.input", create=True, return_value="pasted-code")
 
     m_open = mock_open(read_data='{"web":{"client_id":"id"}}')
     with patch("builtins.open", m_open):
         get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
 
     mock_deps["flow_cls"].from_client_config.assert_called_once()
-    mock_flow.run_local_server.assert_called_once()
+    # No localhost server should ever be started.
+    mock_flow.run_local_server.assert_not_called()
+    # Remote flow: OOB-free redirect + token_usage=remote consent param.
+    assert mock_flow.redirect_uri == REMOTE_REDIRECT_URI
+    _, kwargs = mock_flow.authorization_url.call_args
+    assert kwargs.get("token_usage") == "remote"
+    # The pasted code is exchanged for a token.
+    mock_flow.fetch_token.assert_called_once_with(code="pasted-code")
+
+
+def test_remote_redirect_is_not_oob():
+    """Guard against regressing to the dead OOB redirect URI."""
+    assert REMOTE_REDIRECT_URI.startswith("https://")
+    assert "oob" not in REMOTE_REDIRECT_URI
 
 
 def test_get_credentials_fallback_config(mock_deps):
