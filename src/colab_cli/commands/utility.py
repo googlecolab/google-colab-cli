@@ -417,8 +417,8 @@ def readme():
 
 
 def skill():
-    """Print the bundled COLAB_SKILL.md file"""
-    _print_resource("COLAB_SKILL.md")
+    """Print the bundled SKILL.md file"""
+    _print_resource("SKILL.md")
 
 
 def register(app: typer.Typer):

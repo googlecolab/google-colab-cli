@@ -52,7 +52,7 @@ def test_skill_from_resources(mock_resources):
     mock_skill.read_text.return_value = "Fake SKILL content"
 
     def joinpath_side_effect(name):
-        if name == "COLAB_SKILL.md":
+        if name == "SKILL.md":
             return mock_skill
         return MagicMock(is_file=MagicMock(return_value=False))
 
@@ -62,7 +62,7 @@ def test_skill_from_resources(mock_resources):
     assert result.exit_code == 0
     assert result.output.strip() == "Fake SKILL content"
     mock_resources.assert_called_once_with("colab_cli")
-    mock_resources.return_value.joinpath.assert_called_with("COLAB_SKILL.md")
+    mock_resources.return_value.joinpath.assert_called_with("SKILL.md")
 
 
 def test_readme_fallback_to_file(mock_resources):
