@@ -60,7 +60,7 @@ packages = ["src/colab_cli"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "README.md" = "colab_cli/README.md"
-"SKILL.md" = "colab_cli/SKILL.md"
+"skills/colab-operator/SKILL.md" = "colab_cli/SKILL.md"
 
 [tool.uv]
 package = true
