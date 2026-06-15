@@ -16,16 +16,22 @@
 # Integration Test: Keep-Alive Daemon Soak (OAuth Scope Regression Guard)
 #
 # Background:
-#   On 2026-04-30, a regression was discovered where `colab new` would succeed
-#   but the keep-alive daemon would silently die ~1 minute later, causing the
-#   VM to be idle-pruned shortly after. Two underlying causes:
-#     (a) The RuntimeService at colab.pa.googleapis.com requires
-#         `X-Goog-Api-Client` to contain `grpc-web`. Missing this returns 400.
-#     (b) The same service requires the
-#         `https://www.googleapis.com/auth/colaboratory` OAuth scope.
-#         Missing this returns 403 SCOPE_NOT_PERMITTED.
-#   Both unit-test layers passed because they mock the network. The bug only
-#   surfaces against the live backend.
+#   The keep-alive daemon would `colab new` successfully but then silently die
+#   ~1 minute later, causing the VM to be idle-pruned shortly after. The
+#   dominant cause for EXTERNAL users (issue #14, fixed 2026-06-15) was that
+#   keep-alive used the RuntimeService RPC at colab.pa.googleapis.com, which
+#   requires the caller to be a serviceusage consumer of Colab's internal
+#   project 1014160490159 — something no ordinary account is. That returned
+#   HTTP 403 USER_PROJECT_DENIED. Keep-alive now uses the Tunnel Frontend ping
+#   (GET /tun/m/<endpoint>/keep-alive/ with X-Colab-Tunnel: Google) on
+#   colab.research.google.com, authenticated with the user's bearer token and
+#   requiring no project entitlement.
+#
+#   Earlier (2026-04-30) the RPC path also required `X-Goog-Api-Client` to
+#   contain `grpc-web` (else 400) and the `colaboratory` OAuth scope (else 403
+#   SCOPE_NOT_PERMITTED). Those are moot now but kept here for history.
+#   Unit-test layers pass because they mock the network; these bugs only
+#   surface against the live backend — which is why this soak test exists.
 #
 # What this test does:
 #   1. Spawns a real Colab session via `colab new`.

@@ -307,9 +307,8 @@ def run_command(
     except ColabRequestError as e:
         if get_status_code(e) == 403 and _is_scope_error(e):
             typer.echo(
-                "[colab] Keep-alive pre-flight failed: your OAuth "
-                "credentials are missing the 'colaboratory' scope, which "
-                "is required by the Colab RuntimeService.\n",
+                "[colab] Keep-alive pre-flight failed: your credentials "
+                "are missing an OAuth scope required by Colab.\n",
                 err=True,
             )
             typer.echo(_scope_remediation_message(state.auth_provider), err=True)

@@ -146,16 +146,12 @@ def test_client_list_assignments(client, mock_session):
     assert "tun/m/assignments" in mock_session.request.call_args.args[1]
 
 
-def test_client_keep_alive_assignment_handles_empty_array_response(
-    client, mock_session
-):
-    """KeepAliveAssignment returns `[]` on success (grpc-web protojson). When the
-    caller passes no `schema=`, _issue_request must not try to validate the
-    body — otherwise it raises pydantic ValidationError on the empty list.
-    Regression: discovered live 2026-04-30."""
+def test_client_keep_alive_assignment_handles_empty_response(client, mock_session):
+    """The tunnel keep-alive ping returns an empty body. With no `schema=`,
+    _issue_request must short-circuit and not attempt to parse it."""
     resp = MagicMock()
     resp.ok = True
-    resp.text = "[]"
+    resp.text = ""
     mock_session.request.return_value = resp
 
     # Should NOT raise.
@@ -164,9 +160,21 @@ def test_client_keep_alive_assignment_handles_empty_array_response(
 
 
 def test_client_keep_alive_assignment_request_shape(client, mock_session):
-    """The RuntimeService rejects the request with HTTP 400 unless
-    `X-Goog-Api-Client` contains `grpc-web`. This test pins the wire format
-    that talks to colab.pa.googleapis.com.
+    """Keep-alive is a Tunnel Frontend (TFE) HTTP ping, NOT the
+    `colab.pa.googleapis.com` RuntimeService RPC.
+
+    Background: the RuntimeService RPC requires the caller to be a
+    serviceusage consumer of Colab's internal project (1014160490159), which
+    no ordinary user account is. That path returned HTTP 403
+    USER_PROJECT_DENIED for every external user (issue #14). The official
+    Colab clients (and the colab-vscode extension) keep assignments alive via
+    a TFE-intercepted GET that only needs the user's own Gaia bearer token:
+
+        GET https://colab.research.google.com/tun/m/<endpoint>/keep-alive/
+        X-Colab-Tunnel: Google
+
+    TFE records LastActiveTime before forwarding, so the request keeps the VM
+    from being idle-pruned. This test pins that wire format.
     """
     resp = MagicMock()
     resp.ok = True
@@ -179,20 +187,50 @@ def test_client_keep_alive_assignment_request_shape(client, mock_session):
     call = mock_session.request.call_args
     method, url = call.args[0], call.args[1]
     headers = call.kwargs["headers"]
-    body = call.kwargs["json"]
 
-    assert method == "POST"
-    assert url.endswith(
-        "/$rpc/google.internal.colab.v1.RuntimeService/KeepAliveAssignment"
-    )
-    # Positional protojson encoding: a single-element array with the endpoint.
-    assert body == ["m-s-test-endpoint"]
-    assert headers["Content-Type"] == "application/json+protobuf"
-    assert "x-goog-api-key" in headers
-    assert headers["x-user-agent"] == "grpc-web-javascript/0.1"
-    # Critical: server requires `grpc-web` substring in this header.
-    assert "grpc-web" in headers["x-goog-api-client"]
-    # Critical: pin consumer project to Colab's, otherwise ADC user creds
-    # (which carry their own gcloud quota project) trigger HTTP 400
-    # CONSUMER_INVALID. Verified empirically 2026-04-30.
-    assert headers["x-goog-user-project"] == "1014160490159"
+    assert method == "GET"
+    # TFE tunnel keep-alive path on the session backend host.
+    assert url.endswith("/tun/m/m-s-test-endpoint/keep-alive/")
+    assert "colab.research.google.com" in url
+    # The request must be resolved through the Colab tunnel; without this
+    # header the front-door rejects the request with HTTP 400.
+    assert headers["X-Colab-Tunnel"] == "Google"
+    # Must NOT hit the RuntimeService / pa.googleapis.com path anymore.
+    assert "pa.googleapis.com" not in url
+    assert "KeepAliveAssignment" not in url
+    # No fire-and-forget JSON body; this is a plain GET.
+    assert "json" not in call.kwargs
+    # A short timeout is supplied so the daemon stays responsive on its cadence.
+    assert call.kwargs.get("timeout") is not None
+
+
+def test_client_keep_alive_assignment_treats_read_timeout_as_success(
+    client, mock_session
+):
+    """TFE records activity as soon as the request arrives, then forwards to a
+    VM that may not respond — so the request commonly read-times-out even
+    though the keep-alive succeeded. A ReadTimeout must NOT propagate as an
+    error (otherwise the daemon would log spurious keep_alive_error events)."""
+    import requests
+
+    mock_session.request.side_effect = requests.exceptions.ReadTimeout("timed out")
+
+    # Should NOT raise.
+    result = client.keep_alive_assignment("m-s-test-endpoint")
+    assert result is None
+
+
+def test_client_keep_alive_assignment_propagates_http_error(client, mock_session):
+    """A genuine HTTP error (e.g. 404 for a deleted assignment) must still
+    surface so the daemon can react (e.g. stop after consecutive 4xx)."""
+    from colab_cli.client import ColabRequestError
+
+    resp = MagicMock()
+    resp.ok = False
+    resp.status_code = 404
+    resp.reason = "Not Found"
+    resp.text = "gone"
+    mock_session.request.return_value = resp
+
+    with pytest.raises(ColabRequestError):
+        client.keep_alive_assignment("m-s-test-endpoint")

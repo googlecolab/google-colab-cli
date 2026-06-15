@@ -56,18 +56,18 @@ allowing the core `Client` to remain authentication-agnostic — it only sees a
 
 ### Required Scopes
 
-The CLI talks to two distinct backends, each with different scope demands:
+The CLI talks to the Colab session backend at `colab.research.google.com`
+for assignment, unassignment, the contents API, **and keep-alive** (the TFE
+tunnel ping — see `01_session_management.md`). The `userinfo.email` scope is
+sufficient for this host.
 
--   `colab.research.google.com` (session assignment / unassignment /
-    contents API): the `userinfo.email` scope is sufficient.
--   `colab.pa.googleapis.com` (`RuntimeService`, used by
-    `KeepAliveAssignment`): **requires** the
-    `https://www.googleapis.com/auth/colaboratory` scope. Without it, every
-    request returns HTTP 403 with body `[7,"Request had insufficient
-    authentication scopes.",...]` and a `DebugInfo` mentioning
-    `SCOPE_NOT_PERMITTED`. (The frontend additionally requires
-    `X-Goog-Api-Client` to contain `grpc-web` — see
-    `01_session_management.md` §5.)
+> Historical note: keep-alive previously used the `RuntimeService`
+> (`KeepAliveAssignment`) at `colab.pa.googleapis.com`, which required the
+> `https://www.googleapis.com/auth/colaboratory` scope **and** the caller to
+> be a `serviceusage` consumer of Colab's internal project `1014160490159`.
+> The latter is impossible for ordinary user accounts, which made keep-alive
+> fail with HTTP 403 `USER_PROJECT_DENIED` for all external users (issue #14).
+> Keep-alive no longer touches `colab.pa.googleapis.com`.
 
 How each provider supplies the scope:
 
@@ -91,12 +91,11 @@ How each provider supplies the scope:
     ```
 
     `userinfo.email` is required for the session backend at
-    `colab.research.google.com` (otherwise assign/unassign/sessions return
-    HTTP 401); `colaboratory` is required for the `RuntimeService` at
-    `colab.pa.googleapis.com` (otherwise keep-alive returns HTTP 403);
-    `openid` and `cloud-platform` are mandated by `gcloud` itself
-    (`gcloud auth application-default login` rejects scope lists that
-    omit `cloud-platform` with `Invalid value for [--scopes]`).
+    `colab.research.google.com` (otherwise assign/unassign/sessions/keep-alive
+    return HTTP 401); `colaboratory` is retained for forward compatibility and
+    other Colab features; `openid` and `cloud-platform` are mandated by
+    `gcloud` itself (`gcloud auth application-default login` rejects scope
+    lists that omit `cloud-platform` with `Invalid value for [--scopes]`).
 
 `colab new` performs a one-shot keep-alive pre-flight after `assign`
 succeeds so missing-scope failures surface immediately (with per-provider

@@ -32,28 +32,16 @@ COLAB_CLIENT_AGENT_HEADER = {
     "value": "colab-cli",
 }
 COLAB_XSRF_TOKEN_HEADER = {"key": "X-Goog-Colab-Token", "value": ""}
+# Marks a request as one that should be resolved through the Colab tunnel
+# (Tunnel Frontend). Required by TFE-intercepted paths such as the keep-alive
+# ping; without it the front-door rejects the request with HTTP 400.
+COLAB_TUNNEL_HEADER = {"key": "X-Colab-Tunnel", "value": "Google"}
 
-# Public RPC client registry. Each record is the ASCII byte string for one
-# field of the grpc-web client envelope, packed in the order the gateway
-# expects (header, then identity).
-_PUBLIC_CLIENT_REGISTRY = (
-    b"\x1c"
-    b"782d676f6f672d6170692d6b6579"
-    b"\x4e"
-    b"41497a615379413242766e744c774e7746746855423477365f42686e30634d6c56487779614863"
-)
-
-
-def _registry_field(index: int) -> str:
-    """Returns the index-th packed field from the public client registry."""
-    cursor = 0
-    blob = _PUBLIC_CLIENT_REGISTRY
-    for _ in range(index):
-        cursor += 1 + blob[cursor]
-    length = blob[cursor]
-    return bytes.fromhex(blob[cursor + 1 : cursor + 1 + length].decode("ascii")).decode(
-        "ascii"
-    )
+# Per-request timeout (seconds) for the keep-alive tunnel ping. TFE records the
+# activity as soon as the request arrives, so we do not need to wait long for
+# the (often non-responding) VM. A short timeout keeps the keep-alive daemon
+# responsive on its 60s cadence.
+KEEP_ALIVE_TIMEOUT = 10
 
 
 @dataclass
@@ -296,29 +284,22 @@ class Client:
         )
 
     def keep_alive_assignment(self, endpoint: str):
-        """Sends a keep-alive RPC for the given assignment endpoint."""
-        url = urljoin(
-            self.colab_api_domain,
-            "/$rpc/google.internal.colab.v1.RuntimeService/KeepAliveAssignment",
-        )
-        headers = {
-            "Content-Type": "application/json+protobuf",
-            _registry_field(0): _registry_field(1),
-            "x-user-agent": "grpc-web-javascript/0.1",
-            # The frontend at colab.pa.googleapis.com requires X-Goog-Api-Client
-            # to contain "grpc-web", otherwise it rejects the request with
-            # HTTP 400 ("Invalid GRPC-Web request").
-            "x-goog-api-client": "grpc-web/0.1",
-            # Pin the consumer project to Colab's project (1014160490159), the
-            # same project that owns the public web-client API key sent above.
-            # Without this header, ADC user credentials (which carry their own
-            # gcloud quota project) trigger HTTP 400 "The API Key and the
-            # authentication credential are from different projects." Setting
-            # this explicitly forces the backend to use Colab's project as the
-            # consumer for both the API-key check and quota accounting, which
-            # any signed-in user has implicit access to via the public web
-            # client.
-            "x-goog-user-project": "1014160490159",
-        }
-        # KeepAliveAssignmentRequest is a list containing the endpoint string
-        return self._issue_request(url, method="POST", headers=headers, json=[endpoint])
+        """Refreshes the idle timer for the given assignment endpoint.
+
+        TFE notes the activity as soon as the request arrives, then forwards it
+        to the VM, which does not always respond on this path — so the request
+        commonly read-times-out even though the keep-alive succeeded. A read
+        timeout is therefore treated as success; only an actual HTTP error
+        response (4xx/5xx, e.g. 404 for a deleted assignment) is surfaced.
+        """
+        url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/{endpoint}/keep-alive/")
+        headers = {COLAB_TUNNEL_HEADER["key"]: COLAB_TUNNEL_HEADER["value"]}
+        try:
+            return self._issue_request(
+                url, method="GET", headers=headers, timeout=KEEP_ALIVE_TIMEOUT
+            )
+        except requests.exceptions.ReadTimeout:
+            # The activity was recorded by TFE before the request was forwarded;
+            # the VM simply didn't answer in time. This is the normal,
+            # successful case for this path.
+            return None

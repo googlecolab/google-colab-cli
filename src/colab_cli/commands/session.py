@@ -49,22 +49,26 @@ def _is_scope_error(e: Exception) -> bool:
 
 
 def _scope_remediation_message(provider) -> str:
-    """User-facing remediation hint, tailored per auth provider."""
+    """User-facing remediation hint, tailored per auth provider.
+
+    Keep-alive is a Tunnel Frontend ping against the Colab session backend
+    (colab.research.google.com), authenticated with the user's own Gaia bearer
+    token — the same credential and host used to assign the VM. A missing-scope
+    error here is rare (assignment would normally have failed first), but if it
+    happens the fix is to re-authenticate with the standard Colab scopes.
+    """
     # Importing locally to avoid a circular import at module load time.
     from colab_cli.auth import AuthProvider
 
     common = (
-        "The Colab keep-alive RPC requires the "
-        "'https://www.googleapis.com/auth/colaboratory' OAuth scope."
+        "Keeping the session alive requires valid Colab credentials for "
+        "colab.research.google.com."
     )
     if provider == AuthProvider.ADC:
         return (
             f"{common}\n"
-            "Re-authenticate ADC with both userinfo.email (required by the "
-            "Colab session backend at colab.research.google.com) and "
-            "colaboratory (required by the runtime service at "
-            "colab.pa.googleapis.com). The cloud-platform and openid scopes "
-            "are required by gcloud itself:\n"
+            "Re-authenticate ADC with the standard Colab scopes (the "
+            "cloud-platform and openid scopes are required by gcloud itself):\n"
             "  gcloud auth application-default login \\\n"
             "      --scopes=openid,"
             "https://www.googleapis.com/auth/cloud-platform,"
@@ -76,8 +80,7 @@ def _scope_remediation_message(provider) -> str:
     return (
         f"{common}\n"
         "Delete the cached token at ~/.config/colab-cli/token.json and "
-        "re-run `colab new` to trigger a fresh consent flow that includes "
-        "the colaboratory scope."
+        "re-run `colab new` to trigger a fresh consent flow."
     )
 
 
@@ -197,18 +200,18 @@ def new(
         accelerator=accelerator.value,
     )
 
-    # Pre-flight the keep-alive RPC once. If it returns 403 SCOPE_NOT_PERMITTED
-    # we know the daemon will fail and the VM would be idle-pruned. Catch
-    # it now so we (a) never leak a billable assignment, (b) surface an
-    # actionable remediation instead of a "session quietly disappeared".
+    # Pre-flight the keep-alive ping once. If it returns a 403 caused by
+    # missing OAuth scopes we know the daemon will fail and the VM would be
+    # idle-pruned. Catch it now so we (a) never leak a billable assignment,
+    # (b) surface an actionable remediation instead of a session that quietly
+    # disappears a few minutes later.
     try:
         state.client.keep_alive_assignment(endpoint)
     except ColabRequestError as e:
         if get_status_code(e) == 403 and _is_scope_error(e):
             typer.echo(
-                "[colab] Keep-alive pre-flight failed: your OAuth "
-                "credentials are missing the 'colaboratory' scope, which "
-                "is required by the Colab RuntimeService.\n",
+                "[colab] Keep-alive pre-flight failed: your credentials "
+                "are missing an OAuth scope required by Colab.\n",
                 err=True,
             )
             typer.echo(_scope_remediation_message(state.auth_provider), err=True)
