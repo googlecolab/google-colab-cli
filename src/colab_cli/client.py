@@ -313,12 +313,43 @@ class Client:
             # same project that owns the public web-client API key sent above.
             # Without this header, ADC user credentials (which carry their own
             # gcloud quota project) trigger HTTP 400 "The API Key and the
-            # authentication credential are from different projects." Setting
-            # this explicitly forces the backend to use Colab's project as the
-            # consumer for both the API-key check and quota accounting, which
-            # any signed-in user has implicit access to via the public web
-            # client.
+            # authentication credential are from different projects." OAuth2
+            # user credentials outside a browser may get HTTP 403
+            # USER_PROJECT_DENIED (no serviceusage.services.use on Colab's
+            # project). In either case we fall back to list_assignments below,
+            # which hits the web frontend (not the API server) and uses the
+            # caller's OAuth/ADC token alone.
             "x-goog-user-project": "1014160490159",
         }
         # KeepAliveAssignmentRequest is a list containing the endpoint string
-        return self._issue_request(url, method="POST", headers=headers, json=[endpoint])
+        try:
+            return self._issue_request(url, method="POST", headers=headers, json=[endpoint])
+        except ColabRequestError as e:
+            body = str(e.response_body) if e.response_body else ""
+            status = get_status_code(e)
+            if status in (403, 400) and (
+                "USER_PROJECT_DENIED" in body
+                or "CONSUMER_INVALID" in body
+                or "SERVICE_DISABLED" in body
+            ):
+                assignments = self.list_assignments()
+                active_endpoints = {a.endpoint for a in assignments}
+                if endpoint not in active_endpoints:
+                    # The backend already dropped this assignment; surface
+                    # it as a 404 so the keep-alive daemon treats it as a
+                    # terminal 4xx and exits cleanly.
+                    not_found = type(
+                        "Response", (), {"status_code": 404, "reason": "Not Found"}
+                    )
+                    raise ColabRequestError(
+                        f"Endpoint {endpoint} not found in assignments "
+                        "(session already terminated by backend)",
+                        request=None,
+                        response=not_found,
+                        response_body=(
+                            f"endpoint {endpoint} missing from list_assignments "
+                            f"(active: {sorted(active_endpoints)})"
+                        ),
+                    ) from e
+                return
+            raise
