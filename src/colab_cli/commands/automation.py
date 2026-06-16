@@ -18,12 +18,15 @@ import sys
 import json
 from typing import Optional, List
 import typer
+from rich.console import Console
 from typing_extensions import Annotated
 
 from colab_cli.runtime import ColabRuntime
 from colab_cli.contents import ContentsClient
 from colab_cli.auth import get_credentials
-from colab_cli.utils import get_status_code
+from colab_cli.utils import get_status_code, render_display_data
+
+_console = Console()
 
 
 # Default execute() timeout for human-in-the-loop automations (auth /
@@ -33,6 +36,7 @@ from colab_cli.utils import get_status_code
 # 10 minutes is long enough for any realistic interactive auth ceremony
 # without leaving CI hangs unbounded.
 INTERACTIVE_AUTOMATION_TIMEOUT_SEC = 600
+
 
 
 def run_automation(
@@ -153,8 +157,9 @@ def run_automation(
             if "text" in out:
                 sys.stdout.write(out["text"])
             elif "data" in out:
-                if "text/plain" in out["data"]:
-                    typer.echo(out["data"]["text/plain"])
+                text = render_display_data(out["data"])
+                if text is not None:
+                    _console.print(text)
             elif out.get("output_type") == "error":
                 ename = out.get("ename", "Error")
                 evalue = out.get("evalue", "")

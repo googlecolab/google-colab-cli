@@ -20,12 +20,15 @@ import sys
 import typer
 import uuid
 from nbformat.v4 import new_output
+from rich.console import Console
 from typing import Optional
 from typing_extensions import Annotated
 
 from colab_cli.runtime import ColabRuntime
-from colab_cli.utils import handle_image, is_terminal_error
+from colab_cli.utils import handle_image, is_terminal_error, render_display_data
 from colab_cli.console import connect_console
+
+_console = Console()
 
 TITLE_REGEX = re.compile(r"^\s*#\s*@title\s+(.*)", re.MULTILINE)
 
@@ -72,6 +75,7 @@ def save_output(outputs, cell):
             )
 
 
+
 def display_output(out, output_image=None):
     if out.get("output_type") == "stream":
         stream = sys.stderr if out.get("name") == "stderr" else sys.stdout
@@ -79,8 +83,9 @@ def display_output(out, output_image=None):
         stream.flush()
     elif "data" in out:
         data = out["data"]
-        if text := data.get("text/plain"):
-            typer.echo(text)
+        text = render_display_data(data)
+        if text is not None:
+            _console.print(text)
         if png := data.get("image/png"):
             handle_image(png, "image/png", target_path=output_image)
         elif jpeg := data.get("image/jpeg"):

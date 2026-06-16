@@ -15,7 +15,11 @@
 import base64
 from unittest.mock import MagicMock, patch
 
-from colab_cli.utils import handle_image, print_kitty
+import pytest
+from rich.markdown import Markdown
+from rich.text import Text
+
+from colab_cli.utils import handle_image, print_kitty, render_display_data
 
 
 @patch("colab_cli.utils.sys.stdout.isatty", return_value=True)
@@ -56,3 +60,28 @@ def test_handle_image(mock_print_kitty, mock_tempfile, capsys):
 
     captured = capsys.readouterr()
     assert "/tmp/fake.png" in captured.out
+
+
+@pytest.mark.parametrize(
+    "data, expected_markup",
+    [
+        ({"text/markdown": "**md**"}, "**md**"),
+        ({"text/html": "<b>hi</b>"}, "**hi**\n\n"),
+        ({"text/markdown": "**md**", "text/html": "<b>hi</b>"}, "**md**"),
+        ({"text/html": "<b>hi</b>", "text/plain": "plain"}, "**hi**\n\n"),
+    ],
+)
+def test_render_display_data_markdown(data, expected_markup):
+    result = render_display_data(data)
+    assert isinstance(result, Markdown)
+    assert result.markup == expected_markup
+
+
+def test_render_display_data_plain():
+    result = render_display_data({"text/plain": "plain"})
+    assert isinstance(result, Text)
+    assert result.plain == "plain"
+
+
+def test_render_display_data_none():
+    assert render_display_data({"image/png": "..."}) is None

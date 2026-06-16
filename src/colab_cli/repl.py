@@ -25,9 +25,8 @@ from rich.console import Console
 from rich.text import Text
 
 from colab_cli.runtime import ColabRuntime
-from colab_cli.utils import handle_image
+from colab_cli.utils import handle_image, render_display_data
 
-console = Console()
 
 
 class ColabREPL:
@@ -43,7 +42,7 @@ class ColabREPL:
         self.history_logger = history_logger
         self.output_image = output_image
         self.kb = KeyBindings()
-        self.console = console
+        self.console = Console()
         self.repl_history: List[dict] = []
 
         @self.kb.add("enter")
@@ -91,14 +90,16 @@ class ColabREPL:
                     image_displayed = True
                     break
 
-            if "text/plain" in data:
-                text = data["text/plain"]
+            text = render_display_data(data)
+            if text is not None:
                 # Skip generic IPython object reprs if we already showed an image
-                if image_displayed and any(
-                    x in text for x in ["<IPython.core.display.Image", "<Figure size"]
-                ):
-                    return
-                self.console.print(Text.from_ansi(text))
+                if isinstance(text, Text) and image_displayed:
+                    if any(
+                        x in text.plain
+                        for x in ["<IPython.core.display.Image", "<Figure size"]
+                    ):
+                        return
+                self.console.print(text)
         elif output.get("output_type") == "error":
             ename = output.get("ename", "Error")
             evalue = output.get("evalue", "")

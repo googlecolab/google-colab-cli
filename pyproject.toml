@@ -27,6 +27,7 @@ dependencies = [
     "filelock>=3.29.2",
     "google-auth>=2.49.1",
     "google-auth-oauthlib>=1.3.0",
+    "html2text>=2024.2.26",
     "jupyter-kernel-client",
     "nbformat>=5.10.4",
     "packaging>=24.0",

@@ -13,12 +13,15 @@
 # limitations under the License.
 
 import base64
+import html2text
 import logging
 import sys
 import tempfile
 
+from typing import Optional, Union
 
-from typing import Optional
+from rich.markdown import Markdown
+from rich.text import Text
 
 
 def get_status_code(e: Exception) -> Optional[int]:
@@ -64,6 +67,22 @@ def print_kitty(image_bytes: bytes):
         sys.stdout.flush()
     except Exception:
         logging.exception("Kitty rendering failed")
+
+
+def render_display_data(data: dict) -> Union[Markdown, Text, None]:
+    """Extract the best text representation from a display_data dict.
+
+    Priority: text/markdown > text/html (via html2text) > text/plain.
+    Returns a Rich renderable (Markdown or Text) or None when no text mime
+    type is present.  Callers can pass the result directly to Console.print().
+    """
+    if "text/markdown" in data:
+        return Markdown(data["text/markdown"])
+    if "text/html" in data:
+        return Markdown(html2text.html2text(data["text/html"]))
+    if "text/plain" in data:
+        return Text.from_ansi(data["text/plain"])
+    return None
 
 
 def handle_image(image_b64: str, mime_type: str = "image/png", target_path: str = None):
