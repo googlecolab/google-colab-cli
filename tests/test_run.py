@@ -186,6 +186,105 @@ def test_run_passes_argv(
     assert "'--flag-for-script'" in body
 
 
+def test_run_env_flag_after_script_sets_env_and_preserves_argv(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    mock_spawn_keep_alive,
+    assign_response,
+    script_path,
+):
+    """`--env KEY=VALUE` after the script path should configure the remote
+    environment, not get forwarded into sys.argv."""
+    mock_client.assign.return_value = assign_response
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.setdefault("s", s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+
+    result = runner.invoke(
+        app, ["run", str(script_path), "--env", "HF_TOKEN=abc", "alpha"]
+    )
+
+    assert result.exit_code == 0, result.output
+    code_calls = [c.args[0] for c in mock_runtime.execute_code.call_args_list]
+    body = next(c for c in code_calls if "hello from script" in c)
+    assert "import os\n" in body
+    assert "os.environ['HF_TOKEN'] = 'abc'" in body
+    assert body.index("os.environ['HF_TOKEN'] = 'abc'") < body.index(
+        "print('hello from script')"
+    )
+    assert "'alpha'" in body
+    assert "'--env'" not in body
+    assert "'HF_TOKEN=abc'" not in body
+
+
+def test_run_env_flags_accumulate_and_split_on_first_equals(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    mock_spawn_keep_alive,
+    assign_response,
+    script_path,
+):
+    """Repeated env flags should all become assignments; values may contain
+    additional '=' characters."""
+    mock_client.assign.return_value = assign_response
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.setdefault("s", s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--env",
+            "HF_TOKEN=abc",
+            "--env",
+            "B64=a=b=c",
+            str(script_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    code_calls = [c.args[0] for c in mock_runtime.execute_code.call_args_list]
+    body = next(c for c in code_calls if "hello from script" in c)
+    assert "os.environ['HF_TOKEN'] = 'abc'" in body
+    assert "os.environ['B64'] = 'a=b=c'" in body
+
+
+def test_run_env_flag_escapes_tricky_literals(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    mock_spawn_keep_alive,
+    assign_response,
+    script_path,
+):
+    """Quotes, backslashes, '=' and non-ASCII values should round-trip as safe
+    Python literals."""
+    mock_client.assign.return_value = assign_response
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.setdefault("s", s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+
+    value = "quote'back\\slash=µ"
+    result = runner.invoke(app, ["run", "--env", f"TRICKY={value}", str(script_path)])
+
+    assert result.exit_code == 0, result.output
+    code_calls = [c.args[0] for c in mock_runtime.execute_code.call_args_list]
+    body = next(c for c in code_calls if "hello from script" in c)
+    assert f"os.environ['TRICKY'] = {value!r}" in body
+
+
 def test_run_sets_dunder_main(
     mock_client,
     mock_store,
@@ -349,6 +448,15 @@ def test_run_nonexistent_script_errors_before_assign(mock_client):
     otherwise a typo would burn billable compute."""
     result = runner.invoke(app, ["run", "/no/such/file.py"])
     assert result.exit_code != 0
+    mock_client.assign.assert_not_called()
+
+
+def test_run_malformed_env_errors_before_assign(mock_client, script_path):
+    """Malformed env entries must be rejected locally before any VM allocation."""
+    result = runner.invoke(app, ["run", str(script_path), "--env", "HF_TOKEN"])
+
+    assert result.exit_code != 0
+    assert "Expected KEY=VALUE" in result.output
     mock_client.assign.assert_not_called()
 
 
