@@ -44,6 +44,7 @@ from colab_cli.client import (
     PostAssignmentResponse,
     Variant,
 )
+from colab_cli.commands.execution import _build_env_prelude, _parse_env_vars
 from colab_cli.commands.session import (
     _is_scope_error,
     _scope_remediation_message,
@@ -75,12 +76,15 @@ def _resolve_accelerator(gpu: Optional[str], tpu: Optional[str]):
     return Variant.DEFAULT, Accelerator.NONE
 
 
-def _build_script_payload(script_path: str, script_args: List[str]) -> str:
+def _build_script_payload(
+    script_path: str, script_args: List[str], env_vars: Optional[dict[str, str]] = None
+) -> str:
     """Wrap the script body so it executes with native-`python`-like semantics.
 
     Specifically:
       - `sys.argv = [<basename>, *script_args]` so `argparse` etc. work.
       - `__name__ = '__main__'` so `if __name__ == "__main__":` guards fire.
+      - Requested `--env KEY=VALUE` pairs are written into `os.environ`.
       - Suppress the IPython UserWarning "To exit: use 'exit', 'quit', or
         Ctrl-D." which fires whenever the script calls `sys.exit(...)`. This
         warning is meaningful in an interactive REPL, but for `colab run` it
@@ -102,8 +106,40 @@ def _build_script_payload(script_path: str, script_args: List[str]) -> str:
         f"sys.argv = {argv_literal}\n"
         "__name__ = '__main__'\n"
         "warnings.filterwarnings('ignore', message=\"To exit: use\")\n"
+        + _build_env_prelude(env_vars or {})
         + _strip_shebang(body)
     )
+
+
+def _extract_env_args_from_script_args(
+    script_args: List[str],
+) -> tuple[List[str], List[str]]:
+    """Pull colab's --env options out of variadic script args.
+
+    `colab run` intentionally forwards unknown options after the script path to
+    the user's script. Since `--env` is now a colab option, support both
+    `colab run --env KEY=VALUE script.py` (Typer parses this) and
+    `colab run script.py --env KEY=VALUE` (this helper parses it).
+    """
+    forwarded_args = []
+    env = []
+    i = 0
+    while i < len(script_args):
+        arg = script_args[i]
+        if arg == "--env":
+            if i + 1 >= len(script_args):
+                env.append("")
+                i += 1
+            else:
+                env.append(script_args[i + 1])
+                i += 2
+        elif arg.startswith("--env="):
+            env.append(arg.split("=", 1)[1])
+            i += 1
+        else:
+            forwarded_args.append(arg)
+            i += 1
+    return forwarded_args, env
 
 
 def _strip_shebang(body: str) -> str:
@@ -237,6 +273,16 @@ def run_command(
         Optional[float],
         typer.Option("--timeout", help="Timeout in seconds for code execution"),
     ] = 30.0,
+    env: Annotated[
+        Optional[List[str]],
+        typer.Option(
+            "--env",
+            help=(
+                "Set an environment variable in the remote kernel as KEY=VALUE. "
+                "Repeat for multiple variables."
+            ),
+        ),
+    ] = None,
 ):
     """Run a Python script on a fresh Colab VM, then release the VM
 
@@ -250,6 +296,8 @@ def run_command(
     from colab_cli.common import state
 
     script_args = script_args or []
+    script_args, inline_env = _extract_env_args_from_script_args(script_args)
+    env_vars = _parse_env_vars([*(env or []), *inline_env])
 
     # AGENTS.md item 10: validate locally BEFORE allocating a VM. A typo'd
     # script path should not cost the user real compute.
@@ -379,7 +427,7 @@ def run_command(
                 raise typer.Exit(1)
             raise
 
-        payload = _build_script_payload(script, script_args)
+        payload = _build_script_payload(script, script_args, env_vars)
         s.running = f"run({os.path.basename(script)})"
         s.last_execution = (
             script,

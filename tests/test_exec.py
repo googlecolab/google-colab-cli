@@ -87,6 +87,100 @@ def test_cli_exec_stdin(mock_store, mock_runtime_class, mock_common_state):
     )
 
 
+def test_cli_exec_env_injects_prelude(
+    mock_store, mock_runtime_class, mock_common_state
+):
+    mock_session = MagicMock()
+    mock_session.name = "s1"
+    mock_session.url = "http://url"
+    mock_session.token = "token"
+    mock_session.kernel_id = None
+    mock_session.session_id = None
+    mock_store.get.return_value = mock_session
+
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    code = "import os\nprint(os.environ.get('HF_TOKEN'))"
+    result = runner.invoke(
+        app, ["exec", "-s", "s1", "--env", "HF_TOKEN=abc"], input=code
+    )
+
+    assert result.exit_code == 0, result.output
+    expected = "import os\nos.environ['HF_TOKEN'] = 'abc'\n" + code
+    mock_runtime.execute_code.assert_any_call(expected, output_hook=ANY, timeout=30.0)
+
+
+def test_cli_exec_env_flags_accumulate_and_split_on_first_equals(
+    mock_store, mock_runtime_class, mock_common_state
+):
+    mock_session = MagicMock()
+    mock_session.name = "s1"
+    mock_session.url = "http://url"
+    mock_session.token = "token"
+    mock_session.kernel_id = None
+    mock_session.session_id = None
+    mock_store.get.return_value = mock_session
+
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    result = runner.invoke(
+        app,
+        ["exec", "-s", "s1", "--env", "HF_TOKEN=abc", "--env", "B64=a=b=c"],
+        input="print('ok')",
+    )
+
+    assert result.exit_code == 0, result.output
+    expected = (
+        "import os\n"
+        "os.environ['HF_TOKEN'] = 'abc'\n"
+        "os.environ['B64'] = 'a=b=c'\n"
+        "print('ok')"
+    )
+    mock_runtime.execute_code.assert_any_call(expected, output_hook=ANY, timeout=30.0)
+
+
+def test_cli_exec_env_escapes_tricky_literals(
+    mock_store, mock_runtime_class, mock_common_state
+):
+    mock_session = MagicMock()
+    mock_session.name = "s1"
+    mock_session.url = "http://url"
+    mock_session.token = "token"
+    mock_session.kernel_id = None
+    mock_session.session_id = None
+    mock_store.get.return_value = mock_session
+
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    value = "quote'back\\slash=µ"
+    result = runner.invoke(
+        app, ["exec", "-s", "s1", "--env", f"TRICKY={value}"], input="print('ok')"
+    )
+
+    assert result.exit_code == 0, result.output
+    expected = f"import os\nos.environ['TRICKY'] = {value!r}\nprint('ok')"
+    mock_runtime.execute_code.assert_any_call(expected, output_hook=ANY, timeout=30.0)
+
+
+def test_cli_exec_malformed_env_errors_before_session_resolution(
+    mock_runtime_class, mock_common_state
+):
+    result = runner.invoke(
+        app, ["exec", "-s", "s1", "--env", "HF_TOKEN"], input="print('ok')"
+    )
+
+    assert result.exit_code != 0
+    assert "Expected KEY=VALUE" in result.output
+    mock_common_state.resolve_session.assert_not_called()
+    mock_runtime_class.assert_not_called()
+
+
 def test_cli_exec_not_found(mock_common_state):
     # Case where resolve_session fails
     mock_common_state.resolve_session.side_effect = SystemExit(1)
