@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
 from typer.testing import CliRunner
 import pytest
@@ -90,3 +91,13 @@ def test_readme_failure(mock_resources):
         result = runner.invoke(app, ["README"])
         assert result.exit_code == 1
         assert "README.md content not available" in result.output
+
+
+def test_auth_docs_match_current_cli_default():
+    repo_root = Path(__file__).resolve().parents[1]
+    readme = (repo_root / "README.md").read_text()
+    skill = (repo_root / "skills" / "colab-operator" / "SKILL.md").read_text()
+
+    assert "default: `oauth2`" in readme
+    assert "default is `oauth2`" in skill
+    assert "RuntimeService `colab.pa.googleapis.com` keep-alive" not in skill

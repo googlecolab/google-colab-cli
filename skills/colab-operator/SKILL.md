@@ -26,8 +26,8 @@ by running `uv tool install google-colab-cli` or `pip install google-colab-cli`.
 - **`colab` is fire-and-forget.** Each command authenticates, does one thing, and exits. A detached background daemon (spawned by `colab new`) handles keep-alive; you don't manage it.
 
 ## Authentication (the #1 thing that blocks agents)
-- The global flag is `--auth={adc,oauth2}` and the **default is `adc`** (Application Default Credentials). It must come *before* the subcommand: `colab --auth=adc new -s x`.
-- **ADC setup** (most reliable for headless/agent use). The Colab backends need a specific scope set, so re-mint ADC with all four scopes:
+- The global flag is `--auth={oauth2,adc}` and the **default is `oauth2`**. It must come *before* the subcommand: `colab --auth=adc new -s x`.
+- **ADC setup** (most reliable for headless/agent use when ambient Google credentials are preferred). The Colab backends need a specific scope set, so re-mint ADC with all four scopes:
   ```bash
   gcloud auth application-default login \
     --scopes=openid,\
@@ -35,10 +35,10 @@ by running `uv tool install google-colab-cli` or `pip install google-colab-cli`.
   https://www.googleapis.com/auth/userinfo.email,\
   https://www.googleapis.com/auth/colaboratory
   ```
-  Why all four: `userinfo.email` (session backend `colab.research.google.com`, else 401), `colaboratory` (RuntimeService `colab.pa.googleapis.com` keep-alive, else 403), `openid`+`cloud-platform` (mandated by gcloud itself; it rejects scope lists missing `cloud-platform`).
-- **oauth2 setup**: `colab --auth=oauth2 <anything>` triggers a browser consent flow on first use (token cached at `~/.config/colab-cli/token.json`). Requires a client config at `~/.colab-cli-oauth-config.json` (or `-c PATH`). The browser step means it usually needs a human; prefer ADC for agents.
-- **Verify auth in one shot**: `colab sessions` (read-only, lists server assignments) or `colab whoami` (hidden debug command: prints the active email, scopes, audience, and expiry). When any call 403s against `colab.pa.googleapis.com`, the cause is almost always a missing scope — `colab whoami` shows it instantly.
-- **`colab new` pre-flights the keep-alive RPC** right after allocating. If your token lacks the `colaboratory` scope it unassigns the fresh VM (so you don't leak a billable assignment) and prints the exact remediation. Follow that message rather than retrying blindly.
+  Why all four: `userinfo.email` is required by the session backend at `colab.research.google.com`; `colaboratory` is retained for forward compatibility and other Colab features; `openid`+`cloud-platform` are mandated by `gcloud` itself, which rejects scope lists missing `cloud-platform`.
+- **oauth2 setup**: `colab --auth=oauth2 <anything>` triggers a remote copy-paste browser consent flow on first use (token cached at `~/.config/colab-cli/token.json`). If no explicit `-c PATH` or `~/.colab-cli-oauth-config.json` is present, the CLI falls back to its bundled OAuth config. The browser/code step means it usually needs a human; prefer ADC for unattended agents.
+- **Verify auth in one shot**: `colab sessions` (read-only, lists server assignments) or `colab whoami` (hidden debug command: prints the active email, scopes, audience, and expiry). When a session operation fails with 401/403, first verify identity and scopes rather than retrying blindly.
+- **`colab new` pre-flights keep-alive** right after allocating. Keep-alive now uses the same `colab.research.google.com` tunnel credential path as assignment, so scope failures should normally surface at assignment time; if pre-flight does fail with a scope error, the CLI unassigns the fresh VM (so you don't leak a billable assignment) and prints provider-specific remediation.
 - **Do NOT confuse `colab auth` with CLI authentication.** `colab auth` injects *VM-side* GCP credentials into the running kernel (so notebook code can call BigQuery/GCS); it is orthogonal to how the CLI itself authenticates. Never suggest "run `colab auth`" to fix a CLI 401/403 — that's a scope/identity problem fixed via the `gcloud` command above.
 
 ## Workflow
@@ -86,4 +86,4 @@ by running `uv tool install google-colab-cli` or `pip install google-colab-cli`.
 ## Recovery
 - "Session not found" / 404 / 401 on exec: the backend pruned the VM. `colab exec`/`repl` detect this and clean up local state automatically — run `colab sessions` and re-create with `colab new`.
 - Execution timeout or wedged kernel: `colab restart-kernel -s <name>` (keeps the VM, resets the kernel), or `colab stop` then `colab new`.
-- Keep-alive daemon died (`colab log` shows `keep_alive_stopped reason=consecutive_4xx_errors`): almost always the missing `colaboratory` scope — re-auth per the Authentication section.
+- Keep-alive daemon died (`colab log` shows `keep_alive_stopped reason=consecutive_4xx_errors`): inspect the logged status/body. A real 4xx usually means the assignment expired or credentials are wrong; read-timeouts on the tunnel keep-alive path are treated as success.

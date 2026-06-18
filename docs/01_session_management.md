@@ -1,5 +1,6 @@
 ---
 log:
+2026-06-19: Synced the implementation details with the current auth architecture. The default OAuth2 provider now uses the remote copy-paste flow, and ADC remains available via `--auth=adc`; the old local-server OAuth wording was stale after the 2026-06-11 automation/auth update.
 2026-06-15: Switched the keep-alive daemon from the `colab.pa.googleapis.com` `RuntimeService/KeepAliveAssignment` RPC to a Tunnel Frontend HTTP ping (`GET /tun/m/<endpoint>/keep-alive/` with `X-Colab-Tunnel: Google`) on `colab.research.google.com`. The RPC required `serviceusage` consumer access to Colab's internal project `1014160490159`, which ordinary user accounts lack, so every external user hit HTTP 403 `USER_PROJECT_DENIED` and their CLI sessions were idle-pruned within minutes (issue #14). Reproduced live with a third-party account; verified the tunnel ping is accepted by the same bearer-token credential that already works for `assign`. A `ReadTimeout` on the ping is treated as success (TFE records activity before forwarding to the often-non-responding VM). Generalized the pre-flight remediation messaging away from the now-irrelevant `colaboratory`/`pa.googleapis.com` framing, and removed the dead grpc-web client-registry/API-key code.
 2026-06-10: Replaced the POSIX-only `fcntl.flock` file locking in `_LockedFileStore` with the cross-platform `filelock` library (reported broken on Windows). Reads use `ReadWriteLock.read_lock()` (shared) and writes use `write_lock()` (exclusive), preserving the original `LOCK_SH`/`LOCK_EX` semantics. The lock is constructed with `is_singleton=False` so two `StateStore` instances for the same path in one process don't collapse into a single reentrant lock (which would raise `RuntimeError` on multi-threaded write contention). Added shared-read, cross-process exclusion, and multi-thread/multi-process regression tests.
 ---
@@ -87,7 +88,7 @@ To prevent Colab VMs from being deleted due to idle timeouts (standard is ~90 mi
 - **Resource Usage**: Add real-time resource usage (CPU/RAM/GPU) to the `status` output by executing a diagnostic snippet on the VM.
 
 ## Implementation Details
-- **Authentication**: Uses `google-auth-oauthlib` to perform a local server OAuth flow.
+- **Authentication**: Uses `google-auth-oauthlib` for the default OAuth2 remote copy-paste flow, or Application Default Credentials when `--auth=adc` is selected.
 - **Global Flags**:
     - `-c`, `--client-oauth-config`: Path to the client secrets JSON file (default: `~/.colab-cli-oauth-config.json`).
     - `--config`: Path to the session state JSON file (default: `~/.config/colab-cli/sessions.json`).
