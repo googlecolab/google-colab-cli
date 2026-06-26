@@ -15,16 +15,14 @@
 import json
 import logging
 import os
-import signal
 import sys
-import termios
 import threading
 import time
-import tty
 from urllib.parse import urlparse
 
 import websocket
 
+from colab_cli import _terminal
 from colab_cli.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -133,8 +131,8 @@ def connect_console(session: SessionState):
     ws_url = f"{ws_scheme}://{parsed.netloc}/colab/tty?colab-runtime-proxy-token={session.token}"
 
     is_tty = sys.stdin.isatty()
-    fd = sys.stdin.fileno() if is_tty else None
-    old_settings = termios.tcgetattr(fd) if is_tty else None
+    fd = _terminal.get_fd() if is_tty else None
+    old_settings = None
 
     ws = websocket.WebSocketApp(
         url=ws_url,
@@ -144,15 +142,15 @@ def connect_console(session: SessionState):
         on_close=on_close,
     )
 
-    def handle_sigwinch(signum, frame):
+    def handle_resize():
         """Handle window resize events."""
         if _is_running:
             send_terminal_size(ws)
 
     try:
-        if is_tty:
-            tty.setraw(fd, termios.TCSANOW)
-            signal.signal(signal.SIGWINCH, handle_sigwinch)
+        if is_tty and fd is not None:
+            old_settings = _terminal.set_raw(fd)
+            _terminal.register_resize_handler(handle_resize)
 
         # This is a blocking call until the connection is closed
         ws.run_forever()
@@ -164,9 +162,9 @@ def connect_console(session: SessionState):
                 # We raise a standard exception that the caller can recognize
                 raise RuntimeError(f"Connection failed: {err_msg}")
     finally:
-        if is_tty:
+        if is_tty and fd is not None and old_settings is not None:
             # Always ensure the terminal is restored to its original state
-            termios.tcsetattr(fd, termios.TCSANOW, old_settings)
-            # Restore the default signal handler for resize
-            signal.signal(signal.SIGWINCH, signal.SIG_DFL)
+            _terminal.restore(fd, old_settings)
+            # Stop the resize handler
+            _terminal.unregister_resize_handler()
         print("\r\nConnection closed.")
