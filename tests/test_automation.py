@@ -123,3 +123,29 @@ def test_cli_auth_uses_long_timeout(mock_state, mock_runtime_class, mock_session
 
     _, kwargs = mock_runtime.execute_code.call_args
     assert kwargs.get("timeout") is not None and kwargs["timeout"] >= 300
+
+
+def test_read_line_from_controlling_tty_uses_dev_tty():
+    """On POSIX-like environments with /dev/tty, the helper reads from it."""
+    from colab_cli.commands.automation import _read_line_from_controlling_tty
+    from unittest.mock import mock_open
+
+    with patch("colab_cli.commands.automation.open", mock_open(read_data="ok\n")):
+        assert _read_line_from_controlling_tty() == "ok\n"
+
+
+def test_read_line_from_controlling_tty_falls_back_to_stdin():
+    """When /dev/tty is unavailable (Windows), the helper falls back to stdin."""
+    import io
+    from colab_cli.commands.automation import _read_line_from_controlling_tty
+
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        if path == "/dev/tty":
+            raise OSError("No /dev/tty on Windows")
+        return real_open(path, *args, **kwargs)
+
+    with patch("colab_cli.commands.automation.open", side_effect=fake_open), \
+            patch("colab_cli.commands.automation.sys.stdin", io.StringIO("entered\n")):
+        assert _read_line_from_controlling_tty() == "entered\n"

@@ -7,7 +7,7 @@ Designed to support seamless developer productivity, headless automation, and AI
 [Demo](https://github.com/user-attachments/assets/656226a9-af13-4fdb-8eda-d7de747336a2)
 
 > [!NOTE]
-> **Platform support:** the Colab CLI currently supports **Linux and macOS** only. Windows is not supported at this time.
+> **Platform support:** Linux, macOS, and **Windows**. The interactive `colab console` command on Windows requires a virtual-terminal-aware host (e.g. Windows Terminal); `colab run` shebang execution (`#!/usr/bin/env -S colab run ...` and `chmod +x`) is Unix-only — on Windows invoke `colab run script.py` directly.
 
 > [!TIP]
 > Looking for in-notebook, interactive agent-assisted coding instead of a terminal workflow? See the [Colab MCP Server](https://github.com/googlecolab/colab-mcp).
@@ -166,7 +166,7 @@ print("L4 GPU Available:", torch.cuda.is_available())
 print("Device Name:", torch.cuda.get_device_name(0))
 ```
 
-Make the script executable (`chmod +x script.py`) and run it: `./script.py`. The `--keep` option tells the CLI to preserve the session VM on completion so you can re-execute or inspect logs.
+Make the script executable (`chmod +x script.py`) and run it: `./script.py`. The `--keep` option tells the CLI to preserve the session VM on completion so you can re-execute or inspect logs. (Shebang execution is Unix-only; on Windows, run `colab run --gpu L4 --keep script.py` directly.)
 
 ---
 

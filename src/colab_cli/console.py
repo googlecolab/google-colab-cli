@@ -17,11 +17,17 @@ import logging
 import os
 import signal
 import sys
-import termios
 import threading
 import time
-import tty
 from urllib.parse import urlparse
+
+if sys.platform == "win32":
+    termios = None
+    tty = None
+    from colab_cli import _winconsole
+else:
+    import termios
+    import tty
 
 import websocket
 
@@ -133,8 +139,12 @@ def connect_console(session: SessionState):
     ws_url = f"{ws_scheme}://{parsed.netloc}/colab/tty?colab-runtime-proxy-token={session.token}"
 
     is_tty = sys.stdin.isatty()
-    fd = sys.stdin.fileno() if is_tty else None
-    old_settings = termios.tcgetattr(fd) if is_tty else None
+    if sys.platform != "win32":
+        fd = sys.stdin.fileno() if is_tty else None
+        old_settings = termios.tcgetattr(fd) if is_tty else None
+    else:
+        fd = None
+        old_settings = None
 
     ws = websocket.WebSocketApp(
         url=ws_url,
@@ -149,13 +159,33 @@ def connect_console(session: SessionState):
         if _is_running:
             send_terminal_size(ws)
 
+    def win_poll_resize():
+        """Poll console size on Windows where SIGWINCH does not exist."""
+        last_size = None
+        while _is_running:
+            try:
+                size = _winconsole.get_console_size()
+                if size and size != last_size:
+                    last_size = size
+                    send_terminal_size(ws)
+            except Exception:
+                pass
+            time.sleep(0.25)
+
     try:
         if is_tty:
-            tty.setraw(fd, termios.TCSANOW)
-            signal.signal(signal.SIGWINCH, handle_sigwinch)
-
-        # This is a blocking call until the connection is closed
-        ws.run_forever()
+            if sys.platform == "win32":
+                resize_thread = threading.Thread(target=win_poll_resize, daemon=True)
+                resize_thread.start()
+                with _winconsole.raw_mode():
+                    ws.run_forever()
+            else:
+                tty.setraw(fd, termios.TCSANOW)
+                signal.signal(signal.SIGWINCH, handle_sigwinch)
+                ws.run_forever()
+        else:
+            # This is a blocking call until the connection is closed
+            ws.run_forever()
 
         if _last_error:
             # Re-raise or wrap terminal errors
@@ -165,8 +195,13 @@ def connect_console(session: SessionState):
                 raise RuntimeError(f"Connection failed: {err_msg}")
     finally:
         if is_tty:
-            # Always ensure the terminal is restored to its original state
-            termios.tcsetattr(fd, termios.TCSANOW, old_settings)
-            # Restore the default signal handler for resize
-            signal.signal(signal.SIGWINCH, signal.SIG_DFL)
+            if sys.platform == "win32":
+                # The raw_mode context manager restores original console modes.
+                pass
+            else:
+                # Always ensure the terminal is restored to its original state
+                termios.tcsetattr(fd, termios.TCSANOW, old_settings)
+                # Restore the default signal handler for resize
+                signal.signal(signal.SIGWINCH, signal.SIG_DFL)
+        _is_running = False
         print("\r\nConnection closed.")
