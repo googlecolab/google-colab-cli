@@ -194,6 +194,37 @@ class ColabRuntime:
 
             res = original_stdin_hook(prompt) if original_stdin_hook else input(prompt)
 
+            wsclient = None
+            if self.kernel_client and hasattr(self.kernel_client, "_manager"):
+                wsclient = getattr(self.kernel_client._manager, "client", None)
+
+            if wsclient and hasattr(wsclient, "stdin_channel"):
+                try:
+                    content = {"value": res}
+                    reply_msg = wsclient.session.msg("input_reply", content)
+                    if isinstance(prompt, dict) and "header" in prompt:
+                        reply_msg["parent_header"] = prompt["header"]
+                    wsclient.stdin_channel.send(reply_msg)
+                    logger.info(
+                        "[wrapped_stdin_hook] Successfully sent input_reply to kernel WebSocket via wsclient."
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"[wrapped_stdin_hook] Failed to send input_reply: {e}",
+                        exc_info=True,
+                    )
+            elif self.kernel_client and hasattr(self.kernel_client, "input"):
+                try:
+                    self.kernel_client.input(res)
+                    logger.info(
+                        "[wrapped_stdin_hook] Successfully sent input_reply to kernel WebSocket."
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"[wrapped_stdin_hook] Failed to send input_reply: {e}",
+                        exc_info=True,
+                    )
+
             if self.history and self.session_name:
                 self.history.log_event(self.session_name, "input_reply", {"value": res})
             return res
