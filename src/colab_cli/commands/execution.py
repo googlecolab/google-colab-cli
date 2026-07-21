@@ -26,7 +26,6 @@ from typing_extensions import Annotated
 
 from colab_cli.runtime import ColabRuntime
 from colab_cli.utils import handle_image, is_terminal_error, render_display_data
-from colab_cli.console import connect_console
 
 _console = Console()
 
@@ -337,6 +336,7 @@ def console(
 ):
     """Connect to raw TTY console"""
     from colab_cli.common import state
+    from colab_cli.console import connect_console
 
     name = state.resolve_session(session)
     s = state.store.get(name)

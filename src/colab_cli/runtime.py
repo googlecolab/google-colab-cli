@@ -139,6 +139,7 @@ class ColabRuntime:
                 except (
                     requests.exceptions.ReadTimeout,
                     requests.exceptions.ConnectTimeout,
+                    requests.exceptions.ConnectionError,
                 ) as e:
                     last_err = e
                     if i < retries - 1:
