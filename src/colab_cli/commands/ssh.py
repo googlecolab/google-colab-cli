@@ -33,6 +33,7 @@ Three modes:
 and sent in the ``X-Colab-Ssh-Pubkey`` header.
 """
 
+import json
 import os
 from pathlib import Path
 import select
@@ -50,6 +51,26 @@ import websocket
 _SSH_PATH = "/colab/ssh"
 _KEY_TYPES = ["id_ed25519.pub", "id_ecdsa.pub", "id_rsa.pub"]
 _PUBKEY_HEADER = "X-Colab-Ssh-Pubkey"
+_SSH_HOST = "root@colab-runtime"
+
+# Frozen cross-repo credential contract: the CLI installs the Drive token where
+# the google3 server-side reader expects it. No Python import spans the
+# boundary, so these literals ARE the contract, pinned by a golden fixture.
+_DRIVE_TOKEN_REMOTE_PATH = "/root/.config/colab/drive_token.json"
+_DRIVE_TOKEN_MODE = 0o600
+_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+# The ADC authorized-user file omits token_uri, but the reader requires it.
+_OAUTH_TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+# gcloud rejects a --scopes list missing openid/cloud-platform, so the Drive
+# scope must be requested alongside them.
+_GCLOUD_LOGIN_SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/cloud-platform",
+    _DRIVE_SCOPE,
+]
+
+_ADC_PATH = os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
 
 
 def _resolve_pubkey(identity: Optional[str]) -> str:
@@ -256,12 +277,8 @@ def _shquote(s: str) -> str:
     return "'" + s.replace("'", "'\\''") + "'"
 
 
-def _run_interactive_ssh(session: SessionState, identity: Optional[str]) -> int:
-    """Spawns an interactive ``ssh`` that uses this CLI as its ProxyCommand.
-
-    The subprocess connects to the abstract host ``colab-runtime``; its
-    ProxyCommand re-invokes ``colab ssh --proxy-mode`` to bridge the WebSocket.
-    """
+def _proxy_command(session: SessionState, identity: Optional[str]) -> str:
+    """Builds the OpenSSH ProxyCommand that bridges this session's WebSocket."""
     self_cmd = [
         sys.executable,
         "-m",
@@ -273,9 +290,16 @@ def _run_interactive_ssh(session: SessionState, identity: Optional[str]) -> int:
     ]
     if identity:
         self_cmd.extend(["--identity", identity])
-    proxy_command = " ".join(_shquote(a) for a in self_cmd)
+    return " ".join(_shquote(a) for a in self_cmd)
 
-    ssh_args = [
+
+def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:
+    """Builds the shared ``ssh`` invocation (ProxyCommand + hardening options).
+
+    Reused by both the interactive shell and the Drive-token install so they
+    ride the same channel and stay in lockstep.
+    """
+    args = [
         "ssh",
         "-o",
         f"ProxyCommand={proxy_command}",
@@ -287,10 +311,81 @@ def _run_interactive_ssh(session: SessionState, identity: Optional[str]) -> int:
         "LogLevel=ERROR",
     ]
     if identity:
-        ssh_args.extend(["-i", os.path.expanduser(identity)])
-    ssh_args.append("root@colab-runtime")
+        args.extend(["-i", os.path.expanduser(identity)])
+    return args
 
+
+def _run_interactive_ssh(session: SessionState, identity: Optional[str]) -> int:
+    """Spawns an interactive ``ssh`` that uses this CLI as its ProxyCommand.
+
+    The subprocess connects to the abstract host ``colab-runtime``; its
+    ProxyCommand re-invokes ``colab ssh --proxy-mode`` to bridge the WebSocket.
+    """
+    ssh_args = _ssh_base_args(_proxy_command(session, identity), identity)
+    ssh_args.append(_SSH_HOST)
     return subprocess.call(ssh_args)
+
+
+def _mint_drive_token() -> dict:
+    """Mints a Drive-file-scoped credential via gcloud, reshaped to the frozen
+    on-VM ``drive_token.json`` schema.
+
+    gcloud owns the browser consent; this only captures the resulting
+    application-default authorized-user file and the active quota project.
+    """
+    subprocess.run(
+        [
+            "gcloud",
+            "auth",
+            "application-default",
+            "login",
+            f"--scopes={','.join(_GCLOUD_LOGIN_SCOPES)}",
+        ],
+        check=True,
+    )
+    with open(_ADC_PATH, "r") as f:
+        adc = json.load(f)
+
+    quota_project = adc.get("quota_project_id")
+    if not quota_project:
+        res = subprocess.run(
+            ["gcloud", "config", "get-value", "project"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        quota_project = res.stdout.strip()
+
+    return {
+        "refresh_token": adc["refresh_token"],
+        "token_uri": adc.get("token_uri", _OAUTH_TOKEN_URI),
+        "client_id": adc["client_id"],
+        "client_secret": adc["client_secret"],
+        "quota_project_id": quota_project,
+        "scopes": [_DRIVE_SCOPE],
+    }
+
+
+def _push_drive_token(
+    session: SessionState, identity: Optional[str], token: dict
+) -> None:
+    """Installs the minted Drive token on the VM at the frozen path, mode 0600.
+
+    Streams the JSON over the same ProxyCommand ssh channel as the interactive
+    shell (no extra network path). ``install -D -m 600`` atomically creates the
+    parent dir and sets the perms; 0600 because the token embeds a long-lived
+    refresh credential that must not be group/other-readable.
+    """
+    payload = json.dumps(token, indent=2, sort_keys=True)
+    mode = format(_DRIVE_TOKEN_MODE, "o")
+    remote_cmd = f"install -D -m {mode} /dev/stdin {_DRIVE_TOKEN_REMOTE_PATH}"
+    subprocess.run(
+        _ssh_base_args(_proxy_command(session, identity), identity)
+        + [_SSH_HOST, remote_cmd],
+        input=payload,
+        text=True,
+        check=True,
+    )
 
 
 def ssh(
@@ -320,6 +415,17 @@ def ssh(
             ),
         ),
     ] = None,
+    drive: Annotated[
+        bool,
+        typer.Option(
+            "--drive",
+            help=(
+                "Mint a Drive-file-scoped token via gcloud and install it on the "
+                "VM at /root/.config/colab/drive_token.json (mode 0600) before "
+                "opening the shell, so in-VM code can back up notebooks to Drive."
+            ),
+        ),
+    ] = False,
 ):
     """Connect to a Colab runtime via SSH.
 
@@ -333,6 +439,9 @@ def ssh(
     if proxy_mode:
         ws = _connect_websocket(url, pubkey)
         raise typer.Exit(code=_bridge_proxy_mode(ws))
+
+    if drive:
+        _push_drive_token(s, identity, _mint_drive_token())
 
     raise typer.Exit(code=_run_interactive_ssh(s, identity))
 
