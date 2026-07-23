@@ -7,86 +7,136 @@ log:
 2026-07-22: Fixed `--proxy-mode --rm` not tearing down on disconnect. OpenSSH sends the ProxyCommand SIGHUP (verified empirically) when the session ends — not just stdin EOF — and Python's default SIGHUP action terminated the process before the teardown `finally` ran, leaking the runtime + keep-alive daemon. Now `--rm` installs SIGHUP/SIGTERM/SIGINT handlers that run the stop (idempotent with the `finally`).
 ---
 
-# Design: `colab ssh` — SSH-over-WebSocket runtime access
+# Design: `colab ssh` — SSH-over-WebSocket Runtime Access
 
 ## Motivation
 Users want a real shell on their Colab runtime and, more importantly, IDE
 remote-development (VS Code Remote-SSH, JetBrains Gateway, plain `ssh`). The
-runtime exposes an SSH-over-WebSocket endpoint at `/colab/ssh`; `colab ssh`
-is the client that speaks it, reusing the CLI's existing session resolution and
+runtime exposes an SSH-over-WebSocket endpoint at `/colab/ssh`; `colab ssh` is
+the client that speaks it, reusing the CLI's existing session resolution and
 runtime-proxy token so no separate credential handling is needed.
 
-## Modes
-1. `colab ssh` — use the only active session (via `state.resolve_session`, the
-   same helper the other commands use) and open an interactive shell. If you
-   have **no** active session it auto-creates one (like `colab new`) and sshes
-   in; if you have **multiple** it errors and asks you to pick one with `-s`.
-2. `colab ssh -s SESSION` — same, targeting `SESSION` explicitly.
-3. `colab ssh --proxy-mode -s SESSION` — act as an OpenSSH
-   `ProxyCommand`-compatible WebSocket↔stdio bridge for `~/.ssh/config`, so any
-   SSH-based tool can reach the runtime. **Every flag below also applies here**:
-   with `-s NAME` the session is created if missing (so a config host works on
-   first connect), `--gpu/--tpu` set its accelerator, and `--rm` stops it on
-   disconnect.
+## User Surface
 
-The interactive mode spawns the system `ssh` binary with the CLI re-invoked as
-its own `ProxyCommand` (`python -m colab_cli.cli ssh --proxy-mode`), so the
-WebSocket bridge and the interactive shell share one code path.
+```
+colab ssh [OPTIONS]
+```
 
-## Working directory
-Interactive `colab ssh` lands you in `/content` (Colab's standard working
-directory, where notebooks and uploads live) rather than root's home. It forces
-a PTY (`-t`) and runs `cd /content 2>/dev/null; exec $SHELL -l` on the runtime;
-a missing `/content` falls back to the login home. `--proxy-mode` and external
-SSH tools run their own remote commands, so to also land in `/content` from a
-`~/.ssh/config` host add `RequestTTY yes` and
-`RemoteCommand cd /content && exec bash -l`.
+| Flag | Type | Default | Purpose |
+|---|---|---|---|
+| `-s`, `--session` | str | auto | Session to connect to. If omitted, uses your only active session, auto-creates one when you have none, or errors when you have several. |
+| `--proxy-mode` | bool | False | Act as an OpenSSH `ProxyCommand`-compatible WebSocket↔stdio bridge (reads stdin, writes stdout) for `~/.ssh/config`. Every other flag still applies. |
+| `-i`, `--identity` | str | auto | Private key whose public key is sent in the `X-Colab-Ssh-Pubkey` header. Default: first of `~/.ssh/id_ed25519`, `id_ecdsa`. |
+| `--gpu` | str | None | GPU accelerator for a runtime this command creates (T4, L4, G4, H100, A100). |
+| `--tpu` | str | None | TPU accelerator for a runtime this command creates (v5e1, v6e1). |
+| `--rm` | bool | False | Stop the runtime when the session ends. Interactive: only a runtime `colab ssh` auto-created (a reused session is never removed). `--proxy-mode`: the bridged session, on disconnect. |
 
-## Auto-create options
-When bare `colab ssh` creates a runtime for you (no active session):
-- `--gpu T4|L4|G4|H100|A100` / `--tpu v5e1|v6e1` — request an accelerator for the
-  new runtime (defaults to CPU). Ignored when an existing session is reused.
-- `--rm` — stop the runtime when the session ends. In interactive mode this
-  applies only to a runtime `colab ssh` auto-created (a reused session is never
-  removed); in `--proxy-mode` it stops the bridged session on disconnect.
+### `~/.ssh/config` usage
+`--proxy-mode` turns `colab ssh` into a transport any SSH-based tool can drive:
 
-In `--proxy-mode`, `-s NAME` creates the session if missing (creation output is
-routed to stderr so stdout stays the clean ssh byte stream); bare `--proxy-mode`
-with no `-s` still just resolves an existing session.
+```
+Host <alias>
+  ProxyCommand <abs-path-to>/colab ssh --proxy-mode -s <name> [--gpu T4] [--rm]
+  User root
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+```
 
-## Key selection
-`--identity/-i` overrides the default order (`~/.ssh/id_ed25519` → `id_ecdsa`).
-RSA keys are rejected by the server (a `.pub` type token is always `ssh-rsa`,
-which is not accepted), so `id_rsa` is not auto-selected. The public key is
-derived from the private key via `ssh-keygen -y -f` and sent verbatim in the
-`X-Colab-Ssh-Pubkey` header — no transformation, so the bytes the user controls
-are exactly what the server receives.
+Because every flag applies in `--proxy-mode`, `-s <name>` creates the session on
+first connect, `--gpu/--tpu` size it, and `--rm` makes the host ephemeral. Use an
+**absolute** `colab` path: `ssh` runs the `ProxyCommand` in a non-login shell
+where a bare `colab` may not be on `PATH`. External SSH tools run their own
+remote command, so to also land in `/content` add `RequestTTY yes` and
+`RemoteCommand cd /content 2>/dev/null; exec bash -l`.
 
-## Error handling
-The WebSocket upgrade maps each common HTTP status to an actionable message:
+## Behavior
 
-| Status | Meaning surfaced to the user |
-| --- | --- |
-| 400 | Bad/unsupported/missing pubkey, with remediation (`ssh-keygen -t ed25519`) |
-| 401 | Token invalid/expired — try `colab new` |
-| 403 | Forbidden — token lacks permission for this action (feature-off returns 404, not 403) |
-| 404 | SSH not exposed on this runtime — SSH is baked in at creation, so run `colab new` |
-| 429 | Another `colab ssh` is already connected — disconnect first |
-| 502 | Runtime `sshd` unreachable — runtime may be unhealthy |
-| other / none | Raw status or a network-check hint |
+1. **Session resolution / auto-create**: With `-s NAME`, resolves that session
+   (via `state.resolve_session`, the same helper the other commands use). Bare
+   `colab ssh` uses your only active session; with **no** session it auto-creates
+   one (mirrors `colab new` end-to-end: assign → keep-alive pre-flight → spawn
+   keep-alive daemon → persist `SessionState`); with **multiple** it errors and
+   asks you to pick one with `-s`.
+2. **Connect**: Opens the WebSocket to `wss://<netloc>/colab/ssh?colab-runtime-proxy-token=<token>`
+   and sends the resolved public key verbatim in the `X-Colab-Ssh-Pubkey` header
+   (no transformation — the bytes the user controls are exactly what the server
+   receives). Only `ssh-ed25519` / `ecdsa-sha2-nistp{256,384,521}` keys are
+   accepted; RSA (`ssh-rsa`) is rejected server-side, so `id_rsa` is not
+   auto-selected.
+3. **Interactive shell**: Spawns the system `ssh` binary with the CLI re-invoked
+   as its own `ProxyCommand` (`python -m colab_cli.cli ssh --proxy-mode`), so the
+   WebSocket bridge and the interactive shell share one code path. It forces a
+   PTY (`-t`) and runs `cd /content 2>/dev/null; exec $SHELL -l` so you land in
+   `/content` (Colab's working dir) rather than root's home; a missing `/content`
+   falls back to the login home.
+4. **`--proxy-mode` bridge**: Bridges the WebSocket ↔ stdin/stdout for use as an
+   OpenSSH `ProxyCommand`. Honors every flag: `-s NAME` creates the session if
+   missing (creation output routed to stderr so stdout stays the clean ssh byte
+   stream); bare `--proxy-mode` with no `-s` just resolves an existing session.
+5. **`--rm` teardown**: Stops the runtime when the session ends. In `--proxy-mode`
+   this must survive how OpenSSH ends a `ProxyCommand`: on disconnect it sends
+   **SIGHUP** (verified), not just stdin EOF, and Python's default SIGHUP action
+   would terminate the process before the teardown `finally` ran — leaking the
+   runtime and its keep-alive daemon. `--rm` therefore installs
+   SIGHUP/SIGTERM/SIGINT handlers that run the stop, idempotent with the
+   `finally`. `SIGKILL` cannot be intercepted, so a `kill -9`/hard crash can
+   still leak; a normal disconnect is SIGHUP and is handled.
+6. **Error handling**: The WebSocket upgrade maps each common HTTP status to an
+   actionable message:
 
-## Testing strategy
-- **Unit** (`tests/test_ssh.py`): URL construction, pubkey resolution (both
-  paths), the full status→message map, shell quoting, session resolution, and
-  end-to-end dispatch (interactive vs `--proxy-mode`), including a
-  verbatim-pubkey pass-through assertion.
-- **Wire contract** (`tests/test_ssh_wire_contract.py`): stands up a loopback
-  WebSocket server and drives the real connect path (no mock) to assert the
-  request path, the `colab-runtime-proxy-token` query param, and the
-  `X-Colab-Ssh-Pubkey` header reach the wire verbatim; includes mutation tests
-  that fail if `_SSH_PATH`/`_PUBKEY_HEADER` drift, plus real HTTP 400/429 mapping.
-- **Auto-create** (`tests/test_ssh_autocreate.py`): bare-`colab ssh` create vs
-  reuse vs ambiguous, `--gpu/--tpu` passthrough, and `--rm` stop-on-exit.
-- **Integration** (`integration/repro_ssh/`): a non-interactive help smoke test
-  that always runs, plus a documented live end-to-end scenario (guarded behind
-  `RUN_LIVE=1`) that requires a runtime exposing the SSH endpoint.
+   | Status | Meaning surfaced to the user |
+   | --- | --- |
+   | 400 | Bad/unsupported/missing pubkey, with remediation (`ssh-keygen -t ed25519`) |
+   | 401 | Token invalid/expired — try `colab new` |
+   | 403 | Forbidden — token lacks permission for this action (feature-off returns 404, not 403) |
+   | 404 | SSH not exposed on this runtime — SSH is baked in at creation, so run `colab new` |
+   | 429 | Another `colab ssh` is already connected — disconnect first |
+   | 502 | Runtime `sshd` unreachable — runtime may be unhealthy |
+   | other / none | Raw status or a network-check hint |
+
+## AGENTS.md Constraints Honoured
+- **Item 7 (no background threads for long-running tasks)**: the only thread is
+  the proxy bridge's stdin pump, scoped to the connection; the keep-alive daemon
+  is the existing detached process from `colab new`, not a new thread.
+- **Item 8 (verify the local install)**: the `~/.ssh/config` `ProxyCommand` must
+  use an absolute `colab` path because `ssh` runs it in a non-login shell where
+  the editable install may not be on `PATH`.
+- **Item 10 (live probes allocate real resources)**: auto-create reserves a
+  billable VM; `--rm` releases it on exit, and the SIGHUP-safe teardown ensures a
+  `--rm` proxy host does not leak the runtime + keep-alive daemon on disconnect.
+- **Items 16 / 17 (daemon flag propagation / persist-before-spawn)**: auto-create
+  reuses `colab new`'s creation path verbatim, so both are inherited unchanged.
+
+## Testing Strategy (TDD)
+
+### Unit tests (`tests/test_ssh.py`)
+1. WebSocket URL construction (`wss` for https, `ws` for http; token query param).
+2. Pubkey resolution — `--identity` (via `ssh-keygen -y -f`) and the `~/.ssh`
+   default scan; missing-key and missing-identity exit paths.
+3. The full status→message map (400/401/403/404/429/502/other/none).
+4. Shell quoting for the `ProxyCommand` string.
+5. Session resolution (existing vs missing).
+6. End-to-end dispatch: interactive vs `--proxy-mode`, including a
+   verbatim-pubkey pass-through assertion and the actionable-400 message.
+
+### Wire-contract tests (`tests/test_ssh_wire_contract.py`)
+Stands up a loopback WebSocket server and drives the real connect path (no mock)
+to assert the request path, the `colab-runtime-proxy-token` query param, and the
+`X-Colab-Ssh-Pubkey` header reach the wire verbatim. Includes mutation tests that
+fail if `_SSH_PATH`/`_PUBKEY_HEADER` drift, plus real HTTP 400/429 mapping via a
+genuine `WebSocketBadStatusException`.
+
+### Auto-create & proxy-mode tests (`tests/test_ssh_autocreate.py`)
+Bare `colab ssh` create vs reuse vs ambiguous; `--gpu/--tpu` passthrough; `--rm`
+stop-on-exit; and the `--proxy-mode` matrix — create-if-missing with `-s NAME`,
+reuse of an existing session, `--gpu` passthrough, `--rm` teardown, and the
+SIGHUP cleanup handler being installed only under `--rm`.
+
+### Working-directory tests (`tests/test_ssh_workdir.py`)
+Interactive `ssh` forces a PTY (`-t`) and runs a `cd /content` remote command
+(host before the command, `2>/dev/null` tolerance for a missing directory).
+
+### Integration test (`integration/repro_ssh/`)
+A non-interactive help smoke test that always runs, plus a documented live
+end-to-end scenario (guarded behind `RUN_LIVE=1`) that requires a runtime
+exposing the SSH endpoint.
