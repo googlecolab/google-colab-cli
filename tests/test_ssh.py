@@ -68,9 +68,7 @@ def test_build_ws_url_http_uses_ws():
 def test_resolve_pubkey_with_identity_calls_ssh_keygen(mocker, tmp_path):
     key = tmp_path / "id_test"
     key.write_text("(fake private key)")
-    fake_pub = (
-        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDfakefakefakefakefakefakefake user@host"
-    )
+    fake_pub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDfake user@host"
     mock_run = mocker.patch(
         "subprocess.run",
         return_value=MagicMock(stdout=fake_pub + "\n", returncode=0),
@@ -96,7 +94,9 @@ def test_resolve_pubkey_default_scans_ssh_dir(monkeypatch, tmp_path):
     fake_pub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDanother user@host\n"
     (ssh_dir / "id_ed25519.pub").write_text(fake_pub)
 
-    monkeypatch.setattr("os.path.expanduser", lambda p: p.replace("~", str(fake_home)))
+    monkeypatch.setattr(
+        "os.path.expanduser", lambda p: p.replace("~", str(fake_home))
+    )
     out = ssh_module._resolve_pubkey(None)
     assert out == fake_pub.strip()
 
@@ -104,7 +104,9 @@ def test_resolve_pubkey_default_scans_ssh_dir(monkeypatch, tmp_path):
 def test_resolve_pubkey_default_no_keys_exits(monkeypatch, tmp_path):
     fake_home = tmp_path / "home"
     (fake_home / ".ssh").mkdir(parents=True)
-    monkeypatch.setattr("os.path.expanduser", lambda p: p.replace("~", str(fake_home)))
+    monkeypatch.setattr(
+        "os.path.expanduser", lambda p: p.replace("~", str(fake_home))
+    )
     with pytest.raises(typer.Exit) as exc_info:
         ssh_module._resolve_pubkey(None)
     assert exc_info.value.exit_code == 2
@@ -172,7 +174,7 @@ def test_resolve_session_missing_exits(mock_common_state):
 
 
 def test_ssh_proxy_mode_calls_websocket(mock_common_state, mocker, tmp_path):
-    """`--proxy-mode` calls _connect_websocket + _bridge_proxy_mode (no ssh subprocess)."""
+    """--proxy-mode calls _connect_websocket + _bridge_proxy_mode (no ssh)."""
     sess = _make_session()
     mock_common_state.resolve_session.return_value = "s1"
     mock_common_state.store.get.return_value = sess
@@ -184,14 +186,18 @@ def test_ssh_proxy_mode_calls_websocket(mock_common_state, mocker, tmp_path):
     connect = mocker.patch.object(
         ssh_module, "_connect_websocket", return_value=fake_ws
     )
-    bridge = mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
+    bridge = mocker.patch.object(
+        ssh_module, "_bridge_proxy_mode", return_value=0
+    )
     ssh_subprocess = mocker.patch.object(ssh_module, "_run_interactive_ssh")
 
     result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
     assert result.exit_code == 0
     connect.assert_called_once()
     args, _ = connect.call_args
-    assert args[0].startswith("wss://abc-foo.colab.googleusercontent.com/colab/ssh")
+    assert args[0].startswith(
+        "wss://abc-foo.colab.googleusercontent.com/colab/ssh"
+    )
     assert args[1] == fake_pub
     bridge.assert_called_once_with(fake_ws)
     ssh_subprocess.assert_not_called()
@@ -238,7 +244,9 @@ def test_ssh_pubkey_passes_through_verbatim(mock_common_state, mocker):
         captured["url"] = url
         return MagicMock()
 
-    mocker.patch.object(ssh_module, "_connect_websocket", side_effect=fake_connect)
+    mocker.patch.object(
+        ssh_module, "_connect_websocket", side_effect=fake_connect
+    )
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
     runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
@@ -246,7 +254,7 @@ def test_ssh_pubkey_passes_through_verbatim(mock_common_state, mocker):
 
 
 def test_ssh_handshake_400_emits_actionable_message(mock_common_state, mocker):
-    """A 400 with body 'unsupported key type' surfaces the keygen remediation hint."""
+    """A 400 'unsupported key type' surfaces the keygen remediation hint."""
     sess = _make_session()
     mock_common_state.resolve_session.return_value = "s1"
     mock_common_state.store.get.return_value = sess
@@ -254,7 +262,9 @@ def test_ssh_handshake_400_emits_actionable_message(mock_common_state, mocker):
         ssh_module, "_resolve_pubkey", return_value="ssh-rsa AAAAfake u@h"
     )
 
-    err = websocket.WebSocketBadStatusException("Handshake status 400 Bad Request", 400)
+    err = websocket.WebSocketBadStatusException(
+        "Handshake status 400 Bad Request", 400
+    )
     err.status_code = 400
     err.resp_body = b"unsupported key type"
     mocker.patch.object(websocket.WebSocket, "connect", side_effect=err)

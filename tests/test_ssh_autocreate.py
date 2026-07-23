@@ -47,7 +47,9 @@ def _make_session(
     return s
 
 
-def test_bare_ssh_no_session_auto_creates_then_connects(mock_common_state, mocker):
+def test_bare_ssh_no_session_auto_creates_then_connects(
+    mock_common_state, mocker
+):
     """Bare `colab ssh` with zero sessions runs `colab new` then sshes in."""
     mock_common_state.store.list.return_value = {}  # no sessions -> create
     sess = _make_session()
@@ -70,7 +72,9 @@ def test_bare_ssh_no_session_auto_creates_then_connects(mock_common_state, mocke
     interactive.assert_called_once_with(sess, None)
 
 
-def test_bare_ssh_single_session_reuses_without_create(mock_common_state, mocker):
+def test_bare_ssh_single_session_reuses_without_create(
+    mock_common_state, mocker
+):
     """One existing session -> ssh into it, do NOT create a new one."""
     mock_common_state.store.list.return_value = {"only": _make_session("only")}
     sess = _make_session("only")
@@ -162,7 +166,7 @@ def test_rm_does_not_stop_reused_session(mock_common_state, mocker):
 
 
 def test_proxy_mode_no_session_does_not_autocreate(mock_common_state, mocker):
-    """`--proxy-mode` with no -s does not auto-create (there is nothing to name)."""
+    """--proxy-mode with no -s does not auto-create (nothing to name)."""
     mock_common_state.store.list.return_value = {}
     mock_common_state.resolve_session.side_effect = typer.Exit(2)
     new = mocker.patch("colab_cli.commands.session.new")
@@ -203,7 +207,9 @@ def test_proxy_mode_creates_missing_named_session(mock_common_state, mocker):
     mocker.patch.object(
         ssh_module, "_resolve_pubkey", return_value="ssh-ed25519 AAAA u@h"
     )
-    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
+    mocker.patch.object(
+        ssh_module, "_connect_websocket", return_value=MagicMock()
+    )
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
     result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "colab"])
@@ -225,7 +231,9 @@ def test_proxy_mode_gpu_passthrough_on_create(mock_common_state, mocker):
     mocker.patch.object(
         ssh_module, "_resolve_pubkey", return_value="ssh-ed25519 AAAA u@h"
     )
-    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
+    mocker.patch.object(
+        ssh_module, "_connect_websocket", return_value=MagicMock()
+    )
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
     result = runner.invoke(
@@ -237,7 +245,9 @@ def test_proxy_mode_gpu_passthrough_on_create(mock_common_state, mocker):
     assert new.call_args.kwargs.get("gpu") == "T4"
 
 
-def test_proxy_mode_existing_named_session_not_recreated(mock_common_state, mocker):
+def test_proxy_mode_existing_named_session_not_recreated(
+    mock_common_state, mocker
+):
     """`--proxy-mode -s NAME` reuses an existing NAME (no duplicate runtime)."""
     mock_common_state.store.get.return_value = _make_session("colab")
     mock_common_state.resolve_session.return_value = "colab"
@@ -246,7 +256,9 @@ def test_proxy_mode_existing_named_session_not_recreated(mock_common_state, mock
     mocker.patch.object(
         ssh_module, "_resolve_pubkey", return_value="ssh-ed25519 AAAA u@h"
     )
-    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
+    mocker.patch.object(
+        ssh_module, "_connect_websocket", return_value=MagicMock()
+    )
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
     result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "colab"])
@@ -255,7 +267,9 @@ def test_proxy_mode_existing_named_session_not_recreated(mock_common_state, mock
     stop.assert_not_called()
 
 
-def test_proxy_mode_rm_stops_bridged_session_on_disconnect(mock_common_state, mocker):
+def test_proxy_mode_rm_stops_bridged_session_on_disconnect(
+    mock_common_state, mocker
+):
     """`--proxy-mode -s NAME --rm` stops the session when the bridge closes."""
     created = _make_session("colab-ephem")
     mock_common_state.store.get.return_value = None
@@ -269,15 +283,21 @@ def test_proxy_mode_rm_stops_bridged_session_on_disconnect(mock_common_state, mo
     mocker.patch.object(
         ssh_module, "_resolve_pubkey", return_value="ssh-ed25519 AAAA u@h"
     )
-    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
+    mocker.patch.object(
+        ssh_module, "_connect_websocket", return_value=MagicMock()
+    )
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
-    result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "colab-ephem", "--rm"])
+    result = runner.invoke(
+        app, ["ssh", "--proxy-mode", "-s", "colab-ephem", "--rm"]
+    )
     assert result.exit_code == 0
     stop.assert_called_once_with(session="colab-ephem")
 
 
-def test_proxy_mode_rm_installs_sighup_cleanup_handler(mock_common_state, mocker):
+def test_proxy_mode_rm_installs_sighup_cleanup_handler(
+    mock_common_state, mocker
+):
     """--rm installs a SIGHUP handler so teardown runs when OpenSSH HUPs the
     ProxyCommand on disconnect (Python's default SIGHUP skips the finally)."""
     import signal as _signal
@@ -289,16 +309,22 @@ def test_proxy_mode_rm_installs_sighup_cleanup_handler(mock_common_state, mocker
     mocker.patch.object(
         ssh_module, "_resolve_pubkey", return_value="ssh-ed25519 AAAA u@h"
     )
-    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
+    mocker.patch.object(
+        ssh_module, "_connect_websocket", return_value=MagicMock()
+    )
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
-    result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "colab-ephem", "--rm"])
+    result = runner.invoke(
+        app, ["ssh", "--proxy-mode", "-s", "colab-ephem", "--rm"]
+    )
     assert result.exit_code == 0
     registered = [c.args[0] for c in sigmock.call_args_list]
     assert _signal.SIGHUP in registered
 
 
-def test_proxy_mode_without_rm_installs_no_signal_handler(mock_common_state, mocker):
+def test_proxy_mode_without_rm_installs_no_signal_handler(
+    mock_common_state, mocker
+):
     """No --rm -> no signal handlers installed (keeps default behavior)."""
     mock_common_state.store.get.return_value = _make_session("colab")
     mock_common_state.resolve_session.return_value = "colab"
@@ -306,7 +332,9 @@ def test_proxy_mode_without_rm_installs_no_signal_handler(mock_common_state, moc
     mocker.patch.object(
         ssh_module, "_resolve_pubkey", return_value="ssh-ed25519 AAAA u@h"
     )
-    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
+    mocker.patch.object(
+        ssh_module, "_connect_websocket", return_value=MagicMock()
+    )
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
     result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "colab"])
@@ -322,7 +350,9 @@ def test_proxy_mode_without_rm_does_not_stop(mock_common_state, mocker):
     mocker.patch.object(
         ssh_module, "_resolve_pubkey", return_value="ssh-ed25519 AAAA u@h"
     )
-    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
+    mocker.patch.object(
+        ssh_module, "_connect_websocket", return_value=MagicMock()
+    )
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
     result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "colab"])
