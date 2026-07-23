@@ -92,7 +92,11 @@ def _resolve_pubkey(identity: Optional[str]) -> str:
             )
             pubkey = res.stdout.strip()
             if not pubkey:
-                raise RuntimeError("ssh-keygen -y returned empty output")
+                typer.echo(
+                    f"[colab] ssh-keygen produced no key for {identity}.",
+                    err=True,
+                )
+                raise typer.Exit(code=2)
             return pubkey
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             typer.echo(

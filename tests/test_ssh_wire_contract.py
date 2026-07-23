@@ -304,10 +304,32 @@ def test_wire_contract_distinct_token_reaches_wire(ws_server_factory):
 # --- prove the contract catches the mutations the mocked suite misses ---------
 
 
-def test_mutation_wrong_ssh_path_is_caught(ws_server_factory, monkeypatch):
-    """If `_SSH_PATH` were wrong (e.g. the stale `/api/colab/ssh`), the wire
-    contract assertion fails -- something the mocked suite cannot detect."""
-    monkeypatch.setattr(ssh, "_SSH_PATH", "/api/colab/ssh")
+@pytest.mark.parametrize(
+    ("attr", "value", "reached_wire"),
+    [
+        (
+            "_SSH_PATH",
+            "/api/colab/ssh",
+            lambda req: req.path == "/api/colab/ssh",
+        ),
+        (
+            "_PUBKEY_HEADER",
+            "X-Wrong-Ssh-Pubkey",
+            lambda req: (
+                "x-wrong-ssh-pubkey" in req.headers_lower
+                and "x-colab-ssh-pubkey" not in req.headers_lower
+            ),
+        ),
+    ],
+    ids=["wrong-ssh-path", "wrong-pubkey-header"],
+)
+def test_mutation_reaches_wire_and_breaks_contract(
+    ws_server_factory, monkeypatch, attr, value, reached_wire
+):
+    """Mutating a wire constant (path / header name) really changes the bytes
+    on the wire and makes the contract assertion fail -- something the mocked
+    suite cannot detect."""
+    monkeypatch.setattr(ssh, attr, value)
     server = ws_server_factory(mode="handshake")
     session = _session_for(server.port)
 
@@ -318,29 +340,7 @@ def test_mutation_wrong_ssh_path_is_caught(ws_server_factory, monkeypatch):
         pass
 
     req = server.wait_for_request()
-    assert req.path == "/api/colab/ssh"  # the mutation really reached the wire
-    with pytest.raises(AssertionError):
-        _assert_wire_contract(req, TOKEN, PUBKEY)
-
-
-def test_mutation_wrong_pubkey_header_is_caught(ws_server_factory, monkeypatch):
-    """If `_PUBKEY_HEADER` were wrong, the client sends the pubkey under the
-    wrong name; the wire contract assertion fails."""
-    monkeypatch.setattr(ssh, "_PUBKEY_HEADER", "X-Wrong-Ssh-Pubkey")
-    server = ws_server_factory(mode="handshake")
-    session = _session_for(server.port)
-
-    ws = ssh._connect_websocket(ssh._build_ws_url(session), PUBKEY)
-    try:
-        ws.close()
-    except Exception:
-        pass
-
-    req = server.wait_for_request()
-    assert "x-colab-ssh-pubkey" not in req.headers_lower
-    assert (
-        "x-wrong-ssh-pubkey" in req.headers_lower
-    )  # mutation reached the wire
+    assert reached_wire(req)  # the mutation really reached the wire
     with pytest.raises(AssertionError):
         _assert_wire_contract(req, TOKEN, PUBKEY)
 

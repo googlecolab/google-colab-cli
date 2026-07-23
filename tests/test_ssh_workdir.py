@@ -12,16 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""`colab ssh` interactive sessions start in /content (Colab's default dir).
+"""`colab ssh` interactive shell: lands in /content and forwards --identity.
 
 An SSH login lands in root's home (/root); Colab users expect /content (where
 notebooks + uploads live). `_run_interactive_ssh` forces a PTY and runs a remote
-command that `cd`s to /content before exec'ing the login shell.
+command that `cd`s to /content before exec'ing the login shell, and threads
+`--identity` through to both the outer `ssh -i` and the inner proxy command.
 """
 
 from unittest.mock import MagicMock
 
 from colab_cli.commands import ssh as ssh_module
+import pytest
 
 
 def _make_session(
@@ -42,25 +44,32 @@ def test_default_remote_dir_is_content():
     assert ssh_module._DEFAULT_REMOTE_DIR == "/content"
 
 
-def test_interactive_ssh_lands_in_content(mocker):
+@pytest.mark.parametrize(
+    "identity",
+    [None, "/home/u/.ssh/id_ed25519"],
+    ids=["no-identity", "with-identity"],
+)
+def test_interactive_ssh_builds_args(mocker, identity):
     call = mocker.patch("subprocess.call", return_value=0)
-    rc = ssh_module._run_interactive_ssh(_make_session(), None)
+    rc = ssh_module._run_interactive_ssh(_make_session(), identity)
     assert rc == 0
 
     args = call.call_args.args[0]
     assert "-t" in args  # PTY forced so the exec'd shell is interactive
     assert ssh_module._SSH_HOST in args
-    remote = args[-1]  # the remote command is the final argv element
-    assert "cd /content" in remote
-    assert "exec" in remote  # execs a shell after the cd
-    # the host must precede the remote command
+    # the host must precede the remote command (which is the final element)
     assert args.index(ssh_module._SSH_HOST) < len(args) - 1
 
-
-def test_interactive_ssh_remote_command_tolerates_missing_content(mocker):
-    call = mocker.patch("subprocess.call", return_value=0)
-    ssh_module._run_interactive_ssh(_make_session(), None)
-    remote = call.call_args.args[0][-1]
-    # a missing /content must not abort the shell: stderr is suppressed and the
-    # command continues on to exec the shell regardless.
+    remote = args[-1]
+    assert "cd /content" in remote
+    assert "exec" in remote  # execs a shell after the cd
+    # a missing /content must not abort the shell (stderr suppressed).
     assert "2>/dev/null" in remote
+
+    joined = " ".join(args)
+    if identity:
+        assert "-i" in args  # outer ssh identity
+        assert "--identity" in joined  # inner proxy-mode identity
+    else:
+        assert "-i" not in args
+        assert "--identity" not in joined
