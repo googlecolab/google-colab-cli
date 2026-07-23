@@ -17,7 +17,7 @@ End-to-end tests that run against a **live Colab backend** (unlike the mocked un
 | `repro_variable_persistence/` | Variables persist across `colab exec` calls in the same session. |
 | `repro_piped_console/` | Fast smoke test (~5s including session creation): `echo cmd \| colab console -s s` runs the command and exits within 30s. Regression test for the 2026-05-07 EOF-handler fix. |
 | `repro_bundled_oauth/` | Fast smoke test (~5s): verifies that the fallback OAuth configuration is loaded and starts the OAuth flow with the default client ID when local config is missing. |
-| `repro_ssh/` | Fast smoke test: `colab ssh` is registered and `--help` renders the documented options. The live SSH end-to-end flow (interactive + requires the runtime SSH endpoint) is a documented manual scenario, guarded behind `RUN_LIVE=1`. |
+| `repro_ssh/` | Offline smoke (always, no VM): `--help` advertises the flags and an unknown session exits 2. Live e2e (auto-runs when auth is present; allocates a CPU VM): runs a real remote command over `colab ssh --proxy-mode` used as an OpenSSH ProxyCommand — exercising handshake + pubkey-header auth + WebSocket bridge + remote exec — then asserts RSA-key rejection and that no orphan VM is left. The interactive shell (`/content`, raw TTY) remains a documented manual step. |
 
 
 ## Running

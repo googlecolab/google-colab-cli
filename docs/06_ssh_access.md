@@ -5,6 +5,7 @@ log:
 2026-07-22: Interactive `colab ssh` now starts in `/content` (Colab's working dir) instead of `/root`, via a forced PTY (`-t`) plus a remote `cd /content 2>/dev/null; exec $SHELL -l`. A missing `/content` falls back to the login home. Added `tests/test_ssh_workdir.py`.
 2026-07-22: `--proxy-mode` now honors every `colab ssh` flag: with `-s NAME` it creates the session if missing (creation output routed to stderr so stdout stays the clean ssh byte stream), `--gpu/--tpu` set the accelerator, and `--rm` stops the bridged session on disconnect — so `~/.ssh/config` hosts work on first connect and can be made ephemeral. Removed the `--drive` subfeature entirely (code + tests).
 2026-07-22: Fixed `--proxy-mode --rm` not tearing down on disconnect. OpenSSH sends the ProxyCommand SIGHUP (verified empirically) when the session ends — not just stdin EOF — and Python's default SIGHUP action terminated the process before the teardown `finally` ran, leaking the runtime + keep-alive daemon. Now `--rm` installs SIGHUP/SIGTERM/SIGINT handlers that run the stop (idempotent with the `finally`).
+2026-07-23: Applied go/pystyle readability to the ssh code (80-col reflow, Args/Returns/Raises docstrings) and upgraded the integration test from a `--help` smoke into a real end-to-end: it drives a live remote command over `colab ssh --proxy-mode` used as an OpenSSH ProxyCommand (handshake + pubkey-header auth + bridge + remote exec), asserts the RSA-key rejection, and verifies no orphan VM — plus an always-on offline check (help flags + unknown-session exit 2). The live part now auto-runs when auth is present instead of being `RUN_LIVE`-gated.
 ---
 
 # Design: `colab ssh` — SSH-over-WebSocket Runtime Access
@@ -137,6 +138,12 @@ Interactive `ssh` forces a PTY (`-t`) and runs a `cd /content` remote command
 (host before the command, `2>/dev/null` tolerance for a missing directory).
 
 ### Integration test (`integration/repro_ssh/`)
-A non-interactive help smoke test that always runs, plus a documented live
-end-to-end scenario (guarded behind `RUN_LIVE=1`) that requires a runtime
-exposing the SSH endpoint.
+Two parts. An offline smoke that always runs (no VM): ``--help`` advertises the
+documented flags, and an unknown session exits 2 with an actionable message. A
+live end-to-end that runs when auth is present (allocates a CPU VM): it uses
+``colab ssh --proxy-mode`` as an OpenSSH ProxyCommand to run a real remote
+command over the WebSocket bridge -- exercising the same connect ->
+pubkey-header auth -> handshake -> bridge -> remote-exec path as the interactive
+shell, minus the TTY -- asserts the RSA-key rejection, and verifies ``colab
+stop`` leaves no orphan VM. The interactive shell (raw TTY, ``/content``) still
+cannot be driven headlessly and remains a documented manual step.
