@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for `colab ssh`: connect to a Colab runtime via SSH-over-WebSocket.
+"""Tests for `colab ssh`.
 
 Covers WebSocket URL construction, pubkey resolution (--identity vs ~/.ssh
 scan, including its failure paths), per-status error-message mapping, the
