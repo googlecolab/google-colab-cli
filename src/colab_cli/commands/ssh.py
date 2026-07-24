@@ -38,6 +38,7 @@ import contextlib
 import os
 from pathlib import Path
 import select
+import shlex
 import signal
 import subprocess
 import sys
@@ -388,13 +389,6 @@ def _bridge_proxy_mode(ws: websocket.WebSocket) -> int:
     return 0
 
 
-def _shquote(s: str) -> str:
-    """Quotes a single argument for an OpenSSH ProxyCommand string."""
-    if s and all(c.isalnum() or c in "-_./@:=," for c in s):
-        return s
-    return "'" + s.replace("'", "'\\''") + "'"
-
-
 def _proxy_command(session: SessionState, identity: Optional[str]) -> str:
     """Builds the OpenSSH ProxyCommand that bridges this session's WebSocket.
 
@@ -412,7 +406,7 @@ def _proxy_command(session: SessionState, identity: Optional[str]) -> str:
     ]
     if identity:
         self_cmd.extend(["--identity", identity])
-    return " ".join(_shquote(a) for a in self_cmd)
+    return shlex.join(self_cmd)
 
 
 def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:

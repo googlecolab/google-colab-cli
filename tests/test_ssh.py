@@ -22,7 +22,9 @@ vs --proxy-mode).
 """
 
 import io
+import shlex
 import subprocess
+import sys
 from unittest.mock import MagicMock
 
 from colab_cli.cli import app
@@ -233,23 +235,56 @@ def test_bridge_proxy_mode_pumps_ws_to_stdout(mocker):
     ws.close.assert_called()
 
 
-# --- shell quoting ----------------------------------------------------------
+# --- ProxyCommand shell quoting ---------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("raw", "quoted"),
+    "name",
     [
-        ("simple", "simple"),
-        ("/abs/path/file", "/abs/path/file"),
-        ("a@b.c:d=e,f", "a@b.c:d=e,f"),
-        ("with space", "'with space'"),
-        ("a'b", "'a'\\''b'"),
-        ("", "''"),
+        "simple",
+        "with space",
+        "a'b",
+        "a@b.c:d=e,f",
+        "$(touch /tmp/pwned)",
+        "a;rm -rf /",
+        "ünïcode",
     ],
-    ids=["word", "path", "safe-punct", "space", "single-quote", "empty"],
+    ids=[
+        "word",
+        "space",
+        "single-quote",
+        "safe-punct",
+        "cmd-substitution",
+        "semicolon",
+        "non-ascii",
+    ],
 )
-def test_shquote(raw, quoted):
-    assert ssh_module._shquote(raw) == quoted
+@pytest.mark.parametrize(
+    "identity", [None, "/k/id ed25519"], ids=["no-identity", "identity-space"]
+)
+def test_proxy_command_round_trips_through_the_shell(name, identity):
+    """The ProxyCommand string must re-parse into the exact argv.
+
+    `ssh` hands the ProxyCommand to /bin/sh, so every argument has to survive
+    word-splitting verbatim -- a hostile session name must arrive as one
+    literal argument, never as a new word or a substitution.
+    """
+    cmd = ssh_module._proxy_command(_make_session(name=name), identity)
+    argv = shlex.split(cmd)
+
+    assert argv[:5] == [
+        sys.executable,
+        "-m",
+        "colab_cli.cli",
+        "ssh",
+        "--proxy-mode",
+    ]
+    assert argv[5] == "-s"
+    assert argv[6] == name  # verbatim, one argument
+    if identity:
+        assert argv[7:] == ["--identity", identity]
+    else:
+        assert argv[7:] == []
 
 
 # --- session resolution ------------------------------------------------------
