@@ -182,8 +182,14 @@ def test_proxy_mode_no_session_does_not_autocreate(mock_common_state, mocker):
 @pytest.mark.parametrize(
     ("extra_args", "expect_msg"),
     [
-        (["--proxy-mode", "-s", "colab", "--gpu", "T4"], "already exists"),
-        (["-s", "colab", "--tpu", "v5e1"], "ignored"),
+        (
+            ["--proxy-mode", "-s", "colab", "--gpu", "T4"],
+            "only applies to a created runtime",
+        ),
+        (
+            ["-s", "colab", "--tpu", "v5e1"],
+            "only applies to a created runtime",
+        ),
     ],
     ids=["proxy-existing", "interactive-reuse"],
 )

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Connect to a Colab runtime over the ``/colab/ssh`` WebSocket endpoint.
+"""Connect to a Colab runtime through ssh.
 
 Modes:
 
@@ -42,7 +42,7 @@ import signal
 import subprocess
 import sys
 import threading
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import urlparse
 import uuid
 
@@ -60,12 +60,50 @@ _SSH_HOST = "root@colab-runtime"
 _DEFAULT_REMOTE_DIR = "/content"
 
 
+def _pubkey_from_identity(identity: str) -> str:
+    """Derives the public key from a private key via ``ssh-keygen -y -f``.
+
+    Args:
+      identity: Path to the private key (``~`` is expanded).
+
+    Returns:
+      The public key text.
+
+    Raises:
+      typer.Exit: If the file is missing, ssh-keygen fails, or it yields no key
+        (exit code 2).
+    """
+    identity = os.path.expanduser(identity)
+    if not os.path.exists(identity):
+        typer.echo(f"[colab] --identity {identity}: file not found.", err=True)
+        raise typer.Exit(code=2)
+    try:
+        res = subprocess.run(
+            ["ssh-keygen", "-y", "-f", identity],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        typer.echo(
+            f"[colab] failed to derive public key from {identity}: {e}",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    pubkey = res.stdout.strip()
+    if not pubkey:
+        typer.echo(
+            f"[colab] ssh-keygen produced no key for {identity}.", err=True
+        )
+        raise typer.Exit(code=2)
+    return pubkey
+
+
 def _resolve_pubkey(identity: Optional[str]) -> str:
     """Returns the public key for the ``X-Colab-Ssh-Pubkey`` header.
 
-    With ``identity``, derives it from the private key via ``ssh-keygen -y -f``;
-    otherwise scans ``~/.ssh`` for the first existing ``id_<type>.pub`` in
-    preference order.
+    With ``identity``, derives it from that private key; otherwise scans
+    ``~/.ssh`` for the first existing ``id_<type>.pub`` in preference order.
 
     Args:
       identity: Path to a private key, or None to scan ``~/.ssh``.
@@ -74,36 +112,10 @@ def _resolve_pubkey(identity: Optional[str]) -> str:
       The public key text to send verbatim in the header.
 
     Raises:
-      typer.Exit: If the identity file is missing, key derivation fails, or no
-        default key is found (exit code 2).
+      typer.Exit: If no usable key is found (exit code 2).
     """
     if identity:
-        identity = os.path.expanduser(identity)
-        if not os.path.exists(identity):
-            msg = f"[colab] --identity {identity}: file not found."
-            typer.echo(msg, err=True)
-            raise typer.Exit(code=2)
-        try:
-            res = subprocess.run(
-                ["ssh-keygen", "-y", "-f", identity],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            pubkey = res.stdout.strip()
-            if not pubkey:
-                typer.echo(
-                    f"[colab] ssh-keygen produced no key for {identity}.",
-                    err=True,
-                )
-                raise typer.Exit(code=2)
-            return pubkey
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            typer.echo(
-                f"[colab] failed to derive public key from {identity}: {e}",
-                err=True,
-            )
-            raise typer.Exit(code=2)
+        return _pubkey_from_identity(identity)
 
     ssh_dir = Path(os.path.expanduser("~/.ssh"))
     for name in _KEY_TYPES:
@@ -221,59 +233,62 @@ def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
       A human-readable, actionable error message.
     """
     snippet = body.decode("utf-8", errors="replace").strip()[:200]
-    if status == 400:
-        if "missing pubkey" in snippet:
-            return (
+    match status:
+        case 400 if "missing pubkey" in snippet:
+            message = (
                 "Server rejected request: missing pubkey header. This is "
                 "likely a CLI bug; please file a colab-cli issue."
             )
-        if "unsupported key type" in snippet:
-            return (
+        case 400 if "unsupported key type" in snippet:
+            message = (
                 "Server rejected pubkey: unsupported key type. Accepted "
                 "key types: ssh-ed25519, ecdsa-sha2-nistp{256,384,521}. RSA "
                 "keys (ssh-rsa) are NOT accepted. Generate an Ed25519 key "
                 "with `ssh-keygen -t ed25519` and re-run (optionally with "
                 "--identity)."
             )
-        return (
-            f"Server rejected pubkey (HTTP 400): {snippet}. "
-            "Re-check your key with `ssh-keygen -y -f <key>`."
-        )
-    if status == 401:
-        return (
-            "Authentication failed (HTTP 401): the runtime-proxy token is "
-            "invalid. The session may have expired - try `colab new`."
-        )
-    if status == 403:
-        return (
-            "Forbidden (HTTP 403): the server refused this request; the "
-            "runtime-proxy token may lack permission for this action. (A "
-            "runtime without SSH enabled returns 404, not 403.)"
-        )
-    if status == 404:
-        return (
-            "Endpoint not found (HTTP 404): this runtime does not expose the "
-            "/colab/ssh endpoint. SSH is enabled at runtime creation, so an "
-            "older or non-SSH runtime will not have it - run `colab new` for "
-            "a fresh runtime with SSH."
-        )
-    if status == 429:
-        return (
-            "Already-active SSH session (HTTP 429): another `colab ssh` is "
-            "connected to this runtime. Disconnect it and retry."
-        )
-    if status == 502:
-        return (
-            "Bad gateway (HTTP 502): the runtime's local sshd is "
-            "unreachable. The runtime may be unhealthy; try `colab status`, "
-            "then `colab stop` + `colab new`."
-        )
-    if status is not None:
-        return f"WebSocket upgrade rejected (HTTP {status}): {snippet}"
-    return (
-        f"WebSocket upgrade failed without an HTTP status: {snippet}. "
-        "Check your network."
-    )
+        case 400:
+            message = (
+                f"Server rejected pubkey (HTTP 400): {snippet}. "
+                "Re-check your key with `ssh-keygen -y -f <key>`."
+            )
+        case 401:
+            message = (
+                "Authentication failed (HTTP 401): the runtime-proxy token "
+                "is invalid. The session may have expired - try `colab new`."
+            )
+        case 403:
+            message = (
+                "Forbidden (HTTP 403): the server refused this request; the "
+                "runtime-proxy token may lack permission for this action. (A "
+                "runtime without SSH enabled returns 404, not 403.)"
+            )
+        case 404:
+            message = (
+                "Endpoint not found (HTTP 404): this runtime does not expose "
+                "the /colab/ssh endpoint. SSH is enabled at runtime creation, "
+                "so an older or non-SSH runtime will not have it - run "
+                "`colab new` for a fresh runtime with SSH."
+            )
+        case 429:
+            message = (
+                "Already-active SSH session (HTTP 429): another `colab ssh` "
+                "is connected to this runtime. Disconnect it and retry."
+            )
+        case 502:
+            message = (
+                "Bad gateway (HTTP 502): the runtime's local sshd is "
+                "unreachable. The runtime may be unhealthy; try `colab "
+                "status`, then `colab stop` + `colab new`."
+            )
+        case None:
+            message = (
+                "WebSocket upgrade failed without an HTTP status: "
+                f"{snippet}. Check your network."
+            )
+        case _:
+            message = f"WebSocket upgrade rejected (HTTP {status}): {snippet}"
+    return message
 
 
 def _connect_websocket(url: str, pubkey: str) -> websocket.WebSocket:
@@ -316,6 +331,17 @@ def _connect_websocket(url: str, pubkey: str) -> websocket.WebSocket:
         raise typer.Exit(code=1)
 
 
+def _close_quietly(ws: websocket.WebSocket) -> None:
+    """Closes a WebSocket, ignoring any error (best-effort teardown)."""
+    try:
+        ws.close()
+    except Exception:  # Best-effort close.
+        pass
+
+
+_DATA_OPCODES = (websocket.ABNF.OPCODE_BINARY, websocket.ABNF.OPCODE_TEXT)
+
+
 def _bridge_proxy_mode(ws: websocket.WebSocket) -> int:
     """Bridges the WebSocket <-> stdin/stdout as an OpenSSH ProxyCommand.
 
@@ -340,10 +366,7 @@ def _bridge_proxy_mode(ws: websocket.WebSocket) -> int:
         except (OSError, websocket.WebSocketException):
             pass
         finally:
-            try:
-                ws.close()
-            except Exception:  # Best-effort close.
-                pass
+            _close_quietly(ws)
 
     threading.Thread(target=stdin_to_ws, daemon=True).start()
 
@@ -352,21 +375,16 @@ def _bridge_proxy_mode(ws: websocket.WebSocket) -> int:
             opcode, frame = ws.recv_data(control_frame=True)
             if opcode == websocket.ABNF.OPCODE_CLOSE:
                 break
-            if opcode in (
-                websocket.ABNF.OPCODE_BINARY,
-                websocket.ABNF.OPCODE_TEXT,
-            ):
-                if isinstance(frame, str):
-                    frame = frame.encode("utf-8")
-                sys.stdout.buffer.write(frame)
-                sys.stdout.buffer.flush()
+            if opcode not in _DATA_OPCODES:
+                continue
+            if isinstance(frame, str):
+                frame = frame.encode("utf-8")
+            sys.stdout.buffer.write(frame)
+            sys.stdout.buffer.flush()
     except (websocket.WebSocketException, OSError):
         pass
     finally:
-        try:
-            ws.close()
-        except Exception:  # Best-effort close.
-            pass
+        _close_quietly(ws)
     return 0
 
 
@@ -443,6 +461,149 @@ def _run_interactive_ssh(session: SessionState, identity: Optional[str]) -> int:
     return subprocess.call(ssh_args)
 
 
+def _select_proxy_session(
+    session: Optional[str], gpu: Optional[str], tpu: Optional[str]
+) -> tuple[SessionState, bool]:
+    """Resolves (or creates) the session for ``--proxy-mode``.
+
+    With ``-s NAME`` and no such session, creates it -- routing creation
+    output to stderr so stdout stays the clean ssh byte stream -- so a
+    ``~/.ssh/config`` host works on first connect. Otherwise resolves the
+    named (or single active) session.
+
+    Args:
+      session: The requested session name, or None.
+      gpu: GPU accelerator for an auto-created runtime.
+      tpu: TPU accelerator for an auto-created runtime.
+
+    Returns:
+      A ``(session_state, created)`` pair.
+    """
+    if session and not _session_exists(session):
+        with contextlib.redirect_stdout(sys.stderr):
+            return _auto_create_session(gpu, tpu, name=session), True
+    return _resolve_session(session), False
+
+
+def _select_interactive_session(
+    session: Optional[str], gpu: Optional[str], tpu: Optional[str]
+) -> tuple[SessionState, bool]:
+    """Resolves (or auto-creates) the session for an interactive shell.
+
+    Bare ``colab ssh`` with an empty store auto-creates a runtime (like
+    ``colab new``); otherwise the named or single active session is resolved.
+
+    Args:
+      session: The requested session name, or None.
+      gpu: GPU accelerator for an auto-created runtime.
+      tpu: TPU accelerator for an auto-created runtime.
+
+    Returns:
+      A ``(session_state, created)`` pair.
+    """
+    if not session and not _has_local_sessions():
+        return _auto_create_session(gpu, tpu), True
+    return _resolve_session(session), False
+
+
+def _warn_accelerator_ignored(
+    gpu: Optional[str], tpu: Optional[str], created: bool
+) -> None:
+    """Warns that ``--gpu/--tpu`` are no-ops when no runtime was created."""
+    if (gpu or tpu) and not created:
+        typer.echo(
+            "[colab] --gpu/--tpu ignored: only applies to a created runtime.",
+            err=True,
+        )
+
+
+def _install_rm_signal_handlers(do_rm: Callable[[], None]) -> None:
+    """Routes terminating signals to ``do_rm`` then a clean exit.
+
+    OpenSSH ends a ProxyCommand on disconnect by sending SIGHUP (not just
+    stdin EOF); Python's default SIGHUP action would terminate us WITHOUT
+    running teardown, leaking the runtime and its keep-alive daemon. Convert
+    SIGHUP/SIGTERM/SIGINT into ``do_rm`` + ``os._exit`` so ``--rm`` teardown
+    always runs.
+
+    Args:
+      do_rm: Idempotent teardown callback to run before exiting.
+    """
+
+    def _on_signal(signum, frame):
+        do_rm()
+        os._exit(0)
+
+    for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _on_signal)
+        except (ValueError, OSError):
+            pass  # e.g. not running in the main thread
+
+
+def _run_proxy_bridge(
+    s: SessionState, identity: Optional[str], rm: bool
+) -> int:
+    """Runs the ``--proxy-mode`` WebSocket-stdio bridge, honoring ``--rm``.
+
+    Args:
+      s: The session to bridge.
+      identity: Optional private key path for the pubkey header.
+      rm: If True, stop the session when the bridge closes or a terminating
+        signal arrives.
+
+    Returns:
+      The bridge exit code.
+    """
+    # --rm teardown must be idempotent: it can fire from either a terminating
+    # signal (how OpenSSH ends a ProxyCommand) or the `finally` clean-close
+    # path. Output goes to stderr because our stdout is the ssh byte stream.
+    done = {"stopped": False}
+
+    def _do_rm() -> None:
+        if rm and not done["stopped"]:
+            done["stopped"] = True
+            with contextlib.redirect_stdout(sys.stderr):
+                _stop_session(s.name)
+
+    if rm:
+        _install_rm_signal_handlers(_do_rm)
+
+    pubkey = _resolve_pubkey(identity)
+    ws = _connect_websocket(_build_ws_url(s), pubkey)
+    try:
+        return _bridge_proxy_mode(ws)
+    finally:
+        _do_rm()
+
+
+def _run_interactive_shell(
+    s: SessionState, identity: Optional[str], created: bool, rm: bool
+) -> int:
+    """Runs the interactive ssh shell, honoring ``--rm`` on exit.
+
+    Args:
+      s: The session to connect to.
+      identity: Optional private key path forwarded to ssh.
+      created: Whether this command auto-created the runtime.
+      rm: If True, stop an auto-created runtime on exit.
+
+    Returns:
+      The exit code of the ssh subprocess.
+    """
+    if rm and not created:
+        typer.echo(
+            "[colab] --rm ignored: only a runtime auto-created by `colab ssh` "
+            "is removed on exit.",
+            err=True,
+        )
+    try:
+        return _run_interactive_ssh(s, identity)
+    finally:
+        if created and rm:
+            _stop_session(s.name)
+
+
 def ssh(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
@@ -513,88 +674,14 @@ def ssh(
     flag above still applies (``-s NAME`` creates the session if missing,
     ``--gpu/--tpu`` set its accelerator, ``--rm`` stops it on disconnect).
     """
-    created = False
-
     if proxy_mode:
-        # --proxy-mode honors every flag. With -s NAME, ensure NAME exists
-        # (create with --gpu/--tpu if missing) so a config host works on first
-        # connect; creation output is routed to stderr so stdout stays the
-        # clean ssh byte stream. --rm stops the session when the bridge closes.
-        if session and not _session_exists(session):
-            with contextlib.redirect_stdout(sys.stderr):
-                s = _auto_create_session(gpu, tpu, name=session)
-            created = True
-        else:
-            s = _resolve_session(session)
+        s, created = _select_proxy_session(session, gpu, tpu)
+        _warn_accelerator_ignored(gpu, tpu, created)
+        raise typer.Exit(code=_run_proxy_bridge(s, identity, rm))
 
-        if (gpu or tpu) and not created:
-            typer.echo(
-                "[colab] --gpu/--tpu ignored: the session already exists.",
-                err=True,
-            )
-
-        # --rm teardown must survive how OpenSSH ends a ProxyCommand: on
-        # disconnect it sends SIGHUP (verified), not just stdin EOF, and
-        # Python's default SIGHUP action would terminate us WITHOUT running
-        # the `finally` below -- leaking the runtime and its keep-alive
-        # daemon. Convert the terminating signals into a clean stop. The
-        # `finally` still covers the rare clean-close path; a guard keeps
-        # teardown idempotent. Output goes to stderr because our stdout is
-        # the ssh byte stream.
-        _rm_state = {"done": False}
-
-        def _do_rm() -> None:
-            if rm and not _rm_state["done"]:
-                _rm_state["done"] = True
-                with contextlib.redirect_stdout(sys.stderr):
-                    _stop_session(s.name)
-
-        if rm:
-
-            def _on_signal(signum, frame):
-                _do_rm()
-                os._exit(0)
-
-            for _sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
-                try:
-                    signal.signal(_sig, _on_signal)
-                except (ValueError, OSError):
-                    pass  # e.g. not running in the main thread
-
-        pubkey = _resolve_pubkey(identity)
-        ws = _connect_websocket(_build_ws_url(s), pubkey)
-        try:
-            code = _bridge_proxy_mode(ws)
-        finally:
-            _do_rm()
-        raise typer.Exit(code=code)
-
-    # Interactive shell.
-    if not session and not _has_local_sessions():
-        s = _auto_create_session(gpu, tpu)
-        created = True
-    else:
-        s = _resolve_session(session)
-
-    if (gpu or tpu) and not created:
-        typer.echo(
-            "[colab] --gpu/--tpu ignored unless a runtime is auto-created.",
-            err=True,
-        )
-
-    if rm and not created:
-        typer.echo(
-            "[colab] --rm ignored: only a runtime auto-created by `colab ssh` "
-            "is removed on exit.",
-            err=True,
-        )
-
-    try:
-        code = _run_interactive_ssh(s, identity)
-    finally:
-        if created and rm:
-            _stop_session(s.name)
-    raise typer.Exit(code=code)
+    s, created = _select_interactive_session(session, gpu, tpu)
+    _warn_accelerator_ignored(gpu, tpu, created)
+    raise typer.Exit(code=_run_interactive_shell(s, identity, created, rm))
 
 
 def register(app: typer.Typer):
