@@ -7,6 +7,7 @@ log:
 2026-07-22: Fixed `--proxy-mode --rm` not tearing down on disconnect. OpenSSH sends the ProxyCommand SIGHUP (verified empirically) when the session ends — not just stdin EOF — and Python's default SIGHUP action terminated the process before the teardown `finally` ran, leaking the runtime + keep-alive daemon. Now `--rm` installs SIGHUP/SIGTERM/SIGINT handlers that run the stop (idempotent with the `finally`).
 2026-07-23: Applied go/pystyle readability to the ssh code (80-col reflow, Args/Returns/Raises docstrings) and upgraded the integration test from a `--help` smoke into a real end-to-end: it drives a live remote command over `colab ssh --proxy-mode` used as an OpenSSH ProxyCommand (handshake + pubkey-header auth + bridge + remote exec), asserts the RSA-key rejection, and verifies no orphan VM — plus an always-on offline check (help flags + unknown-session exit 2). The live part now auto-runs when auth is present instead of being `RUN_LIVE`-gated.
 2026-07-24: Refactored `ssh()` into intent-named helpers (`_select_proxy_session`, `_select_interactive_session`, `_run_proxy_bridge`, `_run_interactive_shell`, `_install_rm_signal_handlers`, `_warn_accelerator_ignored`) — behavior-preserving — and unified the two `--gpu/--tpu ignored` messages into one. Added `tests/test_ssh_lifecycle.py` pinning lifecycle guarantees: `--rm` teardown survives an exception (try/finally), ssh/bridge exit-code propagation, `--proxy-mode` stdout cleanliness (create/`--rm` chatter stays on stderr), auto-create failure aborts before connect, `--gpu`+`--tpu` both forwarded to `colab new`, `--rm` idempotency across the signal + finally paths, and reused-session `--rm` teardown. Trimmed prose in this doc + the integration README.
+2026-07-24: Expanded the `~/.ssh/config` section with a concrete, de-personalized working stanza (bare `colab`, `-s colab --gpu T4 --rm`), the non-login-shell `PATH` caveat, notes that `--rm` makes the host ephemeral and a `-s NAME` miss auto-creates the runtime, and a few ready-to-use examples (VS Code Remote-SSH / plain `ssh` once the Host is defined, and a one-shot `ssh ... nvidia-smi` via ProxyCommand). Docs only; no code change.
 ---
 
 # Design: `colab ssh` — SSH-over-WebSocket Runtime Access
@@ -49,6 +50,36 @@ first connect, `--gpu/--tpu` size it, and `--rm` makes the host ephemeral. Use a
 where a bare `colab` may not be on `PATH`. External SSH tools run their own
 remote command, so to also land in `/content` add `RequestTTY yes` and
 `RemoteCommand cd /content 2>/dev/null; exec bash -l`.
+
+A concrete, ready-to-paste stanza (a real working config):
+
+```
+Host colab
+  User root
+  ProxyCommand colab ssh --proxy-mode -s colab --gpu T4 --rm
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  RequestTTY yes
+  RemoteCommand cd /content 2>/dev/null; exec bash -l
+```
+
+If a bare `colab` is not on `PATH` in ssh's non-login `ProxyCommand` shell,
+replace it with the absolute path to your `colab` binary (e.g.
+`/path/to/.venv/bin/colab`). With `-s colab`, the first connect auto-creates the
+`colab` session (on a T4 here) and `--rm` stops that runtime on disconnect, so
+the host is ephemeral.
+
+A few examples once the stanza is in place:
+
+```
+# VS Code Remote-SSH, JetBrains Gateway, or plain ssh — the Host just works:
+ssh colab
+
+# One-shot remote command without a config entry (SESSION is your session name;
+# ssh expands %h to it, which colab ssh receives as -s SESSION). The runtime
+# authorizes root, so connect as root@ -- %h is the host only, not the user:
+ssh -o ProxyCommand="colab ssh --proxy-mode -s %h" root@SESSION nvidia-smi
+```
 
 ## Behavior
 
