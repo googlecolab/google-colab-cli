@@ -169,21 +169,6 @@ print("Device Name:", torch.cuda.get_device_name(0))
 
 Make the script executable (`chmod +x script.py`) and run it: `./script.py`. The `--keep` option tells the CLI to preserve the session VM on completion so you can re-execute or inspect logs.
 
-### SSH / IDE Remote-Dev
-
-Open an SSH shell on your runtime, or use `colab ssh` as an OpenSSH `ProxyCommand` bridge to drive IDE remote-development (VS Code Remote-SSH, JetBrains Gateway, or plain `ssh`):
-
-```bash
-# Interactive shell (uses your only active session, or auto-creates one):
-colab ssh
-
-# One-shot remote command via ProxyCommand (SESSION is your session name;
-# ssh expands %h to it, which colab ssh receives as -s SESSION):
-ssh -o ProxyCommand="colab ssh --proxy-mode -s %h" root@SESSION nvidia-smi
-```
-
-For `~/.ssh/config` setup and more examples, see [SSH Access](docs/06_ssh_access.md).
-
 ---
 
 ## Deep Dive Documentation
