@@ -356,7 +356,7 @@ def update_command(
         ),
     ] = False,
 ):
-    """Check for latest version and print if an update is available"""
+    """Check for updates"""
     auto_update.check_for_updates(quiet=False)
     if not install:
         return

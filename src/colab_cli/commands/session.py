@@ -424,6 +424,48 @@ def spawn_keep_alive(
     return p.pid
 
 
+def is_process_running(pid: Optional[int]) -> bool:
+    """Return True when pid appears to still be alive.
+
+    This is intentionally best-effort: a stale keep-alive PID should be
+    treated as dead so callers can spawn a fresh daemon before a long run.
+    """
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+    except Exception:
+        return False
+
+
+def ensure_keep_alive_daemon(s, state) -> bool:
+    """Ensure a session has a live detached keep-alive daemon.
+
+    Returns True if a new daemon was spawned. Commands that may run for a long
+    time call this before execution so a stale PID does not let Colab idle-prune
+    the VM mid-cell.
+    """
+    if is_process_running(getattr(s, "keep_alive_pid", None)):
+        return False
+
+    s.keep_alive_pid = spawn_keep_alive(
+        s.endpoint,
+        s.name,
+        auth_provider=state.auth_provider,
+        config_path=state.config_path,
+    )
+    state.store.add(s)
+    state.history.log_event(
+        s.name,
+        "keep_alive_restarted",
+        {"endpoint": s.endpoint, "pid": s.keep_alive_pid},
+    )
+    return True
+
+
 def keep_alive(
     endpoint: Annotated[str, typer.Argument(help="Endpoint ID")],
     session_name: Annotated[str, typer.Argument(help="Session name")],

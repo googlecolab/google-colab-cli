@@ -16,6 +16,8 @@
 execution that bundles `colab new` + `colab exec` + `colab stop`.
 """
 
+import json
+import os
 from unittest.mock import MagicMock
 
 import pytest
@@ -68,6 +70,46 @@ def assign_response():
 def script_path(tmp_path):
     p = tmp_path / "script.py"
     p.write_text("print('hello from script')\n")
+    return p
+
+
+@pytest.fixture
+def notebook_path(tmp_path):
+    p = tmp_path / "notebook.ipynb"
+    p.write_text(
+        json.dumps(
+            {
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "id": "cell-a",
+                        "metadata": {},
+                        "outputs": [],
+                        "source": "# @title Setup\nprint('cell a')",
+                    },
+                    {
+                        "cell_type": "markdown",
+                        "id": "cell-md",
+                        "metadata": {},
+                        "source": "# ignored",
+                    },
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "id": "cell-b",
+                        "metadata": {},
+                        "outputs": [],
+                        "source": "print('cell b')",
+                    },
+                ],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
     return p
 
 
@@ -184,6 +226,40 @@ def test_run_passes_argv(
     assert "'alpha'" in body
     assert "'beta'" in body
     assert "'--flag-for-script'" in body
+
+
+def test_run_executes_ipynb_cells(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    mock_spawn_keep_alive,
+    assign_response,
+    notebook_path,
+):
+    mock_client.assign.return_value = assign_response
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.update({"s": s})
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+
+    result = runner.invoke(app, ["run", str(notebook_path)])
+
+    assert result.exit_code == 0, result.output
+    code_calls = [c.args[0] for c in mock_runtime.execute_code.call_args_list]
+    assert any("print('cell a')" in code for code in code_calls)
+    assert any("print('cell b')" in code for code in code_calls)
+    body_call = next(c for c in mock_runtime.execute_code.call_args_list if "cell a" in c.args[0])
+    assert body_call.kwargs.get("timeout") is None
+    assert os.path.exists(str(notebook_path).replace(".ipynb", "_output.ipynb"))
+    mock_client.unassign.assert_called_once_with("ep-123")
+
+
+def test_run_rejects_ipynb_args_before_assign(mock_client, notebook_path):
+    result = runner.invoke(app, ["run", str(notebook_path), "--some-arg"])
+    assert result.exit_code != 0
+    mock_client.assign.assert_not_called()
 
 
 def test_run_sets_dunder_main(

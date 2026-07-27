@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import datetime
+import threading
 import nbformat
 import os
 import re
@@ -27,6 +28,7 @@ from typing_extensions import Annotated
 from colab_cli.runtime import ColabRuntime
 from colab_cli.utils import handle_image, is_terminal_error, render_display_data
 from colab_cli.console import connect_console
+from colab_cli.commands.session import ensure_keep_alive_daemon
 
 _console = Console()
 
@@ -35,6 +37,74 @@ TITLE_REGEX = re.compile(r"^\s*#\s*@title\s+(.*)", re.MULTILINE)
 
 def is_stdin_tty():
     return sys.stdin.isatty()
+
+
+class KeepAlivePulse:
+    """In-process keep-alive while a foreground command is executing.
+
+    The detached daemon is still the persistent mechanism. This foreground
+    pulse closes the gap where a long cell is running and the daemon is stale,
+    crashed, or delayed by local process launch issues.
+    """
+
+    def __init__(self, state, session, interval: float = 45.0):
+        self.state = state
+        self.session = session
+        self.interval = interval
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def __enter__(self):
+        self.ping()
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self._stop.set()
+        self._thread.join(timeout=2.0)
+
+    def ping(self):
+        try:
+            self.state.client.keep_alive_assignment(self.session.endpoint)
+            return True
+        except Exception:
+            return False
+
+    def _run(self):
+        while not self._stop.wait(self.interval):
+            self.ping()
+
+
+def load_code_blocks_from_file(file: str):
+    code_blocks = []
+    nb = None
+    if file.endswith(".ipynb"):
+        typer.echo(f"[colab] Parsing notebook '{file}'...")
+        with open(file, "r", encoding="utf-8") as f:
+            nb = nbformat.read(f, as_version=4)
+            for cell in nb.cells:
+                # nbformat v4.5+ requires 'id' at the top level
+                if not hasattr(cell, "id") or not cell.id:
+                    cell.id = str(uuid.uuid4())
+
+                if cell.cell_type == "code":
+                    code_blocks.append(
+                        {"code": cell.source, "id": cell.id, "cell": cell}
+                    )
+    else:
+        with open(file, "r", encoding="utf-8") as f:
+            code_blocks.append({"code": f.read(), "id": None})
+    return code_blocks, nb
+
+
+def notebook_cell_identifier(block):
+    code = block["code"]
+    title_match = TITLE_REGEX.search(code)
+    if title_match:
+        return title_match.group(1).strip()
+    if block.get("id"):
+        return block["id"]
+    return ""
 
 
 def save_output(outputs, cell):
@@ -116,7 +186,7 @@ def exec_command(
     timeout: Annotated[
         Optional[float],
         typer.Option("--timeout", help="Timeout in seconds for code execution"),
-    ] = 30.0,
+    ] = None,
 ):
     """Execute code in a session"""
     from colab_cli.common import state
@@ -128,23 +198,9 @@ def exec_command(
         raise typer.Exit(1)
 
     code_blocks = []
+    nb = None
     if file:
-        if file.endswith(".ipynb"):
-            typer.echo(f"[colab] Parsing notebook '{file}'...")
-            with open(file, "r", encoding="utf-8") as f:
-                nb = nbformat.read(f, as_version=4)
-                for cell in nb.cells:
-                    # nbformat v4.5+ requires 'id' at the top level
-                    if not hasattr(cell, "id") or not cell.id:
-                        cell.id = str(uuid.uuid4())
-
-                    if cell.cell_type == "code":
-                        code_blocks.append(
-                            {"code": cell.source, "id": cell.id, "cell": cell}
-                        )
-        else:
-            with open(file, "r") as f:
-                code_blocks.append({"code": f.read(), "id": None})
+        code_blocks, nb = load_code_blocks_from_file(file)
     else:
         if is_stdin_tty():
             typer.echo("[colab] Error: No input provided. Pipe code or provide a file.")
@@ -185,51 +241,47 @@ def exec_command(
         raise e
 
     try:
+        ensure_keep_alive_daemon(s, state)
         is_nb = file and file.endswith(".ipynb")
         s.running = f"exec({file or 'stdin'})"
         state.store.add(s)
 
-        for i, block in enumerate(code_blocks):
-            code = block["code"]
-            identifier = None
-            if is_nb:
-                title_match = TITLE_REGEX.search(code)
-                if title_match:
-                    identifier = title_match.group(1).strip()
-                elif block.get("id"):
-                    identifier = block["id"]
-                else:
-                    identifier = ""
+        with KeepAlivePulse(state, s):
+            for i, block in enumerate(code_blocks):
+                code = block["code"]
+                identifier = None
+                if is_nb:
+                    identifier = notebook_cell_identifier(block)
 
-                identifier_str = f" - {identifier}" if identifier else ""
-                typer.echo(
-                    f"[colab] Executing cell {i + 1}/{len(code_blocks)}{identifier_str}..."
+                    identifier_str = f" - {identifier}" if identifier else ""
+                    typer.echo(
+                        f"[colab] Executing cell {i + 1}/{len(code_blocks)}{identifier_str}..."
+                    )
+
+                s.last_execution = (
+                    file or "stdin",
+                    identifier,
+                    datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 )
+                state.store.add(s)
 
-            s.last_execution = (
-                file or "stdin",
-                identifier,
-                datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            )
-            state.store.add(s)
-
-            outputs = runtime.execute_code(
-                code,
-                output_hook=lambda o: display_output(o, output_image),
-                timeout=timeout,
-            )
-            if "cell" in block:
-                save_output(outputs, block["cell"])
-            state.history.log_event(
-                name,
-                "execution",
-                {
-                    "code": code,
-                    "outputs": outputs,
-                    "cell_index": i if len(code_blocks) > 1 else None,
-                    "cell_id": block.get("id"),
-                },
-            )
+                outputs = runtime.execute_code(
+                    code,
+                    output_hook=lambda o: display_output(o, output_image),
+                    timeout=timeout,
+                )
+                if "cell" in block:
+                    save_output(outputs, block["cell"])
+                state.history.log_event(
+                    name,
+                    "execution",
+                    {
+                        "code": code,
+                        "outputs": outputs,
+                        "cell_index": i if len(code_blocks) > 1 else None,
+                        "cell_id": block.get("id"),
+                    },
+                )
     finally:
         s.running = None
         state.store.add(s)

@@ -13,13 +13,13 @@
 # limitations under the License.
 
 """
-`colab run <script.py> [args...]` — shebang-friendly one-shot execution.
+`colab run <script.py|notebook.ipynb> [args...]` — one-shot execution.
 
 Combines `colab new` + `colab exec` + `colab stop` into a single fire-and-forget
-invocation. The Python script's body runs in a freshly-allocated Colab kernel
+invocation. Python scripts run in a freshly-allocated Colab kernel
 with `sys.argv` set as if it had been invoked via `python script.py [args...]`,
-and the VM is automatically released when the script finishes (unless `--keep`
-is passed).
+notebooks run cell-by-cell, and the VM is automatically released when execution
+finishes unless `--keep` is passed.
 
 Designed to support shebangs:
 
@@ -184,18 +184,19 @@ def _make_run_output_hook(output_image=None):
 
 def run_command(
     ctx: typer.Context,
-    script: Annotated[
+    file: Annotated[
         str,
         typer.Argument(
-            help="Path to a local Python file to execute on a fresh Colab VM."
+            metavar="FILE",
+            help="Path to a local Python file or .ipynb notebook to execute on a fresh Colab VM."
         ),
     ],
     script_args: Annotated[
         Optional[List[str]],
         typer.Argument(
             help=(
-                "Arguments forwarded to the script as sys.argv[1:]. "
-                "Anything after the script path is passed through verbatim."
+                "Arguments forwarded to .py scripts as sys.argv[1:]. "
+                "Rejected for .ipynb notebooks."
             ),
         ),
     ] = None,
@@ -228,7 +229,7 @@ def run_command(
         typer.Option(
             "--keep",
             help=(
-                "Do not stop the session after the script finishes. The session "
+                "Do not stop the session after the file finishes. The session "
                 "remains in `colab sessions` until you run `colab stop`."
             ),
         ),
@@ -236,9 +237,9 @@ def run_command(
     timeout: Annotated[
         Optional[float],
         typer.Option("--timeout", help="Timeout in seconds for code execution"),
-    ] = 30.0,
+    ] = None,
 ):
-    """Run a Python script on a fresh Colab VM, then release the VM
+    """Run a local file on Colab
 
     Designed to be used as a shebang interpreter, e.g.
 
@@ -251,10 +252,12 @@ def run_command(
 
     script_args = script_args or []
 
-    # AGENTS.md item 10: validate locally BEFORE allocating a VM. A typo'd
-    # script path should not cost the user real compute.
-    if not os.path.isfile(script):
-        typer.echo(f"[colab] Script not found: {script}", err=True)
+    if not os.path.isfile(file):
+        typer.echo(f"[colab] File not found: {file}", err=True)
+        raise typer.Exit(2)
+    is_notebook = file.endswith(".ipynb")
+    if is_notebook and script_args:
+        typer.echo("[colab] Notebook runs do not accept script arguments.", err=True)
         raise typer.Exit(2)
 
     name = session or f"run-{uuid.uuid4().hex[:6]}"
@@ -339,7 +342,7 @@ def run_command(
             "via": "run",
         },
     )
-    typer.echo(f"[colab] Session READY ({name}). Executing {script}...", err=True)
+    typer.echo(f"[colab] Session READY ({name}). Executing {file}...", err=True)
 
     # ----- Execute the script -------------------------------------------------
     exit_code = 0
@@ -363,6 +366,14 @@ def run_command(
     )
 
     try:
+        from colab_cli.commands.execution import (
+            KeepAlivePulse,
+            display_output,
+            load_code_blocks_from_file,
+            notebook_cell_identifier,
+            save_output,
+        )
+
         # Same /content prelude as `colab exec` for consistency.
         try:
             runtime.execute_code(
@@ -379,34 +390,84 @@ def run_command(
                 raise typer.Exit(1)
             raise
 
-        payload = _build_script_payload(script, script_args)
-        s.running = f"run({os.path.basename(script)})"
-        s.last_execution = (
-            script,
-            None,
-            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        )
-        state.store.add(s)
+        with KeepAlivePulse(state, s):
+            if is_notebook:
+                import nbformat
 
-        try:
-            outputs = runtime.execute_code(
-                payload, output_hook=_make_run_output_hook(), timeout=timeout
-            )
-        except Exception:
-            # Genuine transport-level failure. Cleanup still happens via the
-            # outer finally; surface non-zero exit so callers/CI notice.
-            exit_code = 1
+                code_blocks, nb = load_code_blocks_from_file(file)
+                s.running = f"run({os.path.basename(file)})"
+                state.store.add(s)
+
+                for i, block in enumerate(code_blocks):
+                    identifier = notebook_cell_identifier(block)
+                    identifier_str = f" - {identifier}" if identifier else ""
+                    typer.echo(
+                        f"[colab] Executing cell {i + 1}/{len(code_blocks)}{identifier_str}...",
+                        err=True,
+                    )
+                    s.last_execution = (
+                        file,
+                        identifier,
+                        datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    state.store.add(s)
+                    outputs = runtime.execute_code(
+                        block["code"],
+                        output_hook=lambda o: display_output(o),
+                        timeout=timeout,
+                    )
+                    if "cell" in block:
+                        save_output(outputs, block["cell"])
+                    state.history.log_event(
+                        name,
+                        "execution",
+                        {
+                            "code": block["code"],
+                            "outputs": outputs,
+                            "cell_index": i if len(code_blocks) > 1 else None,
+                            "cell_id": block.get("id"),
+                            "via": "run",
+                        },
+                    )
+
+                output_file = os.path.splitext(file)[0] + "_output.ipynb"
+                typer.echo(
+                    f"[colab] Saving notebook with outputs to '{output_file}'...",
+                    err=True,
+                )
+                with open(output_file, "w", encoding="utf-8") as f:
+                    nbformat.write(nb, f)
+            else:
+                payload = _build_script_payload(file, script_args)
+                s.running = f"run({os.path.basename(file)})"
+                s.last_execution = (
+                    file,
+                    None,
+                    datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                state.store.add(s)
+
+                outputs = runtime.execute_code(
+                    payload, output_hook=_make_run_output_hook(), timeout=timeout
+                )
+                exit_code = _exit_code_from_outputs(outputs)
+                if exit_code != 0:
+                    cleanup_reason = "run_failed"
+                state.history.log_event(
+                    name,
+                    "execution",
+                    {"code": payload, "outputs": outputs, "via": "run"},
+                )
+        if exit_code != 0:
             cleanup_reason = "run_failed"
-            raise
-        else:
-            exit_code = _exit_code_from_outputs(outputs)
-            if exit_code != 0:
-                cleanup_reason = "run_failed"
-            state.history.log_event(
-                name,
-                "execution",
-                {"code": payload, "outputs": outputs, "via": "run"},
-            )
+    except Exception:
+        if exit_code == 0:
+            exit_code = 1
+        cleanup_reason = "run_failed"
+        raise
+    else:
+        if exit_code != 0:
+            cleanup_reason = "run_failed"
     finally:
         s.running = None
         state.store.add(s)

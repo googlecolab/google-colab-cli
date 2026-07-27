@@ -18,7 +18,7 @@ Designed to support seamless developer productivity, headless automation, and AI
 
 * **Instant VM Provisioning:** Spin up CPU, GPU (T4, L4, G4, H100, A100), or TPU (v5e1, v6e1) runtimes in seconds.
 * **Robust Code Execution:** Run local Python scripts, Jupyter Notebooks (`.ipynb`), or piped `stdin` code; launch interactive REPLs or raw TTY console shells.
-* **Ephemeral Job Runner (`colab run`):** Provision a fresh VM, execute a local script with forwarded arguments, retrieve output files, and automatically tear down the runtime in a single command.
+* **Ephemeral Job Runner (`colab run`):** Provision a fresh VM, execute a local script or notebook, retrieve output files, and automatically tear down the runtime in a single command.
 * **Automatic Keep-Alive:** Built-in background daemon automatically prevents idle VM termination, keeping resource allocations active without requiring open browser tabs.
 * **Seamless Workspace Automation:** Mount Google Drive, authenticate Google Cloud Platform (GCP) credentials, and install dependencies with high-performance `uv` package management.
 * **State & Log Archival:** Inspect local session states or export interactive history logs to standard Jupyter Notebooks, Markdown, or structured JSONL.
@@ -81,7 +81,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 ### Execution
 | Command | Description |
 | --- | --- |
-| `colab run [--gpu GPU] [--tpu TPU] [--keep] SCRIPT [ARGS...]` | Run a local script on a fresh VM, forwarding arguments, then release it |
+| `colab run [--gpu GPU] [--tpu TPU] [--keep] FILE [ARGS...]` | Run a local `.py` script or `.ipynb` notebook on a fresh VM, then release it |
 | `colab exec [-s NAME] [-f FILE] [--output-image PATH]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook |
 | `colab repl [-s NAME] [--output-image PATH]` | Start an interactive Python REPL on the VM (exits cleanly on piped EOF) |
 | `colab console [-s NAME]` | Connect to a raw interactive TTY shell (tmux) on the remote VM |
@@ -150,11 +150,14 @@ colab stop -s analysis
 
 ### Ephemeral Accelerator Jobs
 
-Use `colab run` to run a local script on dedicated hardware without manual session lifecycle management. The CLI handles provisioning, script execution, and immediate VM teardown automatically:
+Use `colab run` to run a local script or notebook on dedicated hardware without manual session lifecycle management. The CLI handles provisioning, execution, foreground keep-alive, and immediate VM teardown automatically:
 
 ```bash
 # Run train.py on a T4 GPU and release the VM on completion
 colab run --gpu T4 train.py
+
+# Run a notebook cell-by-cell and write report_output.ipynb
+colab run --gpu T4 --keep report.ipynb
 ```
 
 ### Shebang Execution Support

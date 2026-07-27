@@ -19,6 +19,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.lexers import PygmentsLexer
+from prompt_toolkit.output import DummyOutput
 from prompt_toolkit.styles import Style
 from pygments.lexers.python import PythonLexer
 from rich.console import Console
@@ -54,13 +55,17 @@ class ColabREPL:
         def _(event):
             event.current_buffer.insert_text("\n")
 
-        self.session = PromptSession(
-            history=InMemoryHistory(),
-            lexer=PygmentsLexer(PythonLexer),
-            include_default_pygments_style=False,
-            key_bindings=self.kb,
-            multiline=True,
-        )
+        session_kwargs = {
+            "history": InMemoryHistory(),
+            "lexer": PygmentsLexer(PythonLexer),
+            "include_default_pygments_style": False,
+            "key_bindings": self.kb,
+            "multiline": True,
+        }
+        try:
+            self.session = PromptSession(**session_kwargs)
+        except Exception:
+            self.session = PromptSession(output=DummyOutput(), **session_kwargs)
         self.style = Style.from_dict(
             {
                 "prompt": "bold blue",

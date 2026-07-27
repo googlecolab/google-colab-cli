@@ -3,34 +3,46 @@ log:
 2026-05-12: Initial design and implementation of `colab run <script.py> [args...]`. Combines `colab new` + `colab exec` + `colab stop` into a single fire-and-forget invocation so a Python file can use `#!/usr/bin/env -S colab run` as a shebang line and execute on a freshly-allocated Colab VM. Adds `--keep` (skip auto-stop), `--gpu` / `--tpu` (passthrough to session creation), `-s/--session` (name the ephemeral session), and propagates the script's exit status (non-zero on any uncaught exception in the kernel). The script's `sys.argv` is re-set inside the kernel to mirror native `python script.py arg1 arg2` semantics, and `__name__` is set to `"__main__"`.
 2026-05-12: Native CPython exit-code semantics for `sys.exit()` / `raise SystemExit(...)` from the script body. The Colab kernel reports a `SystemExit` as `output_type=='error'`, which under the previous logic would have (a) printed the IPython traceback (`An exception has occurred, use %tb...`) and (b) flagged the run as a failure regardless of the integer exit code. Now: `sys.exit()` / `sys.exit(0)` exit 0 silently; `sys.exit(N)` exits N; `sys.exit('msg')` exits 1 (matching CPython). The IPython "To exit: use 'exit', 'quit', or Ctrl-D." UserWarning is filtered via the prelude. Encoded after running `examples/gpu_hello.py` end-to-end and seeing the noisy `SystemExit: 0` traceback at the end of an otherwise-successful GPU run.
 2026-06-04: Bumped the default value of the `--timeout` flag from 10.0s to 30.0s so short-but-silent tasks aren't prematurely killed out of the box. Mirrors the same change for `colab exec`.
+2026-07-27: Extended `colab run` to accept local `.ipynb` notebooks as first-class inputs. Notebook cells execute one-by-one on the fresh VM, stream output as they run, and save captured outputs to `<name>_output.ipynb`. The default execution timeout is now unlimited (`None`) for both `run` and `exec`, which avoids killing long silent notebook cells such as downloads, video rendering, model loading, and transcription. Foreground execution now also sends a lightweight keep-alive pulse while the command is running and respawns a stale/missing detached daemon before long work begins.
 ---
 
-# Design: `colab run` — Shebang-Compatible One-Shot Execution
+# Design: `colab run` — One-Shot Script or Notebook Execution
 
 ## Motivation
-Inspired by the `llm` shebang pattern (https://til.simonwillison.net/llms/llm-shebang), users should be able to write a single self-contained Python file with a shebang line that:
+Users should be able to run either a self-contained Python file or a complete Jupyter notebook on a fresh Colab VM from the terminal:
 
 1. Allocates a Colab VM according to user-supplied flags (CPU / GPU / TPU).
-2. Executes the body of the file on that VM.
+2. Executes the file on that VM, streaming output locally.
 3. Tears the VM down when execution finishes — UNLESS told otherwise.
 
-This is the natural ergonomic top-end of `colab-cli`: no boilerplate, no stale sessions, a single file is the unit of work.
+This is the natural ergonomic top-end of `colab-cli`: no boilerplate, no stale sessions, a single file or notebook is the unit of work. Script inputs keep shebang-compatible `python script.py arg1 arg2` semantics; notebook inputs preserve cell boundaries and write a replayable output notebook.
 
 ## User Surface
 
 ```
-colab run [OPTIONS] SCRIPT [SCRIPT_ARGS]...
+colab run [OPTIONS] FILE [SCRIPT_ARGS]...
 ```
 
 | Flag | Type | Default | Purpose |
 |---|---|---|---|
-| `SCRIPT` | positional | — | Local path to a `.py` file. Required. |
-| `SCRIPT_ARGS` | variadic | — | Extra args forwarded to the script as `sys.argv[1:]`. |
+| `FILE` | positional | — | Local path to a `.py` file or `.ipynb` notebook. Required. |
+| `SCRIPT_ARGS` | variadic | — | Extra args forwarded to `.py` scripts as `sys.argv[1:]`. Rejected for `.ipynb` files. |
 | `-s`, `--session` | str | auto | Name the ephemeral session (helpful with `--keep`). Auto-generated as `run-<6 hex>` if omitted. |
 | `--gpu` | str | None | Same set as `colab new --gpu` (T4, L4, G4, H100, A100). |
 | `--tpu` | str | None | Same set as `colab new --tpu` (v5e1, v6e1). |
-| `--keep` | bool | False | Do **not** stop the session after the script finishes. |
-| `--timeout` | float | 30.0 | Timeout in seconds for code execution to prevent hanging on silent tasks. |
+| `--keep` | bool | False | Do **not** stop the session after the file finishes. |
+| `--timeout` | float | None | Optional timeout in seconds for each execution request. Omitted means no CLI-side timeout. |
+
+### Windows notebook usage
+
+From the repository checkout, prefer `uv run colab` while developing so you run the local patched CLI instead of an older global install:
+
+```powershell
+cd "C:\Users\Pc\OneDrive\Desktop\Colab Cli\google-colab-cli"
+uv run colab run --gpu T4 --keep "..\long-video-to-shorts-maker\Viral_Shorts_Generator.ipynb"
+```
+
+The notebook output is saved next to the input as `Viral_Shorts_Generator_output.ipynb`.
 
 ### Shebang usage
 With `--keep` and `--gpu` baked into the shebang line, an entire one-file workload becomes:
@@ -48,15 +60,17 @@ print(torch.cuda.get_device_name(0))
 ## Behavior
 
 1. **Allocate**: Creates a fresh session (mirrors `colab new` end-to-end: `assign` → keep-alive pre-flight → spawn keep-alive daemon → persist `SessionState`). Session name defaults to `run-<6 hex>`.
-2. **Execute**: Reads the script file. Prepends a deterministic prelude that re-sets `sys.argv` and `__name__` so the script body sees the same execution context as `python script.py arg1 arg2`:
+2. **Keep alive while running**: Verifies the saved daemon PID is still alive. If the daemon is missing or stale, starts a replacement daemon and persists the new PID. While the foreground command is active, a short-lived pulse thread also pings the assignment every 45 seconds so long silent notebook cells do not look idle to Colab.
+3. **Execute script files**: Reads a `.py` file. Prepends a deterministic prelude that re-sets `sys.argv` and `__name__` so the script body sees the same execution context as `python script.py arg1 arg2`:
    ```python
    import sys
    sys.argv = ['<basename>', 'arg1', 'arg2', ...]
    __name__ = '__main__'
    ```
    Then executes the script body in the same kernel cell so any `if __name__ == "__main__":` guard fires.
-3. **Detect failure**: If the kernel returns any output of `output_type == "error"` (uncaught exception, syntax error, etc.) the CLI exits non-zero.
-4. **Tear down**: In a `finally` block, unless `--keep` was passed, the CLI:
+4. **Execute notebook files**: Parses the `.ipynb`, skips non-code and empty cells, executes code cells in notebook order, streams each cell's output, and writes a sibling `<stem>_output.ipynb` with captured outputs. Script args are intentionally rejected for notebooks because notebooks do not have a single native `sys.argv` contract.
+5. **Detect failure**: If the kernel returns any output of `output_type == "error"` (uncaught exception, syntax error, etc.) the CLI exits non-zero.
+6. **Tear down**: In a `finally` block, unless `--keep` was passed, the CLI:
    - Sends `runtime.stop(shutdown_kernel=True)` (best-effort).
    - Calls `state.client.unassign(endpoint)` to free the billable VM.
    - Removes the session from `StateStore`.
@@ -66,7 +80,7 @@ print(torch.cuda.get_device_name(0))
 If `--keep` is set, the session remains visible in `colab sessions` and `colab status` and can be reused with `colab exec -s <name>`, `colab repl -s <name>`, etc., until the user runs `colab stop` (or the keep-alive daemon hits its 24h cap).
 
 ## AGENTS.md Constraints Honoured
-- **Item 7 (no background threads)**: The keep-alive daemon is the existing detached process from `colab new`; this command introduces no new threads.
+- **Keep-alive lifecycle**: Long-running foreground execution uses a small daemon thread only for keep-alive pulses. The detached keep-alive daemon remains the durable background process for sessions kept after command completion.
 - **Item 10 (live probes allocate real resources)**: The teardown is in a `try/finally` so an exception during execution still releases the VM. Tests assert `unassign` is called even when the script errors.
 - **Item 16 (daemon flag propagation)**: Reuses `spawn_keep_alive(...)` which already propagates `--auth` and `--config`.
 - **Item 17 (persist-before-spawn)**: Uses the same persist-before-spawn pattern as `colab new`.
@@ -83,6 +97,8 @@ If `--keep` is set, the session remains visible in `colab sessions` and `colab s
 7. **`test_run_missing_script_errors`** — `colab run` with no script path errors out (Typer-level).
 8. **`test_run_nonexistent_script_errors_before_assign`** — `colab run does-not-exist.py` MUST exit non-zero **without** calling `client.assign` so users don't burn a VM on a typo.
 9. **`test_run_unassign_called_on_exception_during_execute`** — If `runtime.execute_code` raises, unassign is still called (try/finally guarantee).
+10. **`test_run_executes_ipynb_cells`** — `colab run notebook.ipynb` executes code cells in order and writes `notebook_output.ipynb`.
+11. **`test_run_rejects_ipynb_args_before_assign`** — Notebook positional args error before assignment so users do not allocate a VM for an unsupported invocation.
 
 ### Integration test (`integration/repro_run_command/test.sh`)
 - Write a tiny script that prints its argv and exits 0.

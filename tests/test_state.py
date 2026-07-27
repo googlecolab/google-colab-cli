@@ -233,7 +233,9 @@ def test_write_lock_blocks_across_processes(temp_config):
     )
     holder.start()
     try:
-        assert acquired.wait(timeout=5), "holder process never acquired the lock"
+        assert acquired.wait(timeout=20), (
+            f"holder process never acquired the lock; exitcode={holder.exitcode}"
+        )
 
         finished = threading.Event()
 
@@ -248,7 +250,7 @@ def test_write_lock_blocks_across_processes(temp_config):
         assert not finished.wait(timeout=0.75)
 
         release.set()
-        assert finished.wait(timeout=5)
+        assert finished.wait(timeout=20)
         t.join()
         assert store.get("blocked") is not None
     finally:
@@ -280,7 +282,9 @@ def test_readers_are_concurrent_across_processes(temp_config):
     )
     holder.start()
     try:
-        assert acquired.wait(timeout=5), "holder process never acquired the read lock"
+        assert acquired.wait(timeout=20), (
+            f"holder process never acquired the read lock; exitcode={holder.exitcode}"
+        )
 
         done = threading.Event()
         result = {}

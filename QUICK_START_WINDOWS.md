@@ -54,7 +54,22 @@ colab stop -s training
 colab run --gpu T4 experiment.py
 ```
 
-### Example 4: Interactive REPL
+### Example 4: Run a Notebook Directly
+
+```powershell
+colab run --gpu T4 --keep .\Viral_Shorts_Generator.ipynb
+```
+
+While developing from this repository, use `uv run colab` so PowerShell runs the local patched CLI:
+
+```powershell
+cd "C:\Users\Pc\OneDrive\Desktop\Colab Cli\google-colab-cli"
+uv run colab run --gpu T4 --keep "..\long-video-to-shorts-maker\Viral_Shorts_Generator.ipynb"
+```
+
+Notebook code cells run in order, output streams back to the terminal, and an output notebook is saved beside the input as `<name>_output.ipynb`.
+
+### Example 5: Interactive REPL
 
 ```powershell
 colab new --gpu L4
@@ -69,7 +84,7 @@ True
 'NVIDIA L4'
 ```
 
-### Example 5: Interactive Console
+### Example 6: Interactive Console
 
 ```powershell
 colab new
@@ -145,7 +160,7 @@ colab log -o history.jsonl   # JSON Lines
    echo "import sys; print(sys.version)" | colab exec
    ```
 
-3. **Automatic keep-alive**: Sessions stay active in the background automatically.
+3. **Automatic keep-alive**: Sessions stay active in the background automatically. Long `run` and `exec` commands also pulse keep-alive while the foreground command is still running.
 
 4. **Update CLI**:
    ```powershell
