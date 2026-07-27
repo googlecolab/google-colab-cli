@@ -149,6 +149,28 @@ def test_spawn_keep_alive_omits_optional_flags_when_none(mocker):
     assert "--config" not in cmd
 
 
+def test_spawn_keep_alive_is_hidden_on_windows(mocker):
+    """The detached daemon must not open visible python.exe consoles on Windows."""
+    from colab_cli.commands.session import spawn_keep_alive
+
+    mocker.patch("colab_cli.commands.session.sys.platform", "win32")
+    mock_popen = mocker.patch("colab_cli.commands.session.subprocess.Popen")
+    mock_popen.return_value.pid = 12345
+
+    spawn_keep_alive("ep1", "sess1")
+
+    kwargs = mock_popen.call_args.kwargs
+    flags = kwargs["creationflags"]
+    create_new_process_group = 0x00000200
+    create_no_window = 0x08000000
+    detached_process = 0x00000008
+
+    assert flags & detached_process
+    assert flags & create_new_process_group
+    assert flags & create_no_window
+    assert "start_new_session" not in kwargs
+
+
 @patch("colab_cli.commands.session.spawn_keep_alive")
 def test_new_runs_keep_alive_preflight(mock_spawn, mock_common_state):
     """`colab new` should pre-flight the keep-alive RPC before persisting the

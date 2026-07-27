@@ -404,15 +404,26 @@ def spawn_keep_alive(
     if config_path is not None:
         cmd.extend(["--config", config_path])
     cmd.extend(["keep-alive", endpoint, session_name])
-    # Detach process
+    # Detach process. On Windows, make this explicitly windowless; otherwise
+    # launchers such as VS Code, uv, or python.exe can briefly surface helper
+    # console windows for the keep-alive daemon.
     kwargs = {}
     if sys.platform != "win32":
         kwargs["start_new_session"] = True
     else:
         # https://stackoverflow.com/questions/1356540/how-can-i-make-a-python-script-run-in-the-background-as-a-service-on-windows
         CREATE_NEW_PROCESS_GROUP = 0x00000200
+        CREATE_NO_WINDOW = 0x08000000
         DETACHED_PROCESS = 0x00000008
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        kwargs["creationflags"] = (
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        )
+        startupinfo_cls = getattr(subprocess, "STARTUPINFO", None)
+        if startupinfo_cls is not None:
+            startupinfo = startupinfo_cls()
+            startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
+            startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+            kwargs["startupinfo"] = startupinfo
 
     p = subprocess.Popen(
         cmd,
