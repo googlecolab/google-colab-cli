@@ -28,6 +28,9 @@ from colab_cli.auth import (
 def mock_deps(mocker):
     m_exists = mocker.patch("os.path.exists")
     m_makedirs = mocker.patch("os.makedirs")
+    m_os_open = mocker.patch("colab_cli.auth.os.open", return_value=42)
+    m_os_fdopen = mocker.patch("colab_cli.auth.os.fdopen")
+    m_os_replace = mocker.patch("colab_cli.auth.os.replace")
     m_creds_cls = mocker.patch("colab_cli.auth.Credentials")
     m_flow_cls = mocker.patch("colab_cli.auth.InstalledAppFlow")
     m_request = mocker.patch("colab_cli.auth.Request")
@@ -41,6 +44,9 @@ def mock_deps(mocker):
     return {
         "exists": m_exists,
         "makedirs": m_makedirs,
+        "os_open": m_os_open,
+        "os_fdopen": m_os_fdopen,
+        "os_replace": m_os_replace,
         "creds_cls": m_creds_cls,
         "flow_cls": m_flow_cls,
         "request": m_request,
@@ -97,7 +103,9 @@ def test_get_credentials_expired_token_refresh(mock_deps):
         res = get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
 
     mock_creds.refresh.assert_called_once()
-    m_open.assert_any_call(TOKEN_CONFIG_PATH, "w")
+    mock_deps["os_replace"].assert_called_once_with(
+        TOKEN_CONFIG_PATH + ".tmp", TOKEN_CONFIG_PATH
+    )
     assert res == mock_deps["session"].return_value
 
 

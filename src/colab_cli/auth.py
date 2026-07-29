@@ -17,6 +17,7 @@ import json
 import logging
 from importlib import resources
 import os
+import datetime
 import warnings
 from typing import Optional
 
@@ -52,6 +53,8 @@ PUBLIC_SCOPES = [
 
 
 TOKEN_CONFIG_PATH = os.path.expanduser("~/.config/colab-cli/token.json")
+LOGIN_LOCK_PATH = os.path.expanduser("~/.config/colab-cli/login.lock.json")
+LOGIN_LOCK_TTL_SECONDS = 3600  # 1 hour
 
 # Remote copy-paste OAuth flow.
 #
@@ -73,6 +76,13 @@ TOKEN_CONFIG_PATH = os.path.expanduser("~/.config/colab-cli/token.json")
 REMOTE_REDIRECT_URI = "https://sdk.cloud.google.com/applicationdefaultauthcode.html"
 
 
+def _build_remote_flow(client_config: dict) -> InstalledAppFlow:
+    """Build and configure an InstalledAppFlow for the remote copy-paste OAuth2 flow."""
+    flow = InstalledAppFlow.from_client_config(client_config, PUBLIC_SCOPES)
+    flow.redirect_uri = REMOTE_REDIRECT_URI
+    return flow
+
+
 def _run_remote_flow(client_config: dict) -> Credentials:
     """Run the remote copy-paste OAuth2 flow.
 
@@ -81,8 +91,7 @@ def _run_remote_flow(client_config: dict) -> Credentials:
     code for credentials. See ``REMOTE_REDIRECT_URI`` for why this is preferred
     over a localhost server or the blocked OOB flow.
     """
-    flow = InstalledAppFlow.from_client_config(client_config, PUBLIC_SCOPES)
-    flow.redirect_uri = REMOTE_REDIRECT_URI
+    flow = _build_remote_flow(client_config)
     auth_url, _ = flow.authorization_url(prompt="consent", token_usage="remote")
 
     typer.echo("\nTo authorize colab-cli, visit this URL in any browser:\n", err=True)
@@ -94,16 +103,21 @@ def _run_remote_flow(client_config: dict) -> Credentials:
     return flow.credentials
 
 
-def _get_google_auth_credentials(config_path: str) -> Credentials:
-    """
-    Retrieves credentials using standard public OAuth2 flow.
+def _load_client_config(config_path: str) -> dict:
+    """Return the OAuth2 client config dict for the given path.
+
+    Resolution order:
+    - ``config_path`` if it exists on disk.
+    - The bundled ``oauth_config.json`` package resource as a fallback.
+
+    Raises ``FileNotFoundError`` when neither source is available so callers
+    can consistently surface a single actionable error.
     """
     client_config = None
     if os.path.exists(config_path):
         with open(config_path, "r") as f:
             client_config = json.load(f)
     else:
-        # Last resort: try inlined config
         try:
             config_resource = resources.files("colab_cli").joinpath("oauth_config.json")
             if config_resource.is_file():
@@ -116,6 +130,192 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
             f"Client OAuth config not found at {config_path} and no inlined config available. "
             "Please provide a valid path via -c/--client-oauth-config."
         )
+
+    return client_config
+
+
+def _persist_credentials(creds: Credentials) -> None:
+    """Persist credentials to the token store with atomic write."""
+    os.makedirs(os.path.dirname(TOKEN_CONFIG_PATH), exist_ok=True)
+    tmp_path = TOKEN_CONFIG_PATH + ".tmp"
+    try:
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as token_file:
+            token_file.write(creds.to_json())
+        os.replace(tmp_path, TOKEN_CONFIG_PATH)
+    except Exception as e:
+        logger.error(f"Failed to save token to {TOKEN_CONFIG_PATH}: {e}")
+        raise
+
+
+def _is_lock_expired(lock_data: dict) -> bool:
+    """Check if the lock file has expired based on its creation timestamp.
+    
+    Uses UTC to avoid issues with local clock skew.
+    
+    Args:
+        lock_data: The lock file data containing a 'created_at' ISO timestamp.
+    
+    Returns:
+        True if the lock has expired, False otherwise.
+    """
+    created_at = lock_data.get("created_at")
+    if not created_at:
+        return False
+    
+    try:
+        created_time = datetime.datetime.fromisoformat(created_at)
+        if created_time.tzinfo is None:
+            created_time = created_time.replace(tzinfo=datetime.timezone.utc)
+        age = datetime.datetime.now(datetime.timezone.utc) - created_time
+        return age.total_seconds() > LOGIN_LOCK_TTL_SECONDS
+    except (ValueError, TypeError):
+        return False
+
+
+def start_remote_flow(config_path: str) -> tuple[str, dict]:
+    """Initiate the 2-step remote OAuth2 flow.
+    
+    Creates the OAuth flow, generates an authorization URL, and persists the
+    intermediate state to ``LOGIN_LOCK_PATH`` so a subsequent ``verify`` call
+    can complete the exchange without re-prompting for client config.
+    
+    Returns:
+        A tuple of ``(auth_url, lock_data)`` where ``lock_data`` contains the
+        serialized flow state (for display/debugging).
+    """
+    client_config = _load_client_config(config_path)
+    flow = _build_remote_flow(client_config)
+    auth_url, state_param = flow.authorization_url(
+        prompt="consent", token_usage="remote"
+    )
+
+    code_verifier = getattr(flow, "code_verifier", None)
+    if not isinstance(code_verifier, str):
+        code_verifier = None
+
+    lock_data = {
+        "state": state_param,
+        "redirect_uri": REMOTE_REDIRECT_URI,
+        "scopes": list(PUBLIC_SCOPES),
+        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "code_verifier": code_verifier,
+        "auth_url": auth_url,
+    }
+    lock_dir = os.path.dirname(LOGIN_LOCK_PATH)
+    if lock_dir:
+        os.makedirs(lock_dir, exist_ok=True)
+    lock_written = False
+    try:
+        fd = os.open(LOGIN_LOCK_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        lock_written = True
+        with os.fdopen(fd, "w") as f:
+            json.dump(lock_data, f)
+        return auth_url, lock_data
+    finally:
+        if not lock_written:
+            try:
+                os.remove(LOGIN_LOCK_PATH)
+            except OSError:
+                pass
+
+
+def complete_remote_flow(
+    lock_path: str,
+    code: str,
+    config_path: str,
+    lock_data: Optional[dict] = None,
+    state: Optional[str] = None,
+) -> Credentials:
+    """Complete the 2-step remote OAuth2 flow.
+
+    Reads the lock file written by ``start_remote_flow``, recreates the flow
+    with the stored state, exchanges the authorization code for credentials,
+    persists them to ``TOKEN_CONFIG_PATH``, and removes the lock file.
+
+    Args:
+        lock_path: Path to the lock file. Defaults to ``LOGIN_LOCK_PATH``.
+        code: The authorization code the user copied from Google's landing page.
+        config_path: Path to the client OAuth config, used to refresh the
+            config from disk instead of persisting stale secrets in the lock.
+        lock_data: Pre-parsed lock data. When provided, the lock file is not
+            re-read from disk.
+        state: The ``state`` query parameter from the authorization redirect URL.
+            When provided, it is validated against the stored lock state before
+            exchanging the code.
+
+    Returns:
+        The authenticated ``Credentials``.
+    """
+    if lock_data is None:
+        try:
+            with open(lock_path, "r") as f:
+                lock_data = json.load(f)
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                "No pending login session found. Run `colab login start` first to start the flow."
+            )
+        except json.JSONDecodeError:
+            raise FileNotFoundError(
+                "Lock file is corrupted. Run `colab login start` to begin a new login session."
+            )
+
+    if _is_lock_expired(lock_data):
+        try:
+            os.remove(lock_path)
+        except OSError:
+            pass
+        raise FileNotFoundError(
+            "Login session has expired. Run `colab login start` to start a new session."
+        )
+
+    required_keys = ["scopes", "redirect_uri"]
+    missing = [k for k in required_keys if k not in lock_data]
+    if missing:
+        try:
+            os.remove(lock_path)
+        except OSError:
+            pass
+        raise FileNotFoundError(
+            f"Lock file is missing required keys: {', '.join(missing)}. "
+            "Run `colab login start` to begin a new login session."
+        )
+
+    stored_state = lock_data.get("state")
+    if state is not None and stored_state and state != stored_state:
+        raise FileNotFoundError(
+            "State mismatch: the authorization response does not match the pending login session."
+        )
+
+    client_config = _load_client_config(config_path)
+
+    try:
+        flow = InstalledAppFlow.from_client_config(
+            client_config, lock_data["scopes"]
+        )
+        flow.redirect_uri = lock_data["redirect_uri"]
+        if stored_state:
+            flow.state = stored_state
+        if lock_data.get("code_verifier"):
+            flow.code_verifier = lock_data["code_verifier"]
+        flow.fetch_token(code=code)
+
+        _persist_credentials(flow.credentials)
+    finally:
+        try:
+            if os.path.exists(lock_path):
+                os.remove(lock_path)
+        except OSError:
+            pass
+
+    return flow.credentials
+
+
+def _get_google_auth_credentials(config_path: str) -> Credentials:
+    """
+    Retrieves credentials using standard public OAuth2 flow.
+    """
+    client_config = _load_client_config(config_path)
 
     creds = None
 
@@ -141,12 +341,7 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
         if not creds:
             creds = _run_remote_flow(client_config)
 
-        # Save the credentials for the next run
-        try:
-            with open(TOKEN_CONFIG_PATH, "w") as token_file:
-                token_file.write(creds.to_json())
-        except Exception as e:
-            logger.error(f"Failed to save token to {TOKEN_CONFIG_PATH}: {e}")
+        _persist_credentials(creds)
 
     return creds
 
