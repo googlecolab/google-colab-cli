@@ -272,19 +272,19 @@ def test_proxy_command_round_trips_through_the_shell(name, identity):
     cmd = ssh_module._proxy_command(_make_session(name=name), identity)
     argv = shlex.split(cmd)
 
-    assert argv[:5] == [
+    assert argv[:7] == [
         sys.executable,
         "-m",
         "colab_cli.cli",
         "ssh",
         "--proxy-mode",
+        "-s",
+        name,
     ]
-    assert argv[5] == "-s"
-    assert argv[6] == name  # verbatim, one argument
     if identity:
         assert argv[7:] == ["--identity", identity]
     else:
-        assert argv[7:] == []
+        assert len(argv) == 7
 
 
 # --- session resolution ------------------------------------------------------
