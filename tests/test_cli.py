@@ -311,27 +311,34 @@ def test_cli_help():
 
 def _extract_command_names(help_output: str) -> list[str]:
     """Parse the command list out of a Typer/Click help output rendered
-    inside the `╭─ Commands ─...` rich box. Returns names in the order they
-    appear.
+    inside a rich box (either rounded ╭/╰ or square ┌/└ styles — Rich picks
+    the latter on some Windows environments). Returns names in order.
     """
     lines = help_output.splitlines()
     in_commands = False
     names = []
     for line in lines:
-        if "Commands" in line and ("─" in line or "-" in line):
-            in_commands = True
+        if not in_commands:
+            if "Commands" in line and ("─" in line or "-" in line):
+                in_commands = True
             continue
-        if in_commands:
-            stripped = line.strip()
-            if stripped.startswith("╰") or stripped.startswith("`"):
-                break
-            # Lines look like:  "│ help        Show help for a command. │"
-            # Strip the rich box characters.
-            inner = stripped.strip("│").strip()
-            if not inner:
-                continue
-            tok = inner.split()[0]
-            names.append(tok)
+        stripped = line.strip()
+        # Bottom border of the commands box (rounded or square style).
+        if stripped[:1] in ("╰", "└", "`"):
+            break
+        # Strip the left/right box borders ("│").
+        inner = stripped.strip("│")
+        if not inner.strip():
+            continue
+        # Command lines look like "│ console  Connect to raw TTY console │":
+        # the name sits one space after the left border. Wrapped description
+        # continuation lines are indented to the description column
+        # ("│                 VM") — skip those so wrapped words aren't
+        # mistaken for command names.
+        if not inner.startswith(" ") or inner[1:2].isspace():
+            continue
+        tok = inner[1:].split()[0]
+        names.append(tok)
     return names
 
 

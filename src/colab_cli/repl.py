@@ -54,19 +54,13 @@ class ColabREPL:
         def _(event):
             event.current_buffer.insert_text("\n")
 
-        self.session = PromptSession(
-            history=InMemoryHistory(),
-            lexer=PygmentsLexer(PythonLexer),
-            include_default_pygments_style=False,
-            key_bindings=self.kb,
-            multiline=True,
-        )
-        self.style = Style.from_dict(
-            {
-                "prompt": "bold blue",
-                "continuation": "#888888",
-            }
-        )
+        # The PromptSession is created lazily in run() rather than here so
+        # that constructing a ColabREPL does not require a real console
+        # (prompt_toolkit's Win32Output calls GetConsoleScreenBufferInfo at
+        # PromptSession init, which raises under captured/non-tty stdout on
+        # Windows). Tests that drive run() set `self.session` to a mock first.
+        self.session = None
+        self.style = None
 
     def print_info(self, message: str):
         self.console.print(f"[bold blue][*][/bold blue] {message}")
@@ -140,6 +134,18 @@ class ColabREPL:
             self.print_error(f"Execution failed: {e}")
 
     def run(self):
+        if self.session is None:
+            self.session = PromptSession(
+                history=InMemoryHistory(),
+                lexer=PygmentsLexer(PythonLexer),
+                include_default_pygments_style=False,
+                key_bindings=self.kb,
+                multiline=True,
+            )
+            self.style = Style.from_dict(
+                {"prompt": "bold blue", "continuation": "#888888"}
+            )
+
         self.console.print("Python 3 (Google Colab Runtime)\nType /quit to exit.")
 
         while True:
