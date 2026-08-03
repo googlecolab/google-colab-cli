@@ -303,9 +303,10 @@ def test_proxy_mode_signal_handler_installation(
 # --- help --------------------------------------------------------------------
 
 
-def test_ssh_help_advertises_autocreate_flags():
+def test_ssh_help_advertises_autocreate_flags(mocker):
     """`colab ssh --help` advertises --rm, --gpu, and --tpu."""
-    result = runner.invoke(app, ["ssh", "--help"], env={"COLAB_CLI_DISABLE_UPDATE_CHECK": "1"})
+    mocker.patch("colab_cli.cli.auto_update.run_background_check")
+    result = runner.invoke(app, ["ssh", "--help"], terminal_width=240)
     assert result.exit_code == 0
     for flag in ("--rm", "--gpu", "--tpu"):
         assert flag in result.output
