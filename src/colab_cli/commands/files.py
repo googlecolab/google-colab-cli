@@ -169,9 +169,10 @@ def edit(
 
     _, ext = os.path.splitext(remote_path)
 
-    with tempfile.NamedTemporaryFile(suffix=ext) as tf:
-        local_path = tf.name
+    fd, local_path = tempfile.mkstemp(suffix=ext)
+    os.close(fd)
 
+    try:
         try:
             contents.download(remote_path, local_path)
         except Exception:
@@ -194,6 +195,11 @@ def edit(
             typer.echo(f"[colab] Edited and uploaded '{remote_path}'")
         else:
             typer.echo(f"[colab] No changes made to '{remote_path}'")
+    finally:
+        try:
+            os.remove(local_path)
+        except OSError:
+            pass
 
 
 def register(app: typer.Typer):

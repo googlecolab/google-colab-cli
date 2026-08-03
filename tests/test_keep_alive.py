@@ -18,7 +18,7 @@ import pytest
 import typer
 from colab_cli.client import ColabRequestError
 from colab_cli.state import SessionState
-from colab_cli.commands.session import new, stop, keep_alive
+from colab_cli.commands.session import new, stop, keep_alive, ensure_keep_alive_daemon
 
 
 def test_session_state_with_pid():
@@ -34,6 +34,31 @@ def test_session_state_with_pid():
 
     s2 = SessionState(**data)
     assert s2.keep_alive_pid == 1234
+
+
+@patch("colab_cli.commands.session.is_process_running", return_value=False)
+@patch("colab_cli.commands.session.spawn_keep_alive", return_value=9876)
+def test_ensure_keep_alive_daemon_respawns_stale_pid(
+    mock_spawn, mock_is_running, mock_common_state
+):
+    s = SessionState(
+        name="test",
+        token="tok",
+        url="http://",
+        endpoint="end",
+        keep_alive_pid=1234,
+    )
+
+    restarted = ensure_keep_alive_daemon(s, mock_common_state)
+
+    assert restarted is True
+    assert s.keep_alive_pid == 9876
+    mock_is_running.assert_called_once_with(1234)
+    mock_spawn.assert_called_once()
+    mock_common_state.store.add.assert_called_with(s)
+    mock_common_state.history.log_event.assert_called_with(
+        "test", "keep_alive_restarted", {"endpoint": "end", "pid": 9876}
+    )
 
 
 @patch("colab_cli.commands.session.spawn_keep_alive")
@@ -122,6 +147,28 @@ def test_spawn_keep_alive_omits_optional_flags_when_none(mocker):
     cmd = mock_popen.call_args.args[0]
     assert not any(c.startswith("--auth") for c in cmd)
     assert "--config" not in cmd
+
+
+def test_spawn_keep_alive_is_hidden_on_windows(mocker):
+    """The detached daemon must not open visible python.exe consoles on Windows."""
+    from colab_cli.commands.session import spawn_keep_alive
+
+    mocker.patch("colab_cli.commands.session.sys.platform", "win32")
+    mock_popen = mocker.patch("colab_cli.commands.session.subprocess.Popen")
+    mock_popen.return_value.pid = 12345
+
+    spawn_keep_alive("ep1", "sess1")
+
+    kwargs = mock_popen.call_args.kwargs
+    flags = kwargs["creationflags"]
+    create_new_process_group = 0x00000200
+    create_no_window = 0x08000000
+    detached_process = 0x00000008
+
+    assert flags & detached_process
+    assert flags & create_new_process_group
+    assert flags & create_no_window
+    assert "start_new_session" not in kwargs
 
 
 @patch("colab_cli.commands.session.spawn_keep_alive")

@@ -528,11 +528,23 @@ def _install_rm_signal_handlers(do_rm: Callable[[], None]) -> None:
         do_rm()
         os._exit(0)
 
-    for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
+    for sig in _rm_teardown_signals():
         try:
             signal.signal(sig, _on_signal)
         except (ValueError, OSError):
             pass  # e.g. not running in the main thread
+
+
+def _rm_teardown_signals():
+    return tuple(
+        sig
+        for sig in (
+            getattr(signal, "SIGHUP", None),
+            getattr(signal, "SIGTERM", None),
+            getattr(signal, "SIGINT", None),
+        )
+        if sig is not None
+    )
 
 
 def _run_proxy_bridge(

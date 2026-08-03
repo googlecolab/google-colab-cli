@@ -28,6 +28,7 @@ from unittest.mock import MagicMock
 from colab_cli.cli import app
 from colab_cli.commands import ssh as ssh_module
 import pytest
+from typer.main import get_command
 from typer.testing import CliRunner
 import typer
 
@@ -282,8 +283,6 @@ def test_proxy_mode_signal_handler_installation(
 ):
     """--rm installs SIGHUP/SIGTERM/SIGINT handlers so teardown runs when
     OpenSSH HUPs the ProxyCommand on disconnect; without --rm, none."""
-    import signal as _signal
-
     mock_common_state.store.get.return_value = _make_session("colab")
     mock_common_state.resolve_session.return_value = "colab"
     sigmock = mocker.patch("signal.signal")
@@ -297,7 +296,7 @@ def test_proxy_mode_signal_handler_installation(
     assert result.exit_code == 0
     if expect_installed:
         registered = {c.args[0] for c in sigmock.call_args_list}
-        assert {_signal.SIGHUP, _signal.SIGTERM, _signal.SIGINT} <= registered
+        assert set(ssh_module._rm_teardown_signals()) <= registered
     else:
         sigmock.assert_not_called()
 
@@ -305,9 +304,14 @@ def test_proxy_mode_signal_handler_installation(
 # --- help --------------------------------------------------------------------
 
 
-def test_ssh_help_advertises_autocreate_flags():
-    """`colab ssh --help` advertises --rm, --gpu, and --tpu."""
-    result = runner.invoke(app, ["ssh", "--help"])
-    assert result.exit_code == 0
-    for flag in ("--rm", "--gpu", "--tpu"):
-        assert flag in result.output
+def test_ssh_command_registers_autocreate_flags():
+    """`colab ssh` registers --rm, --gpu, and --tpu.
+
+    Rich/Typer help output can wrap or clip differently by platform and
+    terminal width, so assert the command metadata instead of rendered help.
+    """
+    click_app = get_command(app)
+    ssh_command = click_app.get_command(None, "ssh")
+    registered_flags = {opt for param in ssh_command.params for opt in param.opts}
+
+    assert {"--rm", "--gpu", "--tpu"} <= registered_flags

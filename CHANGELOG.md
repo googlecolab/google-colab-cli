@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The package version is derived from the git tag via `hatch-vcs`; each release
 below corresponds to a tag of the same name.
 
+## [Unreleased]
+
+### Added
+
+- **Windows support:** Native Windows terminal support using `msvcrt` and `ctypes`. 
+  The CLI now works in Windows Terminal, PowerShell, and CMD without WSL or Docker. 
+  Console input handling uses platform-specific implementations (`termios`/`tty` on 
+  Unix, `msvcrt` with Windows Console API on Windows), providing full TTY functionality 
+  including `colab console` interactive shells. Tested on Windows 11 with Python 3.13. (#XX)
+- **Windows Quick Start:** Added `QUICK_START_WINDOWS.md` with Windows-specific 
+  installation and usage examples.
+
+### Changed
+
+- **console.py:** Refactored terminal handling to be cross-platform with conditional 
+  imports and a `WindowsConsoleMode` context manager for raw terminal mode on Windows.
+- **README.md:** Updated platform support notice to include Windows.
+
 ## [0.6.0] - 2026-06-16
 
 ### Changed
