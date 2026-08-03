@@ -7,7 +7,7 @@ Designed to support seamless developer productivity, headless automation, and AI
 [Demo](https://github.com/user-attachments/assets/656226a9-af13-4fdb-8eda-d7de747336a2)
 
 > [!NOTE]
-> **Platform support:** the Colab CLI supports **Linux, macOS, and Windows**. Native Windows terminal support included — no WSL required.
+> **Platform support:** the Colab CLI supports **Linux, macOS, and Windows**. Native Windows terminal support is tested on Python 3.11+ — no WSL required. See [Windows Quick Start](QUICK_START_WINDOWS.md) if Windows console support is unavailable.
 
 > [!TIP]
 > Looking for in-notebook, interactive agent-assisted coding instead of a terminal workflow? See the [Colab MCP Server](https://github.com/googlecolab/colab-mcp).
@@ -85,6 +85,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab exec [-s NAME] [-f FILE] [--output-image PATH]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook |
 | `colab repl [-s NAME] [--output-image PATH]` | Start an interactive Python REPL on the VM (exits cleanly on piped EOF) |
 | `colab console [-s NAME]` | Connect to a raw interactive TTY shell (tmux) on the remote VM |
+| `colab ssh [-s NAME] [--proxy-mode] [-i KEY]` | Open an SSH shell to the runtime over WebSocket, or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
 
 ### File Operations
 | Command | Description |

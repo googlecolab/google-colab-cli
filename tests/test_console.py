@@ -219,3 +219,154 @@ def test_read_stdin_eof_tty_does_not_close_ws(
     sent_payloads = [json.loads(c.args[0]) for c in mock_ws.send.call_args_list]
     assert {"data": "exit\n"} not in sent_payloads
     mock_ws.close.assert_not_called()
+
+
+@pytest.mark.skipif(
+    console_mod.HAS_TERMIOS, reason="Windows console mode is Windows-specific"
+)
+def test_windows_console_mode_reports_get_console_mode_failure(monkeypatch):
+    class FailingKernel32:
+        def GetStdHandle(self, handle_id):
+            return 10 if handle_id == console_mod.STD_INPUT_HANDLE else 11
+
+        def GetConsoleMode(self, handle, mode_ptr):
+            return 0
+
+        def SetConsoleMode(self, handle, mode):
+            raise AssertionError("SetConsoleMode should not be called")
+
+    monkeypatch.setattr(console_mod, "_KERNEL32", FailingKernel32())
+    monkeypatch.setattr(console_mod.ctypes, "get_last_error", lambda: 6)
+
+    monkeypatch.setattr(console_mod.ctypes, "FormatError", lambda code: "bad handle")
+
+    with pytest.raises(OSError) as exc_info:
+        with console_mod.WindowsConsoleMode():
+            pass
+
+    message = str(exc_info.value)
+    assert "Windows console support is unavailable" in message
+    assert "GetConsoleMode(stdin) failed: bad handle (WinError 6)" in message
+    assert "terminal is detached or lacks console support" in message
+    assert "QUICK_START_WINDOWS.md" in message
+    assert "3.11+" in message
+
+
+@pytest.mark.skipif(
+    console_mod.HAS_TERMIOS, reason="Windows console mode is Windows-specific"
+)
+def test_windows_console_mode_restores_after_keyboard_interrupt(monkeypatch):
+    calls = []
+
+    class Kernel32:
+        def GetStdHandle(self, handle_id):
+            return 10 if handle_id == console_mod.STD_INPUT_HANDLE else 11
+
+        def GetConsoleMode(self, handle, mode_ptr):
+            mode_ptr._obj.value = 0x0007 if handle == 10 else 0x0001
+            return 1
+
+        def SetConsoleMode(self, handle, mode):
+            calls.append((handle, mode))
+            return 1
+
+    monkeypatch.setattr(console_mod, "_KERNEL32", Kernel32())
+
+    with pytest.raises(KeyboardInterrupt):
+        with console_mod.WindowsConsoleMode():
+            raise KeyboardInterrupt
+
+    assert calls[-2:] == [(10, 0x0007), (11, 0x0001)]
+
+
+@pytest.mark.skipif(
+    console_mod.HAS_TERMIOS, reason="Windows console mode is Windows-specific"
+)
+@patch("colab_cli.console.sys.stdin.isatty")
+@patch("colab_cli.console.websocket.WebSocketApp")
+def test_connect_console_restores_windows_mode_after_keyboard_interrupt(
+    mock_ws_app, mock_isatty, monkeypatch, mock_session
+):
+    calls = []
+
+    class Kernel32:
+        def GetStdHandle(self, handle_id):
+            return 10 if handle_id == console_mod.STD_INPUT_HANDLE else 11
+
+        def GetConsoleMode(self, handle, mode_ptr):
+            mode_ptr._obj.value = 0x0007 if handle == 10 else 0x0001
+            return 1
+
+        def SetConsoleMode(self, handle, mode):
+            calls.append((handle, mode))
+            return 1
+
+    mock_isatty.return_value = True
+    mock_ws = MagicMock()
+    mock_ws.run_forever.side_effect = KeyboardInterrupt
+    mock_ws_app.return_value = mock_ws
+    monkeypatch.setattr(console_mod, "_KERNEL32", Kernel32())
+
+    with pytest.raises(KeyboardInterrupt):
+        connect_console(mock_session)
+
+    assert calls[-2:] == [(10, 0x0007), (11, 0x0001)]
+    mock_ws.close.assert_called_once()
+
+
+@pytest.mark.skipif(
+    console_mod.HAS_TERMIOS, reason="Windows console mode is Windows-specific"
+)
+def test_windows_console_mode_logs_restore_failure_during_exception(
+    monkeypatch, caplog
+):
+    calls = []
+
+    class Kernel32:
+        def GetStdHandle(self, handle_id):
+            return 10 if handle_id == console_mod.STD_INPUT_HANDLE else 11
+
+        def GetConsoleMode(self, handle, mode_ptr):
+            mode_ptr._obj.value = 0x0007 if handle == 10 else 0x0001
+            return 1
+
+        def SetConsoleMode(self, handle, mode):
+            calls.append((handle, mode))
+            return 0 if len(calls) >= 3 else 1
+
+    monkeypatch.setattr(console_mod, "_KERNEL32", Kernel32())
+    monkeypatch.setattr(console_mod.ctypes, "get_last_error", lambda: 5)
+    monkeypatch.setattr(console_mod.ctypes, "FormatError", lambda code: "access denied")
+
+    with caplog.at_level("ERROR"):
+        with pytest.raises(KeyboardInterrupt):
+            with console_mod.WindowsConsoleMode():
+                raise KeyboardInterrupt
+
+    assert "Failed to restore Windows console mode" in caplog.text
+    assert "KeyboardInterrupt" in caplog.text
+
+
+@pytest.mark.skipif(
+    console_mod.HAS_TERMIOS, reason="Windows console input is Windows-specific"
+)
+def test_read_char_windows_does_not_block_when_no_input(monkeypatch):
+    getwch = MagicMock()
+    monkeypatch.setattr(console_mod.msvcrt, "kbhit", lambda: False)
+    monkeypatch.setattr(console_mod.msvcrt, "getwch", getwch)
+
+    assert console_mod.read_char_windows() is None
+    getwch.assert_not_called()
+
+
+@pytest.mark.skipif(
+    console_mod.HAS_TERMIOS, reason="Windows console input is Windows-specific"
+)
+def test_read_char_windows_does_not_block_on_extended_key_prefix(monkeypatch):
+    getwch = MagicMock(return_value="\xe0")
+    kbhit = MagicMock(side_effect=[True, False])
+    monkeypatch.setattr(console_mod.msvcrt, "kbhit", kbhit)
+    monkeypatch.setattr(console_mod.msvcrt, "getwch", getwch)
+
+    assert console_mod.read_char_windows() is None
+    assert getwch.call_count == 1

@@ -4,6 +4,19 @@
 
 The Google Colab CLI now **works natively on Windows** — no WSL or Docker required.
 
+Native Windows support is tested and supported on **Python 3.11+**. The CI matrix
+currently covers Windows on Python 3.11 and 3.13. Python 3.10 and older are not
+supported for native Windows console mode; `colab console` exits with a fallback
+message before changing console settings.
+
+If native Windows console support is unavailable, for example because Python is
+older than 3.11 or stdin/stdout is not attached to a real console, `colab console`
+prints a clear fallback message that links back to this guide. In that case:
+
+1. Upgrade to Python 3.11 or newer.
+2. Run from Windows Terminal, PowerShell, or CMD rather than a detached/no-console process.
+3. Retry the command, or use WSL as a fallback if your environment cannot expose a Windows console.
+
 ## Installation
 
 ### Option 1: pip (Recommended for Windows)
@@ -92,6 +105,25 @@ colab console
 ```
 
 Full TTY shell with tmux — works natively in Windows Terminal, PowerShell, or CMD.
+
+### Manual Console Restore Check
+
+To verify Ctrl-C or an exception does not leave your terminal in raw mode:
+
+```powershell
+colab new -s console-check
+colab console -s console-check
+```
+
+Press `Ctrl-C` while the console is active, then run:
+
+```powershell
+Write-Host "typed input should echo normally"
+colab stop -s console-check
+```
+
+If typed characters echo normally and Enter submits commands as usual, the
+Windows console mode was restored correctly.
 
 ## Available Hardware
 
@@ -188,6 +220,15 @@ This happens with `uv tool install`. Solution:
 1. Uninstall: `uv tool uninstall google-colab-cli`
 2. Reinstall: `pip install google-colab-cli`
 
+### Console appears stuck or does not close
+
+Run `colab console` from Windows Terminal, PowerShell, or CMD with Python 3.11 or
+newer. The console uses non-blocking keyboard polling and websocket heartbeats,
+so Ctrl-C or a broken connection should restore the terminal automatically. If
+your terminal still does not echo input after exit, close that terminal tab,
+open a new one, and run the manual restore check above before filing a bug with
+your Windows version, terminal app, Python version, and the exact command used.
+
 ## Next Steps
 
 - [Main README](README.md) - Full documentation
@@ -196,4 +237,5 @@ This happens with `uv tool install`. Solution:
 
 ---
 
-Native Windows support tested on Windows 11 with Python 3.13, PowerShell, and CMD. 🚀
+Native Windows support tested on Windows 11 with Python 3.11 and 3.13,
+PowerShell, CMD, and Windows Terminal. 🚀

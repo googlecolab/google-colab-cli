@@ -42,6 +42,21 @@
 - **Files**: `ls`, `rm`, `upload`, `download`, `edit`.
 - **Automation**: `auth`, `drivemount`, `install`, `log`, `pay`, `version`, `update`.
 
+## Release Tagging Workflow
+The package version is derived from the git tag via `hatch-vcs` (see `pyproject.toml`), so a release is just (1) a `CHANGELOG.md` entry and (2) a `vX.Y.Z` tag on the merged commit. Follow this workflow ONLY when the user explicitly requests a release (e.g. "cut a release", "tag v0.7.0", "release the keep-alive fix"). NEVER propose or perform a release proactively.
+
+1. **Verify a clean, current `main`**: `git fetch origin && git checkout main && git pull --ff-only origin main`. Confirm `git status` is clean. If `main` has diverged or there are unmerged feature branches the user expects in the release, stop and ask.
+2. **Identify unreleased commits**: Find the last release tag with `git describe --tags --abbrev=0`, then list commits since then with `git log <last-tag>..HEAD --oneline`. These are what the new changelog section must cover. Cross-reference each commit's PR number (the `(#NN)` suffix in the merge commit subject) — every entry in the changelog should cite at least one PR.
+3. **Infer the next version (semver)**: Categorize each commit using the Keep-a-Changelog buckets already present in `CHANGELOG.md` (`Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`, `Security`). Pick the bump:
+   - **Major** (`X.0.0`): any breaking change to the CLI surface, flag semantics, on-disk state schema (`sessions.json` / `settings.json`), or persisted token format.
+   - **Minor** (`0.X.0`): at least one `Added` entry (new subcommand, new flag, new capability) with no breaking changes.
+   - **Patch** (`0.0.X`): only `Fixed`, `Changed`, `Removed` (non-breaking cleanup), `Deprecated`, or `Security` entries.
+   Confirm the inferred version with the user before proceeding — never tag without that confirmation, even when the bump seems obvious.
+4. **Draft and commit the CHANGELOG entry on a branch**: Create a release branch (e.g. `release-v0.7.0`), then prepend a new `## [X.Y.Z] - YYYY-MM-DD` section above the previous release. Group entries by category in the order already established in `CHANGELOG.md` (`Changed`, `Added`, `Fixed`, `Removed`). Each bullet should be one short paragraph naming the user-visible behavior change (not the implementation detail) and ending with the PR reference `(#NN)`. Append a new link reference at the bottom: `[X.Y.Z]: https://github.com/googlecolab/google-colab-cli/compare/v<PREV>...vX.Y.Z`. Commit with message `docs: add CHANGELOG.md for vX.Y.Z release`, push the branch, and open a PR with `gh pr create`.
+5. **Wait for the changelog PR to merge**: Do NOT tag the pre-merge commit on your branch. The tag must land on the squash-merge commit that appears on `main` (this is what `hatch-vcs` will see and what users will `git checkout`). After the user reports the PR is merged (or you observe it via `gh pr view <num> --json state,mergeCommit`), `git fetch origin && git checkout main && git pull --ff-only origin main`.
+6. **Tag the merged changelog commit and push the tag**: Verify `git log -1 --oneline` is the merged changelog commit (subject matches `docs: add CHANGELOG.md for vX.Y.Z release (#NN)`). Create an annotated tag whose message is the changelog section body: `git tag -a vX.Y.Z -m "vX.Y.Z" -m "<changelog section body>"`. Push with `git push origin vX.Y.Z`. Do NOT create a GitHub Release entry via `gh release create` — the tag alone is sufficient because `hatch-vcs` reads it directly, and the canonical release notes already live in `CHANGELOG.md`.
+7. **Verify**: Run `git describe --tags --exact-match HEAD` (should print `vX.Y.Z`) and `uv run colab version` (the version string should match). Confirm with `gh api repos/googlecolab/google-colab-cli/tags --jq '.[0].name'` that the tag is visible on the remote.
+
 ## Implementation Principles
 1.  **Direct Execution**: Code for `auth`, `drivemount`, etc., should be injected and executed on the VM kernel.
 2.  **Contents API**: Use the Jupyter Contents API for file management as seen in the browser traces.

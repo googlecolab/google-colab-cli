@@ -22,7 +22,7 @@ import typer
 import uuid
 from nbformat.v4 import new_output
 from rich.console import Console
-from typing import Optional
+from typing import List, Optional
 from typing_extensions import Annotated
 
 from colab_cli.runtime import ColabRuntime
@@ -33,10 +33,45 @@ from colab_cli.commands.session import ensure_keep_alive_daemon
 _console = Console()
 
 TITLE_REGEX = re.compile(r"^\s*#\s*@title\s+(.*)", re.MULTILINE)
+ENV_KEY_REGEX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def is_stdin_tty():
     return sys.stdin.isatty()
+
+
+def _parse_env_vars(env: Optional[List[str]]) -> dict[str, str]:
+    """Parse repeatable --env KEY=VALUE entries into an ordered mapping."""
+    env_vars = {}
+    for item in env or []:
+        if "=" not in item:
+            typer.echo(
+                f"[colab] Invalid --env value {item!r}. Expected KEY=VALUE.",
+                err=True,
+            )
+            raise typer.Exit(2)
+
+        key, value = item.split("=", 1)
+        if not ENV_KEY_REGEX.fullmatch(key):
+            typer.echo(
+                f"[colab] Invalid --env key {key!r}. Expected a valid "
+                "environment variable name.",
+                err=True,
+            )
+            raise typer.Exit(2)
+
+        env_vars[key] = value
+    return env_vars
+
+
+def _build_env_prelude(env_vars: dict[str, str]) -> str:
+    """Build Python source that sets environment variables in the remote kernel."""
+    if not env_vars:
+        return ""
+
+    lines = ["import os"]
+    lines.extend(f"os.environ[{key!r}] = {value!r}" for key, value in env_vars.items())
+    return "\n".join(lines) + "\n"
 
 
 class KeepAlivePulse:
@@ -186,11 +221,22 @@ def exec_command(
     timeout: Annotated[
         Optional[float],
         typer.Option("--timeout", help="Timeout in seconds for code execution"),
+    ] = 30.0,
+    env: Annotated[
+        Optional[List[str]],
+        typer.Option(
+            "--env",
+            help=(
+                "Set an environment variable in the remote kernel as KEY=VALUE. "
+                "Repeat for multiple variables."
+            ),
+        ),
     ] = None,
 ):
     """Execute code in a session"""
     from colab_cli.common import state
 
+    env_vars = _parse_env_vars(env)
     name = state.resolve_session(session)
     s = state.store.get(name)
     if not s:
@@ -248,7 +294,7 @@ def exec_command(
 
         with KeepAlivePulse(state, s):
             for i, block in enumerate(code_blocks):
-                code = block["code"]
+                code = _build_env_prelude(env_vars) + block["code"]
                 identifier = None
                 if is_nb:
                     identifier = notebook_cell_identifier(block)

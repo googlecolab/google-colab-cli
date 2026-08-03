@@ -19,31 +19,34 @@ import jupyter_kernel_client
 from colab_cli.runtime import ColabRuntime
 
 
-@patch("colab_cli.runtime.jupyter_kernel_client.KernelClient")
-def test_colab_runtime_kernel_client(mock_kc_cls):
-    mock_kc = mock_kc_cls.return_value
+def test_colab_runtime_kernel_client():
+    target_attr = "ColabKernelClient" if hasattr(jupyter_kernel_client, "ColabKernelClient") else "KernelClient"
+    token_param_name = "proxy_token" if hasattr(jupyter_kernel_client, "ColabKernelClient") else "token"
 
-    runtime = ColabRuntime("http://url", "token123")
+    with patch.object(jupyter_kernel_client, target_attr) as mock_kc_cls:
+        mock_kc = mock_kc_cls.return_value
+        runtime = ColabRuntime("http://url", "token123")
 
-    assert runtime._kernel_client is None
+        assert runtime._kernel_client is None
 
-    kc = runtime.kernel_client
+        kc = runtime.kernel_client
 
-    mock_kc_cls.assert_called_once_with(
-        server_url="http://url",
-        token="token123",
-        kernel_id=None,
-        client_kwargs={
-            "subprotocol": jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
-            "extra_params": {"colab-runtime-proxy-token": "token123"},
-        },
-        headers={
-            "X-Colab-Client-Agent": "colab-cli",
-            "X-Colab-Runtime-Proxy-Token": "token123",
-        },
-    )
-    mock_kc.start.assert_called_once()
-    assert kc == mock_kc
+        expected_kwargs = {
+            "server_url": "http://url",
+            token_param_name: "token123",
+            "kernel_id": None,
+            "client_kwargs": {
+                "subprotocol": jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
+                "extra_params": {"colab-runtime-proxy-token": "token123"},
+            },
+            "headers": {
+                "X-Colab-Client-Agent": "colab-cli",
+                "X-Colab-Runtime-Proxy-Token": "token123",
+            },
+        }
+        mock_kc_cls.assert_called_once_with(**expected_kwargs)
+        mock_kc.start.assert_called_once()
+        assert kc == mock_kc
 
 
 def test_colab_runtime_execute_code():
