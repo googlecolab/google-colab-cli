@@ -115,7 +115,7 @@ class ColabRuntime:
                             },
                         )
                     else:
-                        self._kernel_client = jupyter_kernel_client.KernelClient(
+                        self._kernel_client = jupyter_kernel_client.JupyterKernelClient(
                             server_url=self.url,
                             token=self.token,
                             kernel_id=self.kernel_id,
