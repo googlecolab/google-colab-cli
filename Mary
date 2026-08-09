@@ -1,0 +1,202 @@
+# ============================================
+# ❤️ VIDEO PARA MARY - TIKTOK / LIKEE ❤️
+# ============================================
+
+!pip -q install moviepy pillow
+
+import random
+import math
+from PIL import Image, ImageDraw, ImageFont
+from moviepy import VideoClip
+from google.colab import files
+
+ANCHO = 1080
+ALTO = 1920
+DURACION = 12
+FPS = 30
+
+FUENTE_GRANDE = ImageFont.truetype(
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 110
+)
+
+FUENTE_MEDIANA = ImageFont.truetype(
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 65
+)
+
+corazones = []
+
+for i in range(40):
+    corazones.append({
+        "x": random.randint(30, ANCHO - 30),
+        "y": random.randint(0, ALTO),
+        "velocidad": random.randint(50, 130),
+        "tamano": random.randint(20, 55)
+    })
+
+
+def dibujar_corazon(draw, x, y, tamano):
+    puntos = []
+
+    for i in range(101):
+        t = 2 * math.pi * i / 100
+
+        px = 16 * math.sin(t) ** 3
+        py = -(13 * math.cos(t)
+               - 5 * math.cos(2*t)
+               - 2 * math.cos(3*t)
+               - math.cos(4*t))
+
+        puntos.append((
+            x + px * tamano / 20,
+            y + py * tamano / 20
+        ))
+
+    draw.polygon(
+        puntos,
+        fill=(255, 70, 150)
+    )
+
+
+def texto_centrado(draw, texto, fuente, y):
+
+    caja = draw.textbbox(
+        (0, 0),
+        texto,
+        font=fuente
+    )
+
+    ancho = caja[2] - caja[0]
+    x = (ANCHO - ancho) / 2
+
+    draw.text(
+        (x + 6, y + 6),
+        texto,
+        font=fuente,
+        fill=(80, 0, 50)
+    )
+
+    draw.text(
+        (x, y),
+        texto,
+        font=fuente,
+        fill=(255, 255, 255)
+    )
+
+
+def crear_frame(t):
+
+    img = Image.new(
+        "RGB",
+        (ANCHO, ALTO),
+        (15, 3, 25)
+    )
+
+    draw = ImageDraw.Draw(img)
+
+    # Estrellas
+    random.seed(10)
+
+    for i in range(120):
+        x = random.randint(0, ANCHO)
+        y = random.randint(0, ALTO)
+
+        draw.ellipse(
+            (x, y, x + 4, y + 4),
+            fill=(150, 70, 130)
+        )
+
+    # Corazones flotando
+    for c in corazones:
+
+        y = (
+            c["y"]
+            - c["velocidad"] * t
+        ) % ALTO
+
+        dibujar_corazon(
+            draw,
+            c["x"],
+            y,
+            c["tamano"]
+        )
+
+    # Texto del video
+    if t < 3:
+
+        texto_centrado(
+            draw,
+            "❤️ MARY ❤️",
+            FUENTE_GRANDE,
+            700
+        )
+
+    elif t < 6:
+
+        texto_centrado(
+            draw,
+            "Tengo algo",
+            FUENTE_MEDIANA,
+            650
+        )
+
+        texto_centrado(
+            draw,
+            "que decirte...",
+            FUENTE_MEDIANA,
+            750
+        )
+
+    elif t < 9:
+
+        texto_centrado(
+            draw,
+            "❤️ TE QUIERO ❤️",
+            FUENTE_GRANDE,
+            700
+        )
+
+    else:
+
+        texto_centrado(
+            draw,
+            "MARY ✨",
+            FUENTE_GRANDE,
+            650
+        )
+
+        texto_centrado(
+            draw,
+            "Eres muy especial ❤️",
+            FUENTE_MEDIANA,
+            800
+        )
+
+    return img
+
+
+def frame(t):
+    return crear_frame(t)
+
+
+print("🎬 Creando video para MARY...")
+print("⏳ Espera mientras se genera...")
+
+video = VideoClip(
+    frame_function=frame,
+    duration=DURACION
+)
+
+video = video.with_fps(FPS)
+
+archivo = "/content/Mary_Te_Quiero.mp4"
+
+video.write_videofile(
+    archivo,
+    fps=FPS,
+    codec="libx264",
+    audio=False
+)
+
+print("\n❤️ ¡VIDEO TERMINADO! ❤️")
+
+files.download(archivo)
