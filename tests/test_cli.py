@@ -25,6 +25,7 @@ from colab_cli.client import (
     PostAssignmentResponse,
     TooManyAssignmentsError,
 )
+from colab_cli.consumption import ConsumptionUserInfo
 
 runner = CliRunner()
 
@@ -182,6 +183,7 @@ def test_cli_status(mock_store, mock_common_state):
         "Last Execution: my_notebook.ipynb | Cell: cell_1 at 2023-10-27 12:00:00"
         in result.output
     )
+    assert "0.07/hr" not in result.output
     mock_store.get.assert_called_with("s1")
 
     # Test with missing session
@@ -225,6 +227,33 @@ def test_cli_status_running_shows_busy(mock_store, mock_common_state):
         "[s1] e1 | Hardware: T4 | Shape: Standard | Variant: GPU | Status: BUSY (exec.py)"
         in result.output
     )
+
+
+def _mock_consumption_info(mock_common_state):
+    mock_common_state.client.get_consumption_user_info.return_value = (
+        ConsumptionUserInfo(
+            paid_compute_units_balance=123.45,
+            consumption_rate_hourly=0.07,
+            assignments_count=1,
+        )
+    )
+
+
+def test_cli_usage(mock_common_state):
+    _mock_consumption_info(mock_common_state)
+    result = runner.invoke(app, ["usage"])
+    assert result.exit_code == 0
+    assert "0.07/hr" in result.output
+    assert "Current balance: 123.45 compute units" in result.output
+
+
+def test_cli_usage_fetch_failure(mock_common_state):
+    mock_common_state.client.get_consumption_user_info.side_effect = RuntimeError(
+        "network down"
+    )
+    result = runner.invoke(app, ["usage"])
+    assert result.exit_code == 1
+    assert "failed to fetch compute-unit info" in result.output
 
 
 def test_cli_new_high_mem(mock_client, mock_store):
