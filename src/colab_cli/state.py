@@ -29,6 +29,7 @@ class SessionState(BaseModel):
     endpoint: str
     variant: str = "DEFAULT"
     accelerator: str = "NONE"
+    machine_shape: str = "STANDARD"
     kernel_id: Optional[str] = None
     session_id: Optional[str] = None
     last_execution: Optional[Tuple[str, Optional[str], str]] = None

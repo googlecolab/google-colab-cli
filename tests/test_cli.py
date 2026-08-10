@@ -104,12 +104,13 @@ def test_cli_new_gpu_variants(mock_client, mock_store, gpu_flag, expected_acc):
 
 def test_cli_sessions_unified_format(mock_client, mock_common_state):
     """`sessions` should lead each line with the local name when known:
-    `[name] endpoint | Hardware: X | Variant: Y`.
+    `[name] endpoint | Hardware: X | Shape: Y | Variant: Z`.
     """
     mock_assignment = MagicMock()
     mock_assignment.endpoint = "e1"
     mock_assignment.variant.name = "GPU"
     mock_assignment.accelerator.value = "T4"
+    mock_assignment.machine_shape.name = "STANDARD"
 
     mock_session_state = MagicMock()
     mock_session_state.name = "s1"
@@ -123,7 +124,7 @@ def test_cli_sessions_unified_format(mock_client, mock_common_state):
 
     result = runner.invoke(app, ["sessions"])
     assert result.exit_code == 0
-    assert "[s1] e1 | Hardware: T4 | Variant: GPU" in result.output
+    assert "[s1] e1 | Hardware: T4 | Shape: Standard | Variant: GPU" in result.output
 
 
 def test_cli_sessions_orphaned_assignment_marked(mock_client, mock_common_state):
@@ -132,13 +133,17 @@ def test_cli_sessions_orphaned_assignment_marked(mock_client, mock_common_state)
     mock_assignment.endpoint = "orphan-ep"
     mock_assignment.variant.name = "DEFAULT"
     mock_assignment.accelerator.value = "NONE"
+    mock_assignment.machine_shape.name = "HIGH_RAM"
 
     mock_common_state.sync_sessions.return_value = ({}, [mock_assignment])
 
     result = runner.invoke(app, ["sessions"])
     assert result.exit_code == 0
     # CPU is the alias for accelerator NONE
-    assert "[?] orphan-ep | Hardware: CPU | Variant: DEFAULT" in result.output
+    assert (
+        "[?] orphan-ep | Hardware: CPU | Shape: High-RAM | Variant: DEFAULT"
+        in result.output
+    )
 
 
 def test_cli_sessions_no_assignments(mock_client, mock_common_state):
@@ -154,6 +159,7 @@ def test_cli_status(mock_store, mock_common_state):
     mock_session_state.endpoint = "e1"
     mock_session_state.accelerator = "NONE"
     mock_session_state.variant = "DEFAULT"
+    mock_session_state.machine_shape = "STANDARD"
     mock_session_state.running = None
     mock_session_state.last_execution = (
         "my_notebook.ipynb",
@@ -167,7 +173,10 @@ def test_cli_status(mock_store, mock_common_state):
     # Test with explicit session: uses unified format including endpoint and Status
     result = runner.invoke(app, ["status", "-s", "s1"])
     assert result.exit_code == 0
-    assert "[s1] e1 | Hardware: CPU | Variant: DEFAULT | Status: IDLE" in result.output
+    assert (
+        "[s1] e1 | Hardware: CPU | Shape: Standard | Variant: DEFAULT | Status: IDLE"
+        in result.output
+    )
     assert (
         "Last Execution: my_notebook.ipynb | Cell: cell_1 at 2023-10-27 12:00:00"
         in result.output
@@ -184,7 +193,10 @@ def test_cli_status(mock_store, mock_common_state):
     mock_store.get.return_value = mock_session_state
     result = runner.invoke(app, ["status"])
     assert result.exit_code == 0
-    assert "[s1] e1 | Hardware: CPU | Variant: DEFAULT | Status: IDLE" in result.output
+    assert (
+        "[s1] e1 | Hardware: CPU | Shape: Standard | Variant: DEFAULT | Status: IDLE"
+        in result.output
+    )
 
     # Test without execution metadata
     mock_session_state.last_execution = None
@@ -200,6 +212,7 @@ def test_cli_status_running_shows_busy(mock_store, mock_common_state):
     mock_session_state.endpoint = "e1"
     mock_session_state.accelerator = "T4"
     mock_session_state.variant = "GPU"
+    mock_session_state.machine_shape = "STANDARD"
     mock_session_state.running = "exec.py"
     mock_session_state.last_execution = None
     mock_store.get.return_value = mock_session_state
@@ -208,9 +221,30 @@ def test_cli_status_running_shows_busy(mock_store, mock_common_state):
     result = runner.invoke(app, ["status", "-s", "s1"])
     assert result.exit_code == 0
     assert (
-        "[s1] e1 | Hardware: T4 | Variant: GPU | Status: BUSY (exec.py)"
+        "[s1] e1 | Hardware: T4 | Shape: Standard | Variant: GPU | Status: BUSY (exec.py)"
         in result.output
     )
+
+
+def test_cli_new_high_mem(mock_client, mock_store):
+    mock_res = MagicMock()
+    mock_res.__class__ = PostAssignmentResponse
+    mock_res.runtime_proxy_info.token = "t1"
+    mock_res.runtime_proxy_info.url = "u1"
+    mock_res.endpoint = "e1"
+    mock_client.assign.return_value = mock_res
+
+    result = runner.invoke(app, ["new", "-s", "hm-sess", "--gpu", "A100", "--high-mem"])
+    assert result.exit_code == 0
+
+    mock_client.assign.assert_called_once()
+    _, kwargs = mock_client.assign.call_args
+    from colab_cli.client import Shape
+
+    assert kwargs["shape"] == Shape.HIGH_RAM
+
+    added_state = mock_store.add.call_args[0][0]
+    assert added_state.machine_shape == "HIGH_RAM"
 
 
 def test_cli_session_resolution(mock_store, mock_common_state):

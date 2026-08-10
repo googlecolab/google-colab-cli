@@ -41,39 +41,20 @@ from typing_extensions import Annotated
 from colab_cli.client import (
     Accelerator,
     ColabRequestError,
+    HIGH_MEM_ONLY_ACCELERATORS,
     PostAssignmentResponse,
-    Variant,
+    Shape,
 )
 from colab_cli.commands.execution import _build_env_prelude, _parse_env_vars
 from colab_cli.commands.session import (
     _is_scope_error,
     _scope_remediation_message,
+    resolve_runtime_options,
     spawn_keep_alive,
 )
 from colab_cli.runtime import ColabRuntime
 from colab_cli.state import SessionState
 from colab_cli.utils import get_status_code, is_terminal_error
-
-
-# TODO(sethtroisi): dedupe this logic with similar in session.py
-def _resolve_accelerator(gpu: Optional[str], tpu: Optional[str]):
-    """Mirror the mapping logic in `commands.session.new`. Centralised so the
-    two commands stay in lock-step on supported accelerator names.
-    """
-    if tpu:
-        variant = Variant.TPU
-        accelerator = Accelerator.V5E1 if tpu.lower() == "v5e1" else Accelerator.V6E1
-        return variant, accelerator
-    if gpu:
-        mapping = {
-            "a100": Accelerator.A100,
-            "h100": Accelerator.H100,
-            "l4": Accelerator.L4,
-            "t4": Accelerator.T4,
-            "g4": Accelerator.G4,
-        }
-        return Variant.GPU, mapping.get(gpu.lower(), Accelerator.A100)
-    return Variant.DEFAULT, Accelerator.NONE
 
 
 def _build_script_payload(
@@ -259,6 +240,16 @@ def run_command(
             ),
         ),
     ] = None,
+    high_mem: Annotated[
+        bool,
+        typer.Option(
+            "--high-mem",
+            help=(
+                "Request a high-RAM machine shape. Requires Colab Pro or Pro+ "
+                "entitlement. Ignored for L4 and TPU accelerators."
+            ),
+        ),
+    ] = False,
     keep: Annotated[
         bool,
         typer.Option(
@@ -306,12 +297,21 @@ def run_command(
         raise typer.Exit(2)
 
     name = session or f"run-{uuid.uuid4().hex[:6]}"
-    variant, accelerator = _resolve_accelerator(gpu, tpu)
+    variant, accelerator, shape = resolve_runtime_options(
+        gpu, tpu, high_mem=high_mem
+    )
+
+    if high_mem and accelerator in HIGH_MEM_ONLY_ACCELERATORS:
+        typer.echo(
+            "[colab] --high-mem ignored: this accelerator only offers one "
+            "machine shape.",
+            err=True,
+        )
 
     typer.echo(f"[colab] Creating session '{name}'...", err=True)
     try:
         res = state.client.assign(
-            uuid.uuid4(), variant=variant, accelerator=accelerator
+            uuid.uuid4(), variant=variant, accelerator=accelerator, shape=shape
         )
     except ColabRequestError as e:
         # Mirror `colab new`'s friendly accelerator-quota message.
@@ -346,6 +346,9 @@ def run_command(
         endpoint=endpoint,
         variant=variant.value,
         accelerator=accelerator.value,
+        machine_shape=(
+            Shape.HIGH_RAM.name if shape == Shape.HIGH_RAM else Shape.STANDARD.name
+        ),
     )
 
     # Pre-flight keep-alive: same scope-detection dance as `colab new` so a
@@ -384,6 +387,7 @@ def run_command(
             "endpoint": endpoint,
             "variant": variant.value,
             "accelerator": accelerator.value,
+            "machine_shape": s.machine_shape,
             "via": "run",
         },
     )

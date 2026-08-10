@@ -114,8 +114,27 @@ def test_bare_ssh_session_resolution(
         new.assert_called_once()
         assert new.call_args.kwargs.get("gpu") == gpu
         assert new.call_args.kwargs.get("tpu") is None
+        assert new.call_args.kwargs.get("high_mem") is False
     else:
         new.assert_not_called()
+
+
+def test_bare_ssh_forwards_high_mem_on_autocreate(mock_common_state, mocker):
+    mock_common_state.store.list.return_value = {}
+    sess = _make_session()
+    mock_common_state.store.get.return_value = sess
+    new = mocker.patch("colab_cli.commands.session.new")
+    _patch_interactive(mocker)
+
+    result = runner.invoke(app, ["ssh", "--gpu", "A100", "--high-mem"])
+    assert result.exit_code == 0
+    new.assert_called_once()
+    assert new.call_args.kwargs == {
+        "session": new.call_args.kwargs["session"],
+        "gpu": "A100",
+        "tpu": None,
+        "high_mem": True,
+    }
 
 
 # --- --proxy-mode -s NAME: create-if-missing / reuse ------------------------

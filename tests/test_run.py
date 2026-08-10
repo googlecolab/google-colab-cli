@@ -115,6 +115,33 @@ def test_run_basic_flow(
     mock_client.unassign.assert_called_once_with("ep-123")
 
 
+def test_run_high_mem_passes_shape_to_assign(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    mock_spawn_keep_alive,
+    assign_response,
+    script_path,
+):
+    mock_client.assign.return_value = assign_response
+    mock_runtime_class.return_value.execute_code.return_value = []
+
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.setdefault("s", s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+
+    result = runner.invoke(
+        app, ["run", "--gpu", "A100", "--high-mem", str(script_path)]
+    )
+    assert result.exit_code == 0, result.output
+
+    from colab_cli.client import Shape
+
+    _, kwargs = mock_client.assign.call_args
+    assert kwargs["shape"] == Shape.HIGH_RAM
+    assert persisted["s"].machine_shape == "HIGH_RAM"
+
+
 # ---------------------------------------------------------------------------
 # --keep flag
 # ---------------------------------------------------------------------------

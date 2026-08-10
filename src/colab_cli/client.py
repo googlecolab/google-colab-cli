@@ -91,6 +91,37 @@ class Shape(int, Enum):
     HIGH_RAM = 1
 
 
+# Accelerators that only exist in a single (high-memory) shape; the assign
+# endpoint ignores shape=hm for these (colab-vscode forces STANDARD).
+HIGH_MEM_ONLY_ACCELERATORS = frozenset(
+    {Accelerator.L4, Accelerator.V5E1, Accelerator.V6E1}
+)
+
+
+def resolve_assign_shape(
+    accelerator: Optional[Accelerator],
+    *,
+    high_mem: bool = False,
+) -> Optional[Shape]:
+    """Map CLI intent to the shape query param for /tun/m/assign.
+
+    Returns ``Shape.HIGH_RAM`` when high memory was requested and the
+    accelerator supports a choice; otherwise ``None`` (omit the URL param).
+    """
+    if not high_mem:
+        return None
+    if accelerator in HIGH_MEM_ONLY_ACCELERATORS:
+        return None
+    return Shape.HIGH_RAM
+
+
+def shape_display_label(shape: Union[Shape, str, int, None]) -> str:
+    """Human-friendly label for sessions/status output."""
+    if shape in (Shape.HIGH_RAM, "HIGH_RAM", 1):
+        return "High-RAM"
+    return "Standard"
+
+
 class RuntimeProxyInfo(BaseModel):
     token: str
     token_expires_in_seconds: int = Field(..., alias="tokenExpiresInSeconds")
@@ -228,14 +259,17 @@ class Client:
         notebook_hash: uuid.UUID,
         variant: Optional[Variant] = None,
         accelerator: Optional[Accelerator] = None,
+        shape: Optional[Shape] = None,
     ) -> Union[PostAssignmentResponse, Assignment]:
-        assignment = self._get_assignment(notebook_hash, variant, accelerator)
+        assignment = self._get_assignment(
+            notebook_hash, variant, accelerator, shape
+        )
         if isinstance(assignment, Assignment):
             return assignment
 
         try:
             res = self._post_assignment(
-                notebook_hash, assignment.token, variant, accelerator
+                notebook_hash, assignment.token, variant, accelerator, shape
             )
         except ColabRequestError as e:
             if get_status_code(e) == 412:
@@ -249,6 +283,7 @@ class Client:
         notebook_hash: uuid.UUID,
         variant: Optional[Variant] = None,
         accelerator: Optional[Accelerator] = None,
+        shape: Optional[Shape] = None,
     ) -> str:
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/assign")
         params = {"nbh": uuid_to_web_safe_base64(notebook_hash)}
@@ -256,6 +291,8 @@ class Client:
             params["variant"] = variant.value
         if accelerator:
             params["accelerator"] = accelerator.value
+        if shape == Shape.HIGH_RAM:
+            params["shape"] = "hm"
 
         req = requests.Request("GET", url, params=params)
         prep = req.prepare()
@@ -266,8 +303,9 @@ class Client:
         notebook_hash: uuid.UUID,
         variant: Optional[Variant] = None,
         accelerator: Optional[Accelerator] = None,
+        shape: Optional[Shape] = None,
     ) -> Union[GetAssignmentResponse, Assignment]:
-        url = self._build_assign_url(notebook_hash, variant, accelerator)
+        url = self._build_assign_url(notebook_hash, variant, accelerator, shape)
         return self._issue_request(url, schema=Union[GetAssignmentResponse, Assignment])
 
     def _post_assignment(
@@ -276,8 +314,9 @@ class Client:
         xsrf_token: str,
         variant: Optional[Variant] = None,
         accelerator: Optional[Accelerator] = None,
+        shape: Optional[Shape] = None,
     ) -> PostAssignmentResponse:
-        url = self._build_assign_url(notebook_hash, variant, accelerator)
+        url = self._build_assign_url(notebook_hash, variant, accelerator, shape)
         headers = {COLAB_XSRF_TOKEN_HEADER["key"]: xsrf_token}
         return self._issue_request(
             url, method="POST", headers=headers, schema=PostAssignmentResponse

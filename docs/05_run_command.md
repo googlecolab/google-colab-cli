@@ -1,5 +1,6 @@
 ---
 log:
+2026-08-09: Added `--high-mem` flag (passthrough to session creation; sends `shape=hm` on assign when supported).
 2026-05-12: Initial design and implementation of `colab run <script.py> [args...]`. Combines `colab new` + `colab exec` + `colab stop` into a single fire-and-forget invocation so a Python file can use `#!/usr/bin/env -S colab run` as a shebang line and execute on a freshly-allocated Colab VM. Adds `--keep` (skip auto-stop), `--gpu` / `--tpu` (passthrough to session creation), `-s/--session` (name the ephemeral session), and propagates the script's exit status (non-zero on any uncaught exception in the kernel). The script's `sys.argv` is re-set inside the kernel to mirror native `python script.py arg1 arg2` semantics, and `__name__` is set to `"__main__"`.
 2026-05-12: Native CPython exit-code semantics for `sys.exit()` / `raise SystemExit(...)` from the script body. The Colab kernel reports a `SystemExit` as `output_type=='error'`, which under the previous logic would have (a) printed the IPython traceback (`An exception has occurred, use %tb...`) and (b) flagged the run as a failure regardless of the integer exit code. Now: `sys.exit()` / `sys.exit(0)` exit 0 silently; `sys.exit(N)` exits N; `sys.exit('msg')` exits 1 (matching CPython). The IPython "To exit: use 'exit', 'quit', or Ctrl-D." UserWarning is filtered via the prelude. Encoded after running `examples/gpu_hello.py` end-to-end and seeing the noisy `SystemExit: 0` traceback at the end of an otherwise-successful GPU run.
 2026-06-04: Bumped the default value of the `--timeout` flag from 10.0s to 30.0s so short-but-silent tasks aren't prematurely killed out of the box. Mirrors the same change for `colab exec`.
@@ -29,6 +30,7 @@ colab run [OPTIONS] SCRIPT [SCRIPT_ARGS]...
 | `-s`, `--session` | str | auto | Name the ephemeral session (helpful with `--keep`). Auto-generated as `run-<6 hex>` if omitted. |
 | `--gpu` | str | None | Same set as `colab new --gpu` (T4, L4, G4, H100, A100). |
 | `--tpu` | str | None | Same set as `colab new --tpu` (v5e1, v6e1). |
+| `--high-mem` | bool | False | Same as `colab new --high-mem` — request high-RAM when supported. |
 | `--keep` | bool | False | Do **not** stop the session after the script finishes. |
 | `--timeout` | float | 30.0 | Timeout in seconds for code execution to prevent hanging on silent tasks. |
 

@@ -16,7 +16,16 @@ import uuid
 import json
 import pytest
 from unittest.mock import MagicMock
-from colab_cli.client import Client, Prod, PostAssignmentResponse, Assignment
+from colab_cli.client import (
+    Client,
+    Prod,
+    PostAssignmentResponse,
+    Assignment,
+    Accelerator,
+    Shape,
+    Variant,
+    resolve_assign_shape,
+)
 
 
 @pytest.fixture
@@ -234,3 +243,81 @@ def test_client_keep_alive_assignment_propagates_http_error(client, mock_session
 
     with pytest.raises(ColabRequestError):
         client.keep_alive_assignment("m-s-test-endpoint")
+
+
+def test_client_assign_url_includes_shape_hm(client, mock_session):
+    get_resp = MagicMock()
+    get_resp.ok = True
+    get_resp.text = ")]}'\n" + json.dumps(
+        {"acc": "NONE", "nbh": "some_nbh", "token": "xsrf_token", "variant": "DEFAULT"}
+    )
+    post_resp = MagicMock()
+    post_resp.ok = True
+    post_resp.text = ")]}'\n" + json.dumps(
+        {
+            "accelerator": "A100",
+            "endpoint": "new_endpoint",
+            "runtimeProxyInfo": {
+                "token": "proxy_token",
+                "tokenExpiresInSeconds": 3600,
+                "url": "http://backend",
+            },
+            "variant": 1,
+        }
+    )
+    mock_session.request.side_effect = [get_resp, post_resp]
+
+    client.assign(
+        uuid.uuid4(),
+        variant=Variant.GPU,
+        accelerator=Accelerator.A100,
+        shape=Shape.HIGH_RAM,
+    )
+
+    get_url = mock_session.request.call_args_list[0].args[1]
+    assert "shape=hm" in get_url
+    post_url = mock_session.request.call_args_list[1].args[1]
+    assert "shape=hm" in post_url
+
+
+def test_client_assign_url_omits_shape_for_standard(client, mock_session):
+    get_resp = MagicMock()
+    get_resp.ok = True
+    get_resp.text = ")]}'\n" + json.dumps(
+        {"acc": "NONE", "nbh": "some_nbh", "token": "xsrf_token", "variant": "DEFAULT"}
+    )
+    post_resp = MagicMock()
+    post_resp.ok = True
+    post_resp.text = ")]}'\n" + json.dumps(
+        {
+            "accelerator": "NONE",
+            "endpoint": "new_endpoint",
+            "runtimeProxyInfo": {
+                "token": "proxy_token",
+                "tokenExpiresInSeconds": 3600,
+                "url": "http://backend",
+            },
+            "variant": 0,
+        }
+    )
+    mock_session.request.side_effect = [get_resp, post_resp]
+
+    client.assign(uuid.uuid4())
+
+    get_url = mock_session.request.call_args_list[0].args[1]
+    assert "shape=" not in get_url
+
+
+@pytest.mark.parametrize(
+    "accelerator,high_mem,expected",
+    [
+        (Accelerator.T4, True, Shape.HIGH_RAM),
+        (Accelerator.A100, True, Shape.HIGH_RAM),
+        (Accelerator.NONE, True, Shape.HIGH_RAM),
+        (Accelerator.L4, True, None),
+        (Accelerator.V5E1, True, None),
+        (Accelerator.T4, False, None),
+    ],
+)
+def test_resolve_assign_shape(accelerator, high_mem, expected):
+    assert resolve_assign_shape(accelerator, high_mem=high_mem) == expected
