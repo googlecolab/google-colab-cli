@@ -23,6 +23,7 @@ from colab_cli.client import (
     Assignment,
     Accelerator,
     Shape,
+    TooManyAssignmentsError,
     Variant,
     resolve_assign_shape,
 )
@@ -74,6 +75,27 @@ def test_client_assign_new(client, mock_session):
     assert mock_session.request.call_count == 2
     last_call_args = mock_session.request.call_args_list[1]
     assert last_call_args.kwargs["headers"]["X-Goog-Colab-Token"] == "xsrf_token"
+
+
+def test_client_assign_412_raises_too_many_assignments(client, mock_session):
+    """A 412 on the POST /assign step should surface as
+    TooManyAssignmentsError, not the raw ColabRequestError."""
+    get_resp = MagicMock()
+    get_resp.ok = True
+    get_resp.text = ")]}'\n" + json.dumps(
+        {"acc": "NONE", "nbh": "some_nbh", "token": "xsrf_token", "variant": "DEFAULT"}
+    )
+
+    post_resp = MagicMock()
+    post_resp.ok = False
+    post_resp.status_code = 412
+    post_resp.reason = "Precondition Failed"
+    post_resp.text = "Precondition Failed"
+
+    mock_session.request.side_effect = [get_resp, post_resp]
+
+    with pytest.raises(TooManyAssignmentsError):
+        client.assign(uuid.uuid4())
 
 
 def test_client_unassign(client, mock_session):

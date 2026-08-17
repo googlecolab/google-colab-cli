@@ -23,6 +23,7 @@ from colab_cli.client import (
     Assignment,
     ColabRequestError,
     PostAssignmentResponse,
+    TooManyAssignmentsError,
 )
 
 runner = CliRunner()
@@ -596,4 +597,28 @@ def test_cli_new_non_400_error_propagates(mock_client, mock_store):
     assert result.exit_code != 0
     # Should not present the 400-specific friendly text
     assert "quota" not in result.output.lower()
+    mock_store.add.assert_not_called()
+
+
+def test_cli_new_412_with_gpu_shows_friendly_error(mock_client, mock_store):
+    """A 412 from `assign` (TooManyAssignmentsError) should surface a
+    friendly message and exit non-zero, NOT raise a traceback."""
+    mock_client.assign.side_effect = TooManyAssignmentsError("Precondition Failed")
+
+    result = runner.invoke(app, ["new", "--gpu", "T4"])
+
+    assert result.exit_code != 0
+    assert "precondition" in result.output.lower()
+    mock_store.add.assert_not_called()
+
+
+def test_cli_new_412_without_accelerator_shows_friendly_error(mock_client, mock_store):
+    """The 412 handling also applies to a plain CPU request, since it can
+    mean too many active sessions rather than an accelerator problem."""
+    mock_client.assign.side_effect = TooManyAssignmentsError("Precondition Failed")
+
+    result = runner.invoke(app, ["new"])
+
+    assert result.exit_code != 0
+    assert "precondition" in result.output.lower()
     mock_store.add.assert_not_called()

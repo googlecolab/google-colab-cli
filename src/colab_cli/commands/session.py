@@ -27,6 +27,7 @@ from colab_cli.client import (
     HIGH_MEM_ONLY_ACCELERATORS,
     PostAssignmentResponse,
     Shape,
+    TooManyAssignmentsError,
     Variant,
     resolve_assign_shape,
     shape_display_label,
@@ -196,6 +197,19 @@ def new(
         res = state.client.assign(
             uuid.uuid4(), variant=variant, accelerator=accelerator, shape=shape
         )
+    except TooManyAssignmentsError:
+        # The Colab backend returns 412 when it refuses the assignment. This
+        # usually means too many active sessions, or a temporary usage or
+        # capacity limit for the requested runtime. Translate that to a
+        # friendly, actionable message instead of a raw traceback.
+        typer.echo(
+            "[colab] Allocation refused (precondition failed). This can mean "
+            "too many active sessions, or a temporary usage or capacity "
+            "limit for the requested runtime. Run `colab stop` to free up a "
+            "session, wait and retry, or try a different accelerator.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     except ColabRequestError as e:
         # The Colab backend returns 400 when the caller is not entitled to the
         # requested accelerator (e.g. no A100 quota). Translate that to a

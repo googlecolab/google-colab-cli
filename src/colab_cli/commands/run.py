@@ -44,6 +44,7 @@ from colab_cli.client import (
     HIGH_MEM_ONLY_ACCELERATORS,
     PostAssignmentResponse,
     Shape,
+    TooManyAssignmentsError,
 )
 from colab_cli.commands.execution import _build_env_prelude, _parse_env_vars
 from colab_cli.commands.session import (
@@ -313,6 +314,16 @@ def run_command(
         res = state.client.assign(
             uuid.uuid4(), variant=variant, accelerator=accelerator, shape=shape
         )
+    except TooManyAssignmentsError:
+        # Mirror `colab new`'s friendly precondition-failed message.
+        typer.echo(
+            "[colab] Allocation refused (precondition failed). This can mean "
+            "too many active sessions, or a temporary usage or capacity "
+            "limit for the requested runtime. Run `colab stop` to free up a "
+            "session, wait and retry, or try a different accelerator.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     except ColabRequestError as e:
         # Mirror `colab new`'s friendly accelerator-quota message.
         if get_status_code(e) == 400 and accelerator != Accelerator.NONE:

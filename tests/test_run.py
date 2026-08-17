@@ -25,6 +25,7 @@ from colab_cli.cli import app
 from colab_cli.client import (
     Accelerator,
     PostAssignmentResponse,
+    TooManyAssignmentsError,
     Variant,
 )
 
@@ -140,6 +141,30 @@ def test_run_high_mem_passes_shape_to_assign(
     _, kwargs = mock_client.assign.call_args
     assert kwargs["shape"] == Shape.HIGH_RAM
     assert persisted["s"].machine_shape == "HIGH_RAM"
+
+
+# ---------------------------------------------------------------------------
+# Allocation errors
+# ---------------------------------------------------------------------------
+
+
+def test_run_412_shows_friendly_error_and_exits(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    mock_spawn_keep_alive,
+    script_path,
+):
+    """A 412 from `assign` (TooManyAssignmentsError) should surface a
+    friendly message and exit non-zero, NOT raise a traceback."""
+    mock_client.assign.side_effect = TooManyAssignmentsError("Precondition Failed")
+
+    result = runner.invoke(app, ["run", "--gpu", "T4", str(script_path)])
+
+    assert result.exit_code != 0
+    assert "precondition" in result.output.lower()
+    mock_client.unassign.assert_not_called()
+    mock_store.add.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
