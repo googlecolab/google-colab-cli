@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The package version is derived from the git tag via `hatch-vcs`; each release
 below corresponds to a tag of the same name.
 
+## [0.7.0] - 2026-09-03
+
+### Changed
+
+- **deps:** Bump cryptography from 49.0.0 to 50.0.0 (#98), and pyasn1 from 0.6.3 to 0.6.4 (#87).
+- **lockfile:** Upgrade lockfile dependencies via `uv lock --upgrade`. (#67)
+- **skill:** Move the CLI help skill details into a dedicated `SKILL.md`. (#55)
+- **docs:** Update `AGENTS.md` with instructions for the release tagging workflow. (#66)
+
+### Added
+
+- **ssh:** Add `colab ssh` command to provide secure SSH-over-WebSocket direct access to the Colab runtime VM. (#88)
+- **execution:** Add `--env KEY=VALUE` flag to `colab run` and `colab exec` commands to allow injecting custom environment variables into the running kernel. (#65)
+- **session:** Add `--high-mem` flag to machine shape selection when creating a new session to support high-RAM resources. (#105)
+
+### Fixed
+
+- **session:** Surface a friendly error message on 412 GPU/TPU allocation failure instead of printing a raw traceback. (#112)
+- **runtime:** Support both `ColabKernelClient` and standard `KernelClient` in the runtime layer to improve compatibility across environments. (#95)
+
 ## [0.6.0] - 2026-06-16
 
 ### Changed
@@ -47,4 +67,5 @@ below corresponds to a tag of the same name.
   `colaboratory`-scope / `pa.googleapis.com` pre-flight remediation messaging,
   superseded by the TFE keep-alive ping. (#61)
 
+[0.7.0]: https://github.com/googlecolab/google-colab-cli/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/googlecolab/google-colab-cli/compare/v0.5.11...v0.6.0
