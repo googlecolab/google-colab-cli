@@ -15,7 +15,6 @@
 import json
 import os
 import sys
-import termios
 from unittest.mock import MagicMock, patch
 
 from colab_cli.console import connect_console, on_message, on_open
@@ -33,6 +32,15 @@ def mock_session():
     )
 
 
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32", reason="POSIX termios/tty not available on Windows"
+)
+win32_only = pytest.mark.skipif(
+    sys.platform != "win32", reason="Windows-only test"
+)
+
+
+@posix_only
 @patch("colab_cli.console.websocket.WebSocketApp")
 @patch("colab_cli.console.tty.setraw")
 @patch("colab_cli.console.termios.tcgetattr")
@@ -50,6 +58,8 @@ def test_console_initialization(
     mock_ws_app,
     mock_session,
 ):
+    import colab_cli.console as console_mod
+
     # Setup mocks
     mock_isatty.return_value = True
     mock_fileno.return_value = 0
@@ -71,26 +81,20 @@ def test_console_initialization(
 
     # 2. Verify raw mode setup and teardown
     mock_tcgetattr.assert_called_once_with(sys.stdin.fileno())
-    mock_setraw.assert_called_once_with(sys.stdin.fileno(), termios.TCSANOW)
+    mock_setraw.assert_called_once_with(
+        sys.stdin.fileno(), console_mod.termios.TCSANOW
+    )
 
     # Teardown should happen in a finally block
     mock_tcsetattr.assert_called_once_with(
-        sys.stdin.fileno(), termios.TCSANOW, ["fake_attrs"]
+        sys.stdin.fileno(), console_mod.termios.TCSANOW, ["fake_attrs"]
     )
 
 
 @patch("colab_cli.console.websocket.WebSocketApp")
-@patch("colab_cli.console.tty.setraw")
-@patch("colab_cli.console.termios.tcgetattr")
-@patch("colab_cli.console.termios.tcsetattr")
 @patch("colab_cli.console.sys.stdin.isatty")
 def test_console_piped_input(
-    mock_isatty,
-    mock_tcsetattr,
-    mock_tcgetattr,
-    mock_setraw,
-    mock_ws_app,
-    mock_session,
+    mock_isatty, mock_ws_app, mock_session
 ):
     mock_isatty.return_value = False
     mock_ws_instance = MagicMock()
@@ -101,9 +105,8 @@ def test_console_piped_input(
         connect_console(mock_session)
 
     # In a piped environment, we should not attempt to use termios or tty
-    mock_tcgetattr.assert_not_called()
-    mock_setraw.assert_not_called()
-    mock_tcsetattr.assert_not_called()
+    mock_ws_app.assert_called_once()
+    mock_ws_instance.run_forever.assert_called_once()
 
 
 @patch("colab_cli.console.os.get_terminal_size")
@@ -220,3 +223,131 @@ def test_read_stdin_eof_tty_does_not_close_ws(
     sent_payloads = [json.loads(c.args[0]) for c in mock_ws.send.call_args_list]
     assert {"data": "exit\n"} not in sent_payloads
     mock_ws.close.assert_not_called()
+
+
+@win32_only
+@patch("colab_cli.console.websocket.WebSocketApp")
+@patch("colab_cli.console.sys.stdin.isatty")
+@patch("colab_cli.console._winconsole.raw_mode")
+@patch("colab_cli.console._winconsole.get_console_size")
+def test_console_initialization_windows(
+    mock_get_console_size,
+    mock_raw_mode,
+    mock_isatty,
+    mock_ws_app,
+    mock_session,
+):
+    """Windows TTY branch uses ctypes raw mode and a resize poller thread."""
+    import colab_cli.console as console_mod
+
+    mock_isatty.return_value = True
+    mock_get_console_size.return_value = (80, 24)
+    mock_ws_instance = MagicMock()
+    mock_ws_app.return_value = mock_ws_instance
+    mock_ws_instance.run_forever.return_value = None
+
+    mock_cm = MagicMock()
+    mock_cm.__enter__ = MagicMock(return_value=(0, 0))
+    mock_cm.__exit__ = MagicMock(return_value=False)
+    mock_raw_mode.return_value = mock_cm
+
+    with patch("colab_cli.console.threading.Thread") as mock_thread:
+        connect_console(mock_session)
+
+    # 1. Verify URL transformation
+    expected_url = "wss://8080-m-s-kkb-usc1f1.us-central1-1.colab.dev/colab/tty?colab-runtime-proxy-token=test-token"
+    mock_ws_app.assert_called_once()
+    assert mock_ws_app.call_args[1]["url"] == expected_url
+
+    # 2. Verify the Windows raw-mode context manager is entered/exited
+    mock_raw_mode.assert_called_once()
+    mock_cm.__enter__.assert_called_once()
+    mock_cm.__exit__.assert_called_once()
+
+    # 3. Resize poller thread is spawned
+    mock_thread.assert_called_once()
+    assert mock_thread.call_args[1].get("daemon") is True
+
+    # 4. _is_running is cleared after the connection ends
+    assert console_mod._is_running is False
+
+
+@win32_only
+@patch("colab_cli.console.websocket.WebSocketApp")
+@patch("colab_cli.console.sys.stdin.isatty")
+@patch("colab_cli.console._winconsole.raw_mode")
+def test_console_windows_tty_restores_modes_on_exception(
+    mock_raw_mode, mock_isatty, mock_ws_app, mock_session
+):
+    """Even if ws.run_forever() raises, the Windows raw-mode context exits."""
+    mock_isatty.return_value = True
+    mock_ws_instance = MagicMock()
+    mock_ws_app.return_value = mock_ws_instance
+    mock_ws_instance.run_forever.side_effect = RuntimeError("boom")
+
+    mock_cm = MagicMock()
+    mock_cm.__enter__ = MagicMock(return_value=(0, 0))
+    mock_cm.__exit__ = MagicMock(return_value=False)
+    mock_raw_mode.return_value = mock_cm
+
+    with patch("colab_cli.console.threading.Thread"):
+        with pytest.raises(RuntimeError, match="boom"):
+            connect_console(mock_session)
+
+    mock_cm.__exit__.assert_called_once()
+
+
+@win32_only
+def test_winconsole_raw_mode_sets_and_restores_real_modes():
+    """Exercise the real Windows console mode save/set/restore helper.
+
+    This calls the actual kernel32 console APIs against the process's
+    CONIN$/CONOUT$ handles and verifies the expected raw-mode flags.
+    """
+    import colab_cli._winconsole as wc
+
+    try:
+        in_handle = wc.open_console_device(
+            "CONIN$", wc.GENERIC_READ | wc.GENERIC_WRITE
+        )
+        out_handle = wc.open_console_device(
+            "CONOUT$", wc.GENERIC_READ | wc.GENERIC_WRITE
+        )
+    except OSError as exc:
+        pytest.skip(f"No real console available in this test environment: {exc}")
+
+    try:
+        original_in_mode = wc.get_console_mode(in_handle)
+        original_out_mode = wc.get_console_mode(out_handle)
+
+        with wc.raw_mode():
+            new_in_mode = wc.get_console_mode(in_handle)
+            assert (new_in_mode & wc.ENABLE_VIRTUAL_TERMINAL_INPUT) != 0
+            assert (new_in_mode & wc.ENABLE_LINE_INPUT) == 0
+            assert (new_in_mode & wc.ENABLE_ECHO_INPUT) == 0
+            assert (new_in_mode & wc.ENABLE_PROCESSED_INPUT) == 0
+
+            new_out_mode = wc.get_console_mode(out_handle)
+            assert (new_out_mode & wc.ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0
+
+        restored_in_mode = wc.get_console_mode(in_handle)
+        restored_out_mode = wc.get_console_mode(out_handle)
+    finally:
+        wc.close_handle(in_handle)
+        wc.close_handle(out_handle)
+
+    assert restored_in_mode == original_in_mode
+    assert restored_out_mode == original_out_mode
+
+
+@win32_only
+def test_winconsole_get_console_size_returns_dimensions():
+    """get_console_size should return positive (width, height) on a real console."""
+    import colab_cli._winconsole as wc
+
+    size = wc.get_console_size()
+    if size is None:
+        pytest.skip("No real console available in this test environment")
+    width, height = size
+    assert width > 0
+    assert height > 0

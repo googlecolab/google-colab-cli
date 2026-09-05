@@ -29,6 +29,21 @@ from colab_cli.utils import get_status_code, render_display_data
 _console = Console()
 
 
+def _read_line_from_controlling_tty() -> str:
+    """Read a single line from the controlling terminal, cross-platform.
+
+    On POSIX we open ``/dev/tty`` directly so the prompt is answered even when
+    stdin is piped/redirected (e.g. ``colab drivemount`` under a non-interactive
+    harness). Windows has no ``/dev/tty``; fall back to ``sys.stdin``.
+    """
+    try:
+        with open("/dev/tty") as tty:
+            return tty.readline()
+    except OSError:
+        # No /dev/tty (Windows) or not readable — use the regular stdin.
+        return sys.stdin.readline()
+
+
 # Default execute() timeout for human-in-the-loop automations (auth /
 # drivemount). The kernel goes silent while the user completes a browser
 # OAuth flow, which can routinely take 30s+; the upstream 10s default
@@ -102,8 +117,7 @@ def run_automation(
                 state.history.log_event(s.name, "drive_auth_needed", {"uri": uri})
                 sys.stdout.write("Press Enter after you have granted access... ")
                 sys.stdout.flush()
-                with open("/dev/tty") as tty:
-                    tty.readline()
+                _read_line_from_controlling_tty()
 
             typer.echo("[colab] Authorizing VM...")
             params["dryrun"] = "false"
