@@ -38,6 +38,27 @@ steps:
         echo "TAG_NAME=${TAG_NAME}"
         echo "git describe: $(git describe --tags --always)"
 
+  # 1b. Delete any artifacts a previous run left staged.
+  #     Staged artifacts are only cleaned up after a successful release; a
+  #     failed one leaves them in place so the release can be retried. Since
+  #     step 4 publishes with `publish_all: true`, a later release would pick
+  #     those up too and republish them alongside the new ones.
+  #     This has to run as part of the build, which holds the delete
+  #     permission that individual accounts do not.
+  #     `|| true` so a first-ever release (nothing to delete) isn't a failure.
+  - id: purge-stale-artifacts
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        gcloud artifacts packages delete "${_EG_PROJECT_NAME}" \
+          --project="${_AR_PROJECT}" \
+          --repository="${_AR_REPOSITORY}" \
+          --location="${_AR_LOCATION}" \
+          --quiet || true
+
   # 2. Build sdist + wheel into dist/ using uv.
   #    Use the non-slim bookworm variant: hatch-vcs derives the version
   #    by shelling out to `git describe`, which requires a git binary

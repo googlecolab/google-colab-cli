@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The package version is derived from the git tag via `hatch-vcs`; each release
 below corresponds to a tag of the same name.
 
+## [0.7.1] - 2026-09-14
+
+### Fixed
+
+- **build:** Pin core metadata to version 2.4 for both the wheel and the sdist.
+  hatchling 1.32.0 bumped its default to 2.5, which our publishing pipeline
+  rejects, so 0.7.0 was built but never reached PyPI. `colab ssh` (added in
+  0.7.0) was therefore unavailable to anyone installing from PyPI.
+
 ## [0.7.0] - 2026-09-03
 
 ### Changed

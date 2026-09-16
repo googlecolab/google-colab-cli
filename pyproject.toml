@@ -57,11 +57,20 @@ build-backend = "hatchling.build"
 source = "vcs"
 
 [tool.hatch.build.targets.wheel]
+# Pin core metadata to 2.4: hatchling 1.32.0 defaults to 2.5, which our
+# publishing pipeline rejects with "'2.5' is not a valid metadata version",
+# silently failing the release. Drop this once 2.5 is accepted.
+core-metadata-version = "2.4"
 packages = ["src/colab_cli"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "README.md" = "colab_cli/README.md"
 "skills/colab-operator/SKILL.md" = "colab_cli/SKILL.md"
+
+[tool.hatch.build.targets.sdist]
+# The sdist is uploaded alongside the wheel and is validated separately, so it
+# needs the same pin.
+core-metadata-version = "2.4"
 
 [tool.uv]
 package = true
