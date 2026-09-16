@@ -16,6 +16,9 @@ End-to-end tests that run against a **live Colab backend** (unlike the mocked un
 | `repro_keep_alive_scope/` | Slow soak test (~95s): runs the daemon long enough for one ping past the pre-flight, asserts no `keep_alive_error` events. |
 | `repro_variable_persistence/` | Variables persist across `colab exec` calls in the same session. |
 | `repro_piped_console/` | Fast smoke test (~5s including session creation): `echo cmd \| colab console -s s` runs the command and exits within 30s. Regression test for the 2026-05-07 EOF-handler fix. |
+| `repro_console_reconnect/` | CPU-only live fault injection: verifies fallback after a transient control-plane proxy failure, prompt exit after another process removes the local binding, and preservation of pre-existing assignments. |
+| `repro_console_flow_control/` | CPU-only live regression: streams more than 600 KB through `/colab/tty`, verifies application-level acknowledgements prevent the remote PTY from pausing, and preserves pre-existing assignments. |
+| `repro_runtime_token_refresh/` | CPU-only regression for issue #106: corrupts the saved runtime-proxy token and verifies `ls`, `exec`, and piped `console` self-heal without disturbing pre-existing assignments. |
 | `repro_bundled_oauth/` | Fast smoke test (~5s): verifies that the fallback OAuth configuration is loaded and starts the OAuth flow with the default client ID when local config is missing. |
 | `repro_ssh/` | Fast smoke test (~5s): `--help` advertises the flags and an unknown session exits. Slow soak test (~95s): Live e2e allocates a CPU VM, runs a real remote command over `colab ssh --proxy-mode` |
 

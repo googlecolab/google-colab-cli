@@ -46,7 +46,10 @@ from colab_cli.client import (
     Shape,
     TooManyAssignmentsError,
 )
-from colab_cli.commands.execution import _build_env_prelude, _parse_env_vars
+from colab_cli.commands.execution import (
+    _build_env_prelude,
+    _parse_env_vars,
+)
 from colab_cli.commands.session import (
     _is_scope_error,
     _scope_remediation_message,
@@ -55,7 +58,35 @@ from colab_cli.commands.session import (
 )
 from colab_cli.runtime import ColabRuntime
 from colab_cli.state import SessionState
-from colab_cli.utils import get_status_code, is_terminal_error
+from colab_cli.utils import get_status_code
+
+
+def _start_run_runtime(state, name, session):
+    """Starts the one-shot runtime using this module's client seam."""
+    endpoint = session.endpoint
+
+    def on_started(kernel_id):
+        state.store.update_fields(name, endpoint, kernel_id=kernel_id)
+
+    def on_session_started(session_id):
+        state.store.update_fields(name, endpoint, session_id=session_id)
+
+    runtime = ColabRuntime(
+        session.url,
+        session.token,
+        kernel_id=session.kernel_id,
+        session_id=session.session_id,
+        on_kernel_started=on_started,
+        on_session_started=on_session_started,
+    )
+    try:
+        runtime.execute_code(
+            "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
+        )
+    except Exception:
+        runtime.stop()
+        raise
+    return runtime, session
 
 
 def _build_script_payload(
@@ -298,9 +329,7 @@ def run_command(
         raise typer.Exit(2)
 
     name = session or f"run-{uuid.uuid4().hex[:6]}"
-    variant, accelerator, shape = resolve_runtime_options(
-        gpu, tpu, high_mem=high_mem
-    )
+    variant, accelerator, shape = resolve_runtime_options(gpu, tpu, high_mem=high_mem)
 
     if high_mem and accelerator in HIGH_MEM_ONLY_ACCELERATORS:
         typer.echo(
@@ -407,40 +436,14 @@ def run_command(
     # ----- Execute the script -------------------------------------------------
     exit_code = 0
     cleanup_reason = "run_completed"
-
-    def on_started(kid):
-        s.kernel_id = kid
-        state.store.add(s)
-
-    def on_sess_started(sid):
-        s.session_id = sid
-        state.store.add(s)
-
-    runtime = ColabRuntime(
-        s.url,
-        s.token,
-        kernel_id=s.kernel_id,
-        session_id=s.session_id,
-        on_kernel_started=on_started,
-        on_session_started=on_sess_started,
-    )
+    runtime = None
 
     try:
-        # Same /content prelude as `colab exec` for consistency.
-        try:
-            runtime.execute_code(
-                "import os; os.makedirs('/content', exist_ok=True); "
-                "os.chdir('/content')"
-            )
-        except Exception as e:
-            if is_terminal_error(e):
-                typer.echo(
-                    f"[colab] Session '{name}' appears to be lost (404/401).",
-                    err=True,
-                )
-                state.prune_session(name)
-                raise typer.Exit(1)
-            raise
+        runtime, s = state.run_with_runtime_proxy_retry(
+            name,
+            lambda current: _start_run_runtime(state, name, current),
+            initial_session=s,
+        )
 
         payload = _build_script_payload(script, script_args, env_vars)
         s.running = f"run({os.path.basename(script)})"
@@ -449,7 +452,12 @@ def run_command(
             None,
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
-        state.store.add(s)
+        state.store.update_fields(
+            name,
+            s.endpoint,
+            running=s.running,
+            last_execution=s.last_execution,
+        )
 
         try:
             outputs = runtime.execute_code(
@@ -472,12 +480,13 @@ def run_command(
             )
     finally:
         s.running = None
-        state.store.add(s)
+        state.store.update_fields(name, s.endpoint, running=None)
         # Best-effort runtime close (keeps remote kernel alive for --keep).
-        try:
-            runtime.stop()
-        except Exception:
-            pass
+        if runtime is not None:
+            try:
+                runtime.stop()
+            except Exception:
+                pass
 
         if not keep:
             _teardown(name, s, reason=cleanup_reason)
@@ -515,7 +524,7 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
         pass
 
     try:
-        state.store.remove(name)
+        state.store.remove_if_endpoint(name, s.endpoint)
     except Exception:
         pass
 

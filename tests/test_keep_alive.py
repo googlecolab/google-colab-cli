@@ -310,6 +310,7 @@ def test_sync_sessions_handles_lost_vm(mock_kill, mock_common_state):
     mock_common_state.store.list.return_value = {"lost-sess": lost_session}
     # Ensure store.get returns the session too
     mock_common_state.store.get.return_value = lost_session
+    mock_common_state.store.remove_if_endpoint.return_value = lost_session
 
     from colab_cli.common import State
 

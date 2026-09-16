@@ -1,5 +1,6 @@
 ---
 log:
+2026-08-13: Fixed issue #106 during one-shot runtime startup. `colab run` adopts refreshed runtime-proxy credentials and retries one proxy-auth failure; endpoint-guarded cleanup preserves refreshed tokens under `--keep`. Startup failures before a runtime object exists now retain the original error and still release the newly allocated assignment.
 2026-08-09: Added `--high-mem` flag (passthrough to session creation; sends `shape=hm` on assign when supported).
 2026-05-12: Initial design and implementation of `colab run <script.py> [args...]`. Combines `colab new` + `colab exec` + `colab stop` into a single fire-and-forget invocation so a Python file can use `#!/usr/bin/env -S colab run` as a shebang line and execute on a freshly-allocated Colab VM. Adds `--keep` (skip auto-stop), `--gpu` / `--tpu` (passthrough to session creation), `-s/--session` (name the ephemeral session), and propagates the script's exit status (non-zero on any uncaught exception in the kernel). The script's `sys.argv` is re-set inside the kernel to mirror native `python script.py arg1 arg2` semantics, and `__name__` is set to `"__main__"`.
 2026-05-12: Native CPython exit-code semantics for `sys.exit()` / `raise SystemExit(...)` from the script body. The Colab kernel reports a `SystemExit` as `output_type=='error'`, which under the previous logic would have (a) printed the IPython traceback (`An exception has occurred, use %tb...`) and (b) flagged the run as a failure regardless of the integer exit code. Now: `sys.exit()` / `sys.exit(0)` exit 0 silently; `sys.exit(N)` exits N; `sys.exit('msg')` exits 1 (matching CPython). The IPython "To exit: use 'exit', 'quit', or Ctrl-D." UserWarning is filtered via the prelude. Encoded after running `examples/gpu_hello.py` end-to-end and seeing the noisy `SystemExit: 0` traceback at the end of an otherwise-successful GPU run.
@@ -57,6 +58,7 @@ print(torch.cuda.get_device_name(0))
    __name__ = '__main__'
    ```
    Then executes the script body in the same kernel cell so any `if __name__ == "__main__":` guard fires.
+   Runtime startup uses the shared proxy-credential refresh path and retries one proxy-auth failure with the latest token/URL from `/tun/m/assignments`.
 3. **Detect failure**: If the kernel returns any output of `output_type == "error"` (uncaught exception, syntax error, etc.) the CLI exits non-zero.
 4. **Tear down**: In a `finally` block, unless `--keep` was passed, the CLI:
    - Sends `runtime.stop(shutdown_kernel=True)` (best-effort).
@@ -66,6 +68,7 @@ print(torch.cuda.get_device_name(0))
    - Logs `session_terminated` with `reason="run_completed"` (or `"run_failed"`).
 
 If `--keep` is set, the session remains visible in `colab sessions` and `colab status` and can be reused with `colab exec -s <name>`, `colab repl -s <name>`, etc., until the user runs `colab stop` (or the keep-alive daemon hits its 24h cap).
+Metadata cleanup is an endpoint-guarded field update, so it cannot overwrite credentials refreshed during startup. If startup fails before a runtime object is created, teardown still unassigns the fresh VM without masking the original exception.
 
 ## AGENTS.md Constraints Honoured
 - **Item 7 (no background threads)**: The keep-alive daemon is the existing detached process from `colab new`; this command introduces no new threads.

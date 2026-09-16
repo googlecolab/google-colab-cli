@@ -313,29 +313,30 @@ def restart_kernel(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
 
-    def on_started(kid):
-        s.kernel_id = kid
-        state.store.add(s)
+    def restart(s):
+        endpoint = s.endpoint
 
-    def on_sess_started(sid):
-        s.session_id = sid
-        state.store.add(s)
+        def on_started(kernel_id):
+            state.store.update_fields(name, endpoint, kernel_id=kernel_id)
 
-    runtime = ColabRuntime(
-        s.url,
-        s.token,
-        kernel_id=s.kernel_id,
-        session_id=s.session_id,
-        on_kernel_started=on_started,
-        on_session_started=on_sess_started,
-    )
+        def on_session_started(session_id):
+            state.store.update_fields(name, endpoint, session_id=session_id)
 
-    try:
-        runtime.restart()
-    finally:
-        runtime.stop()
+        runtime = ColabRuntime(
+            s.url,
+            s.token,
+            kernel_id=s.kernel_id,
+            session_id=s.session_id,
+            on_kernel_started=on_started,
+            on_session_started=on_session_started,
+        )
+        try:
+            return runtime.restart()
+        finally:
+            runtime.stop()
+
+    state.run_with_runtime_proxy_retry(name, restart)
 
 
 def sessions_command():
@@ -435,7 +436,7 @@ def stop(
         pass
 
     state.client.unassign(s.endpoint)
-    state.store.remove(name)
+    state.store.remove_if_endpoint(name, s.endpoint)
     state.history.log_event(name, "session_terminated", {"reason": "user_requested"})
     typer.echo("[colab] Session terminated.")
 

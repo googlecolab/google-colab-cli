@@ -177,6 +177,18 @@ def test_client_list_assignments(client, mock_session):
     assert "tun/m/assignments" in mock_session.request.call_args.args[1]
 
 
+def test_client_list_assignments_forwards_request_timeout(client, mock_session):
+    """Interactive reconnects can bound a stalled control-plane lookup."""
+    resp = MagicMock()
+    resp.ok = True
+    resp.text = ")]}'\n" + json.dumps({"assignments": []})
+    mock_session.request.return_value = resp
+
+    assert client.list_assignments(timeout=10) == []
+
+    assert mock_session.request.call_args.kwargs["timeout"] == 10
+
+
 def test_client_keep_alive_assignment_handles_empty_response(client, mock_session):
     """The tunnel keep-alive ping returns an empty body. With no `schema=`,
     _issue_request must short-circuit and not attempt to parse it."""

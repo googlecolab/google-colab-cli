@@ -24,11 +24,13 @@ from rich.console import Console
 from typing import List, Optional
 from typing_extensions import Annotated
 
+from colab_cli.console import ConsoleConnectionError, connect_console
 from colab_cli.runtime import ColabRuntime
-from colab_cli.utils import handle_image, is_terminal_error, render_display_data
-from colab_cli.console import connect_console
+from colab_cli.utils import handle_image, is_runtime_proxy_error, render_display_data
 
 _console = Console()
+
+CONSOLE_REFRESH_TIMEOUT_SECONDS = 10
 
 TITLE_REGEX = re.compile(r"^\s*#\s*@title\s+(.*)", re.MULTILINE)
 ENV_KEY_REGEX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -36,6 +38,23 @@ ENV_KEY_REGEX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 def is_stdin_tty():
     return sys.stdin.isatty()
+
+
+def _refresh_console_session(state, name, expected):
+    """Refreshes one Console binding without reviving a locally stopped VM."""
+    current = state.store.get(name)
+    if current is None:
+        # `colab stop` removes the endpoint only after unassign succeeds, so a
+        # missing local binding is already conclusive and needs no HTTP lookup.
+        return None
+    if current.endpoint != expected.endpoint:
+        # Let Console's endpoint guard report and reject the replacement.
+        return current
+    return state.refresh_session(
+        name,
+        expected_session=current,
+        timeout=CONSOLE_REFRESH_TIMEOUT_SECONDS,
+    )
 
 
 def _parse_env_vars(env: Optional[List[str]]) -> dict[str, str]:
@@ -70,6 +89,52 @@ def _build_env_prelude(env_vars: dict[str, str]) -> str:
     lines = ["import os"]
     lines.extend(f"os.environ[{key!r}] = {value!r}" for key, value in env_vars.items())
     return "\n".join(lines) + "\n"
+
+
+def _start_runtime(state, name, session):
+    """Starts a runtime, allowing the state layer to retry with fresh creds."""
+    endpoint = session.endpoint
+
+    def on_started(kernel_id):
+        state.store.update_fields(name, endpoint, kernel_id=kernel_id)
+
+    def on_session_started(session_id):
+        state.store.update_fields(name, endpoint, session_id=session_id)
+
+    runtime = ColabRuntime(
+        session.url,
+        session.token,
+        kernel_id=session.kernel_id,
+        session_id=session.session_id,
+        on_kernel_started=on_started,
+        on_session_started=on_session_started,
+    )
+    try:
+        runtime.execute_code(
+            "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
+        )
+    except Exception:
+        runtime.stop()
+        raise
+    return runtime, session
+
+
+def _connect_runtime(state, name):
+    return state.run_with_runtime_proxy_retry(
+        name, lambda session: _start_runtime(state, name, session)
+    )
+
+
+def _raise_runtime_connection_error(state, name, error):
+    if is_runtime_proxy_error(error):
+        if state.store.get(name) is None:
+            typer.echo(f"[colab] Session '{name}' is no longer active.")
+        else:
+            typer.echo(
+                f"[colab] Session '{name}' rejected refreshed runtime credentials."
+            )
+        raise typer.Exit(1)
+    raise error
 
 
 def save_output(outputs, cell):
@@ -199,40 +264,14 @@ def exec_command(
     if not any(b["code"].strip() for b in code_blocks):
         raise typer.Exit(0)
 
-    def on_started(kid):
-        s.kernel_id = kid
-        state.store.add(s)
-
-    def on_sess_started(sid):
-        s.session_id = sid
-        state.store.add(s)
-
-    runtime = ColabRuntime(
-        s.url,
-        s.token,
-        kernel_id=s.kernel_id,
-        session_id=s.session_id,
-        on_kernel_started=on_started,
-        on_session_started=on_sess_started,
-    )
     try:
-        # Ensure we are in /content which is the standard Colab working directory
-        runtime.execute_code(
-            "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
-        )
+        runtime, s = _connect_runtime(state, name)
     except Exception as e:
-        if is_terminal_error(e):
-            typer.echo(
-                f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
-            )
-            state.prune_session(name)
-            raise typer.Exit(1)
-        raise e
+        _raise_runtime_connection_error(state, name, e)
 
     try:
         is_nb = file and file.endswith(".ipynb")
-        s.running = f"exec({file or 'stdin'})"
-        state.store.add(s)
+        state.store.update_fields(name, s.endpoint, running=f"exec({file or 'stdin'})")
 
         for i, block in enumerate(code_blocks):
             code = _build_env_prelude(env_vars) + block["code"]
@@ -256,7 +295,7 @@ def exec_command(
                 identifier,
                 datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             )
-            state.store.add(s)
+            state.store.update_fields(name, s.endpoint, last_execution=s.last_execution)
 
             outputs = runtime.execute_code(
                 code,
@@ -276,8 +315,7 @@ def exec_command(
                 },
             )
     finally:
-        s.running = None
-        state.store.add(s)
+        state.store.update_fields(name, s.endpoint, running=None)
         runtime.stop()
         if file and file.endswith(".ipynb"):
             output_file = os.path.splitext(file)[0] + "_output.ipynb"
@@ -303,35 +341,10 @@ def repl(
         typer.echo(f"[colab] Session '{name}' not found.")
         raise typer.Exit(1)
 
-    def on_started(kid):
-        s.kernel_id = kid
-        state.store.add(s)
-
-    def on_sess_started(sid):
-        s.session_id = sid
-        state.store.add(s)
-
-    runtime = ColabRuntime(
-        s.url,
-        s.token,
-        kernel_id=s.kernel_id,
-        session_id=s.session_id,
-        on_kernel_started=on_started,
-        on_session_started=on_sess_started,
-    )
     try:
-        # Ensure we are in /content which is the standard Colab working directory
-        runtime.execute_code(
-            "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
-        )
+        runtime, s = _connect_runtime(state, name)
     except Exception as e:
-        if is_terminal_error(e):
-            typer.echo(
-                f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
-            )
-            state.prune_session(name)
-            raise typer.Exit(1)
-        raise e
+        _raise_runtime_connection_error(state, name, e)
 
     if not is_stdin_tty():
         code = sys.stdin.read()
@@ -343,8 +356,12 @@ def repl(
             None,
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
-        s.running = "repl(stdin)"
-        state.store.add(s)
+        state.store.update_fields(
+            name,
+            s.endpoint,
+            last_execution=s.last_execution,
+            running="repl(stdin)",
+        )
         try:
             outputs = runtime.execute_code(
                 code, output_hook=lambda o: display_output(o, output_image)
@@ -353,14 +370,12 @@ def repl(
                 name, "execution", {"code": code, "outputs": outputs, "source": "piped"}
             )
         finally:
-            s.running = None
-            state.store.add(s)
+            state.store.update_fields(name, s.endpoint, running=None)
             runtime.stop()
     else:
         from colab_cli.repl import ColabREPL
 
-        s.running = "repl"
-        state.store.add(s)
+        state.store.update_fields(name, s.endpoint, running="repl")
         try:
             repl_inst = ColabREPL(
                 runtime,
@@ -371,8 +386,7 @@ def repl(
             state.history.log_event(name, "repl_started", {})
             repl_inst.run()
         finally:
-            s.running = None
-            state.store.add(s)
+            state.store.update_fields(name, s.endpoint, running=None)
 
 
 def console(
@@ -389,21 +403,24 @@ def console(
         typer.echo(f"[colab] Session '{name}' not found.")
         raise typer.Exit(1)
     state.history.log_event(s.name, "console_started", {})
-    s.running = "console"
-    state.store.add(s)
+    state.store.update_fields(name, s.endpoint, running="console")
     try:
-        connect_console(s)
+        state.run_with_runtime_proxy_retry(
+            name,
+            lambda current: connect_console(
+                current,
+                refresh_session=lambda expected: _refresh_console_session(
+                    state, name, expected
+                ),
+            ),
+        )
+    except ConsoleConnectionError as e:
+        typer.echo(f"[colab] Console disconnected: {e}", err=True)
+        raise typer.Exit(1) from e
     except Exception as e:
-        if is_terminal_error(e):
-            typer.echo(
-                f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
-            )
-            state.prune_session(name)
-            raise typer.Exit(1)
-        raise e
+        _raise_runtime_connection_error(state, name, e)
     finally:
-        s.running = None
-        state.store.add(s)
+        state.store.update_fields(name, s.endpoint, running=None)
 
 
 def register(app: typer.Typer):

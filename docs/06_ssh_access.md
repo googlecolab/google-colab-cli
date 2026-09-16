@@ -1,5 +1,6 @@
 ---
 log:
+2026-08-13: Fixed issue #106 for SSH proxy mode. Existing-session resolution proactively refreshes the runtime-proxy token; a structured HTTP 401 handshake failure refreshes and retries once, while HTTP 404 retains its distinct “SSH endpoint is not exposed” meaning.
 2026-08-09: Added `--high-mem` passthrough when `colab ssh` auto-creates a runtime (forwards to `colab new --high-mem`).
 2026-07-17: Initial design and implementation of `colab ssh` — client side of SSH-over-WebSocket runtime access. Adds three modes (interactive shell, `-s SESSION`, and `--proxy-mode` OpenSSH ProxyCommand bridge), `--identity/-i` key selection, and per-HTTP-status handshake error messages. Server side is out of scope for this repo; the subcommand is a no-op against runtimes that do not expose the `/colab/ssh` endpoint (surfaces an actionable HTTP 404 message).
 2026-07-22: Bare `colab ssh` now auto-creates a runtime (via `colab new`) when you have no active session, with `--gpu/--tpu` passthrough and `--rm` to stop an auto-created runtime on exit. Fixed two client bugs: the dead 403 branch (feature-off returns 404, not 403) and the RSA guidance (all `ssh-rsa` keys are server-rejected, so `id_rsa` is no longer auto-scanned and the 400 message no longer advertises `rsa-sha2`). Added `tests/test_ssh_wire_contract.py` (real loopback-server wire assertions) and `tests/test_ssh_autocreate.py`.
@@ -64,7 +65,10 @@ remote command, so to also land in `/content` add `RequestTTY yes` and
    and sends the resolved public key verbatim in the `X-Colab-Ssh-Pubkey` header
    (no transformation -- the bytes the user controls are exactly what the server
    receives). Only `ssh-ed25519` / `ecdsa-sha2-nistp{256,384,521}` keys are
-   accepted.
+   accepted. Session resolution first adopts the latest proxy token. If the
+   handshake returns HTTP 401, proxy mode refreshes and retries once; HTTP 404
+   is not retried because it normally means that this runtime was created
+   without the SSH endpoint.
 3. **Interactive shell**: Spawns the system `ssh` binary with the CLI re-invoked
    as its own `ProxyCommand` (`python -m colab_cli.cli ssh --proxy-mode`), so the
    WebSocket bridge and the interactive shell share one code path. It forces a
@@ -89,7 +93,7 @@ remote command, so to also land in `/content` add `RequestTTY yes` and
    | Status | Meaning surfaced to the user |
    | --- | --- |
    | 400 | Bad/unsupported/missing pubkey, with remediation (`ssh-keygen -t ed25519`) |
-   | 401 | Token invalid/expired — try `colab new` |
+   | 401 | Token invalid/expired — refresh and retry once, then report authentication failure |
    | 403 | Forbidden — token lacks permission for this action (feature-off returns 404, not 403) |
    | 404 | SSH not exposed on this runtime — SSH is baked in at creation, so run `colab new` |
    | 429 | Another `colab ssh` is already connected — disconnect first |

@@ -33,13 +33,13 @@ def ls(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
-    if not s:
+    if not state.store.get(name):
         typer.echo(f"[colab] Session '{name}' not found.")
         raise typer.Exit(1)
-    contents = ContentsClient(s)
     try:
-        data = contents.list_dir(path)
+        data = state.run_with_runtime_proxy_retry(
+            name, lambda s: ContentsClient(s).list_dir(path)
+        )
         state.history.log_event(name, "file_operation", {"op": "ls", "path": path})
         if data.get("type") == "directory":
             items = data.get("content", [])
@@ -65,13 +65,11 @@ def rm(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
-    if not s:
+    if not state.store.get(name):
         typer.echo(f"[colab] Session '{name}' not found.")
         raise typer.Exit(1)
-    contents = ContentsClient(s)
     try:
-        contents.rm(path)
+        state.run_with_runtime_proxy_retry(name, lambda s: ContentsClient(s).rm(path))
         state.history.log_event(name, "file_operation", {"op": "rm", "path": path})
         typer.echo(f"[colab] Deleted {path}")
     except Exception as e:
@@ -90,16 +88,16 @@ def upload(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
-    if not s:
+    if not state.store.get(name):
         typer.echo(f"[colab] Session '{name}' not found.")
         raise typer.Exit(1)
     if not os.path.isfile(local_path):
         typer.echo(f"[colab] Local file '{local_path}' not found.")
         raise typer.Exit(1)
-    contents = ContentsClient(s)
     try:
-        contents.upload(local_path, remote_path)
+        state.run_with_runtime_proxy_retry(
+            name, lambda s: ContentsClient(s).upload(local_path, remote_path)
+        )
         state.history.log_event(
             name,
             "file_operation",
@@ -126,13 +124,13 @@ def download(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
-    if not s:
+    if not state.store.get(name):
         typer.echo(f"[colab] Session '{name}' not found.")
         raise typer.Exit(1)
-    contents = ContentsClient(s)
     try:
-        contents.download(remote_path, local_path)
+        state.run_with_runtime_proxy_retry(
+            name, lambda s: ContentsClient(s).download(remote_path, local_path)
+        )
         state.history.log_event(
             name,
             "file_operation",
@@ -154,12 +152,9 @@ def edit(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
-    if not s:
+    if not state.store.get(name):
         typer.echo(f"[colab] Session '{name}' not found.")
         raise typer.Exit(1)
-
-    contents = ContentsClient(s)
 
     def get_file_hash(path):
         if not os.path.exists(path):
@@ -173,7 +168,9 @@ def edit(
         local_path = tf.name
 
         try:
-            contents.download(remote_path, local_path)
+            state.run_with_runtime_proxy_retry(
+                name, lambda s: ContentsClient(s).download(remote_path, local_path)
+            )
         except Exception:
             # If download fails, assume file doesn't exist and start empty
             pass
@@ -185,7 +182,9 @@ def edit(
         hash_after = get_file_hash(local_path)
 
         if hash_after != hash_before:
-            contents.upload(local_path, remote_path)
+            state.run_with_runtime_proxy_retry(
+                name, lambda s: ContentsClient(s).upload(local_path, remote_path)
+            )
             state.history.log_event(
                 name,
                 "file_operation",

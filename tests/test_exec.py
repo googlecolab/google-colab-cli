@@ -54,7 +54,9 @@ def test_cli_exec_file(mock_store, mock_runtime_class, mock_common_state, tmp_pa
     assert mock_session.last_execution[0] == str(script)
     assert mock_session.last_execution[1] is None
     assert mock_session.last_execution[2] is not None
-    mock_store.add.assert_called_with(mock_session)
+    mock_store.update_fields.assert_any_call(
+        "s1", mock_session.endpoint, last_execution=mock_session.last_execution
+    )
     mock_runtime.execute_code.assert_any_call(
         "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
     )
@@ -81,7 +83,9 @@ def test_cli_exec_stdin(mock_store, mock_runtime_class, mock_common_state):
     assert mock_session.last_execution[0] == "stdin"
     assert mock_session.last_execution[1] is None
     assert mock_session.last_execution[2] is not None
-    mock_store.add.assert_called_with(mock_session)
+    mock_store.update_fields.assert_any_call(
+        "s1", mock_session.endpoint, last_execution=mock_session.last_execution
+    )
     mock_runtime.execute_code.assert_any_call(
         "print(42)", output_hook=ANY, timeout=30.0
     )
@@ -258,7 +262,7 @@ def test_cli_exec_empty_code(mock_runtime_class, mock_store, mock_common_state):
     assert result.exit_code == 0
 
 
-def test_cli_exec_lost_session_prunes(
+def test_cli_exec_runtime_proxy_failure_does_not_prune(
     mock_runtime_class, mock_store, mock_common_state
 ):
     mock_session = MagicMock()
@@ -272,8 +276,8 @@ def test_cli_exec_lost_session_prunes(
 
     result = runner.invoke(app, ["exec", "-s", "lost-sess"], input="print(1)")
     assert result.exit_code == 1
-    assert "appears to be lost" in result.output
-    mock_common_state.prune_session.assert_called_once_with("lost-sess")
+    assert "rejected refreshed runtime credentials" in result.output
+    mock_common_state.prune_session.assert_not_called()
 
 
 def test_cli_exec_timeout(mock_store, mock_runtime_class, mock_common_state, tmp_path):
