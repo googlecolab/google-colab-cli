@@ -103,28 +103,32 @@ class ColabRuntime:
                         # WSSession (Session) expects 'session' for the ID
                         client_kwargs["session"] = self.session_id
 
+                    # Resolve the kernel client class across
+                    # jupyter-kernel-client variants:
+                    # - git (googlecolab fork): ColabKernelClient(proxy_token=...)
+                    # - PyPI <1.0: KernelClient(token=...)
+                    # - PyPI >=1.0: JupyterKernelClient(token=...)
+                    #   (KernelClient was renamed, breaking `colab exec` with
+                    #   AttributeError when installed from PyPI).
                     if hasattr(jupyter_kernel_client, "ColabKernelClient"):
-                        self._kernel_client = jupyter_kernel_client.ColabKernelClient(
-                            server_url=self.url,
-                            proxy_token=self.token,
-                            kernel_id=self.kernel_id,
-                            client_kwargs=client_kwargs,
-                            headers={
-                                "X-Colab-Client-Agent": "colab-cli",
-                                "X-Colab-Runtime-Proxy-Token": self.token,
-                            },
-                        )
+                        _ClientCls = jupyter_kernel_client.ColabKernelClient
+                        _token_kw = "proxy_token"
+                    elif hasattr(jupyter_kernel_client, "KernelClient"):
+                        _ClientCls = jupyter_kernel_client.KernelClient
+                        _token_kw = "token"
                     else:
-                        self._kernel_client = jupyter_kernel_client.KernelClient(
-                            server_url=self.url,
-                            token=self.token,
-                            kernel_id=self.kernel_id,
-                            client_kwargs=client_kwargs,
-                            headers={
-                                "X-Colab-Client-Agent": "colab-cli",
-                                "X-Colab-Runtime-Proxy-Token": self.token,
-                            },
-                        )
+                        _ClientCls = jupyter_kernel_client.JupyterKernelClient
+                        _token_kw = "token"
+                    self._kernel_client = _ClientCls(
+                        server_url=self.url,
+                        **{_token_kw: self.token},
+                        kernel_id=self.kernel_id,
+                        client_kwargs=client_kwargs,
+                        headers={
+                            "X-Colab-Client-Agent": "colab-cli",
+                            "X-Colab-Runtime-Proxy-Token": self.token,
+                        },
+                    )
                     # Force _own_kernel to False. This prevents jupyter-kernel-client
                     # from automatically deleting the kernel when the client is closed or deleted.
                     self._kernel_client._own_kernel = False
