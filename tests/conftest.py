@@ -29,6 +29,10 @@ def mock_common_state(mocker):
     # Default behavior for sync_sessions
     mock_state.sync_sessions.return_value = ({}, [])
 
+    # By default a terminal-error session is confirmed gone and pruned; tests
+    # covering the recovery path override this to False explicitly.
+    mock_state.prune_or_recover_session.return_value = True
+
     # Global patch for ColabRuntime to prevent network calls
     # We patch it in the modules where it is imported and used
     mocker.patch("colab_cli.commands.session.ColabRuntime")

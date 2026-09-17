@@ -265,6 +265,7 @@ def test_cli_exec_lost_session_prunes(
     mock_session.name = "lost-sess"
     mock_store.get.return_value = mock_session
     mock_common_state.resolve_session.return_value = "lost-sess"
+    mock_common_state.prune_or_recover_session.return_value = True
 
     mock_runtime = mock_runtime_class.return_value
     # Simulate 404 during initialization
@@ -273,7 +274,32 @@ def test_cli_exec_lost_session_prunes(
     result = runner.invoke(app, ["exec", "-s", "lost-sess"], input="print(1)")
     assert result.exit_code == 1
     assert "appears to be lost" in result.output
-    mock_common_state.prune_session.assert_called_once_with("lost-sess")
+    mock_common_state.prune_or_recover_session.assert_called_once_with("lost-sess")
+
+
+def test_cli_exec_expired_token_preserves_session(
+    mock_runtime_class, mock_store, mock_common_state
+):
+    """A 404 from an expired-but-recoverable proxy token must not be reported
+
+    as a lost session: the assignment is still listed server-side, so
+    `prune_or_recover_session` refreshes the credential in place instead of
+    deleting the local binding.
+    """
+    mock_session = MagicMock()
+    mock_session.name = "long-sess"
+    mock_store.get.return_value = mock_session
+    mock_common_state.resolve_session.return_value = "long-sess"
+    mock_common_state.prune_or_recover_session.return_value = False
+
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.side_effect = Exception("404 Not Found")
+
+    result = runner.invoke(app, ["exec", "-s", "long-sess"], input="print(1)")
+    assert result.exit_code == 1
+    assert "appears to be lost" not in result.output
+    assert "preserved the local session" in result.output
+    mock_common_state.prune_or_recover_session.assert_called_once_with("long-sess")
 
 
 def test_cli_exec_timeout(mock_store, mock_runtime_class, mock_common_state, tmp_path):

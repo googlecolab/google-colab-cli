@@ -434,11 +434,19 @@ def run_command(
             )
         except Exception as e:
             if is_terminal_error(e):
-                typer.echo(
-                    f"[colab] Session '{name}' appears to be lost (404/401).",
-                    err=True,
-                )
-                state.prune_session(name)
+                if state.prune_or_recover_session(name):
+                    typer.echo(
+                        f"[colab] Session '{name}' appears to be lost (404/401).",
+                        err=True,
+                    )
+                else:
+                    typer.echo(
+                        f"[colab] Session '{name}' runtime proxy rejected the "
+                        "request (404/401), but the assignment is still listed "
+                        "by the server -- refreshed its credential and "
+                        "preserved the local session. Retry the command.",
+                        err=True,
+                    )
                 raise typer.Exit(1)
             raise
 

@@ -117,3 +117,98 @@ def test_state_client_auth_provider_adc():
             _ = state.client
             args, kwargs = mock_get_creds.call_args
             assert kwargs["provider"] is AuthProvider.ADC
+
+
+# --- prune_or_recover_session -----------------------------------------------
+#
+# The runtime proxy token is short-lived and expires well before an
+# assignment is actually torn down, so a 404/401 from the proxy does not by
+# itself mean the runtime is gone. These tests cover confirming against the
+# server before deleting a local session on that error.
+
+
+def _assignment(endpoint, token, url="https://fresh.example"):
+    a = MagicMock()
+    a.endpoint = endpoint
+    a.runtime_proxy_info.token = token
+    a.runtime_proxy_info.url = url
+    return a
+
+
+def test_prune_or_recover_still_listed_refreshes_and_preserves():
+    """The assignment is still listed: adopt the fresh token, keep the session."""
+    state = State()
+    state._store = MagicMock()
+    state._history = MagicMock()
+    state._client = MagicMock()
+
+    session = MagicMock(endpoint="ep1", token="stale-token", url="https://old.example")
+    state._store.get.return_value = session
+    state._client.list_assignments.return_value = [_assignment("ep1", "fresh-token")]
+
+    pruned = state.prune_or_recover_session("s1")
+
+    assert pruned is False
+    assert session.token == "fresh-token"
+    assert session.url == "https://fresh.example"
+    state._store.add.assert_called_once_with(session)
+    state._store.remove.assert_not_called()
+
+
+def test_prune_or_recover_confirmed_gone_prunes():
+    """The server no longer lists the endpoint: prune as before."""
+    state = State()
+    state._store = MagicMock()
+    state._history = MagicMock()
+    state._client = MagicMock()
+
+    session = MagicMock(endpoint="ep1", token="t", url="u", keep_alive_pid=None)
+    state._store.get.return_value = session
+    state._client.list_assignments.return_value = [_assignment("other-ep", "t")]
+
+    pruned = state.prune_or_recover_session("s1")
+
+    assert pruned is True
+    state._store.remove.assert_called_once_with("s1")
+
+
+def test_prune_or_recover_unreachable_control_plane_preserves():
+    """Can't confirm either way: keep the session rather than risk data loss."""
+    state = State()
+    state._store = MagicMock()
+    state._history = MagicMock()
+    state._client = MagicMock()
+
+    session = MagicMock(endpoint="ep1", token="t", url="u")
+    state._store.get.return_value = session
+    state._client.list_assignments.side_effect = RuntimeError("network down")
+
+    pruned = state.prune_or_recover_session("s1")
+
+    assert pruned is False
+    state._store.remove.assert_not_called()
+
+
+def test_prune_or_recover_missing_session_reports_pruned():
+    state = State()
+    state._store = MagicMock()
+    state._store.get.return_value = None
+
+    assert state.prune_or_recover_session("nope") is True
+
+
+def test_prune_or_recover_unchanged_token_does_not_rewrite_store():
+    """Still listed with the exact same credential: no pointless write."""
+    state = State()
+    state._store = MagicMock()
+    state._history = MagicMock()
+    state._client = MagicMock()
+
+    session = MagicMock(endpoint="ep1", token="same", url="https://fresh.example")
+    state._store.get.return_value = session
+    state._client.list_assignments.return_value = [_assignment("ep1", "same")]
+
+    pruned = state.prune_or_recover_session("s1")
+
+    assert pruned is False
+    state._store.add.assert_not_called()
