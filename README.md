@@ -100,6 +100,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab drivemount [-s NAME] [PATH]` | Mount Google Drive on the VM (default: `/content/drive`) |
 | `colab install [-s NAME] [-r FILE \| PKG...]` | Install packages on the VM using `uv` (falls back to `pip`) |
 | `colab log [-s NAME] [-n N] [-o FILE]` | View or export session history (`.ipynb`, `.md`, `.txt`, `.jsonl`) |
+| `colab usage` | Show account compute-unit usage rate and balance |
 | `colab pay` | Open the Colab subscription page to manage compute units |
 | `colab version` | Print the installed version of the CLI |
 | `colab update [--install]` | Check for a newer release (and optionally upgrade the CLI in place) |

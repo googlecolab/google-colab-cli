@@ -1,5 +1,6 @@
 ---
 log:
+2026-08-10: Added `colab usage` for account-level compute-unit rate/balance via `GET /tun/m/ccu-info` on the session backend (same bearer token as `colab new`).
 2026-08-09: Added `--high-mem` to `colab new`, `colab run`, and `colab ssh` (auto-create). Assign requests now send `shape=hm` when high-RAM is requested; `colab sessions` and `colab status` display machine shape.
 2026-06-15: Switched the keep-alive daemon from the `colab.pa.googleapis.com` `RuntimeService/KeepAliveAssignment` RPC to a Tunnel Frontend HTTP ping (`GET /tun/m/<endpoint>/keep-alive/` with `X-Colab-Tunnel: Google`) on `colab.research.google.com`. The RPC required `serviceusage` consumer access to Colab's internal project `1014160490159`, which ordinary user accounts lack, so every external user hit HTTP 403 `USER_PROJECT_DENIED` and their CLI sessions were idle-pruned within minutes (issue #14). Reproduced live with a third-party account; verified the tunnel ping is accepted by the same bearer-token credential that already works for `assign`. A `ReadTimeout` on the ping is treated as success (TFE records activity before forwarding to the often-non-responding VM). Generalized the pre-flight remediation messaging away from the now-irrelevant `colaboratory`/`pa.googleapis.com` framing, and removed the dead grpc-web client-registry/API-key code.
 2026-06-10: Replaced the POSIX-only `fcntl.flock` file locking in `_LockedFileStore` with the cross-platform `filelock` library (reported broken on Windows). Reads use `ReadWriteLock.read_lock()` (shared) and writes use `write_lock()` (exclusive), preserving the original `LOCK_SH`/`LOCK_EX` semantics. The lock is constructed with `is_singleton=False` so two `StateStore` instances for the same path in one process don't collapse into a single reentrant lock (which would raise `RuntimeError` on multi-threaded write contention). Added shared-read, cross-process exclusion, and multi-thread/multi-process regression tests.
@@ -61,8 +62,8 @@ The CLI maps user flags to these backend parameters:
     - Format: `{ "session_name": { "token": "...", "backend_url": "...", "hardware": "..." } }`
 
 ### 2. Session Status (`colab status`)
-- **API**: `/api/sessions` or querying the kernel for resource usage via a special "status" message.
-- **Metric Collection**: Execute a small snippet on the VM to get memory/CPU usage if the backend API doesn't provide it directly.
+- **Session lines**: Local metadata per tracked session — hardware, shape, variant, IDLE/BUSY (from CLI bookkeeping), and optional last-execution detail. Syncs with `GET /tun/m/assignments` to prune stale entries.
+- **Future**: Real-time VM resource usage (CPU/RAM/GPU) via a kernel diagnostic snippet is still TODO. For account-level compute-unit balance and usage rate, use `colab usage`.
 
 ### 3. Stop Session (`colab stop`)
 - **API**: `POST https://colab.sandbox.google.com/tun/m/unassign/<endpoint>` (based on `tpu-v5e1-unassign.har`).
@@ -94,7 +95,7 @@ To prevent Colab VMs from being deleted due to idle timeouts (standard is ~90 mi
 
 ## TODO / Future Work
 - **Backend Sync**: Implement a way to reconcile the local `sessions.json` with the output of `colab sessions`.
-- **Resource Usage**: Add real-time resource usage (CPU/RAM/GPU) to the `status` output by executing a diagnostic snippet on the VM.
+- **VM Resource Usage**: Add real-time resource usage (CPU/RAM/GPU) to the `status` output by executing a diagnostic snippet on the VM (distinct from account-level CU info, which is available via `colab usage`).
 
 ## Implementation Details
 - **Authentication**: Uses `google-auth-oauthlib` to perform a local server OAuth flow.
