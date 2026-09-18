@@ -115,7 +115,12 @@ class ColabRuntime:
                             },
                         )
                     else:
-                        self._kernel_client = jupyter_kernel_client.KernelClient(
+                        # jupyter-kernel-client >= 1.0.0 renamed KernelClient →
+                        # JupyterKernelClient; fall back gracefully for both versions.
+                        _KernelCls = getattr(
+                            jupyter_kernel_client, "KernelClient", None
+                        ) or jupyter_kernel_client.JupyterKernelClient
+                        self._kernel_client = _KernelCls(
                             server_url=self.url,
                             token=self.token,
                             kernel_id=self.kernel_id,
