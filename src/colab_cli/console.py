@@ -17,10 +17,17 @@ import logging
 import os
 import signal
 import sys
-import termios
 import threading
 import time
-import tty
+
+try:
+    import termios
+    import tty
+except ImportError:
+    # Windows has neither termios nor tty. connect_console() below degrades
+    # gracefully to line-buffered input when these are unavailable.
+    termios = None  # type: ignore
+    tty = None  # type: ignore
 from urllib.parse import urlparse
 
 import websocket
@@ -133,8 +140,17 @@ def connect_console(session: SessionState):
     ws_url = f"{ws_scheme}://{parsed.netloc}/colab/tty?colab-runtime-proxy-token={session.token}"
 
     is_tty = sys.stdin.isatty()
-    fd = sys.stdin.fileno() if is_tty else None
-    old_settings = termios.tcgetattr(fd) if is_tty else None
+    fd = None
+    old_settings = None
+    can_raw = termios is not None and tty is not None and is_tty
+    if can_raw:
+        try:
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+        except Exception:
+            fd = None
+            old_settings = None
+            can_raw = False
 
     ws = websocket.WebSocketApp(
         url=ws_url,
@@ -149,10 +165,12 @@ def connect_console(session: SessionState):
         if _is_running:
             send_terminal_size(ws)
 
+    sigwinch = getattr(signal, "SIGWINCH", None)
     try:
-        if is_tty:
+        if can_raw:
             tty.setraw(fd, termios.TCSANOW)
-            signal.signal(signal.SIGWINCH, handle_sigwinch)
+            if sigwinch is not None:
+                signal.signal(sigwinch, handle_sigwinch)
 
         # This is a blocking call until the connection is closed
         ws.run_forever()
@@ -164,9 +182,16 @@ def connect_console(session: SessionState):
                 # We raise a standard exception that the caller can recognize
                 raise RuntimeError(f"Connection failed: {err_msg}")
     finally:
-        if is_tty:
+        if can_raw:
             # Always ensure the terminal is restored to its original state
-            termios.tcsetattr(fd, termios.TCSANOW, old_settings)
+            try:
+                termios.tcsetattr(fd, termios.TCSANOW, old_settings)
+            except Exception:
+                pass
             # Restore the default signal handler for resize
-            signal.signal(signal.SIGWINCH, signal.SIG_DFL)
+            if sigwinch is not None:
+                try:
+                    signal.signal(sigwinch, signal.SIG_DFL)
+                except Exception:
+                    pass
         print("\r\nConnection closed.")

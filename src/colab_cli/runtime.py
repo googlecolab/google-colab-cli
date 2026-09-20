@@ -115,7 +115,15 @@ class ColabRuntime:
                             },
                         )
                     else:
-                        self._kernel_client = jupyter_kernel_client.KernelClient(
+                        # jupyter-kernel-client 1.x renamed KernelClient to
+                        # JupyterKernelClient. Support both so installs that
+                        # resolve to PyPI (e.g. `uv tool install
+                        # google-colab-cli`, which ignores [tool.uv.sources])
+                        # don't break with AttributeError.
+                        _KernelClient = getattr(
+                            jupyter_kernel_client, "KernelClient", None
+                        ) or getattr(jupyter_kernel_client, "JupyterKernelClient")
+                        self._kernel_client = _KernelClient(
                             server_url=self.url,
                             token=self.token,
                             kernel_id=self.kernel_id,

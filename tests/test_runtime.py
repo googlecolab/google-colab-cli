@@ -20,8 +20,15 @@ from colab_cli.runtime import ColabRuntime
 
 
 def test_colab_runtime_kernel_client():
-    target_attr = "ColabKernelClient" if hasattr(jupyter_kernel_client, "ColabKernelClient") else "KernelClient"
-    token_param_name = "proxy_token" if hasattr(jupyter_kernel_client, "ColabKernelClient") else "token"
+    if hasattr(jupyter_kernel_client, "ColabKernelClient"):
+        target_attr = "ColabKernelClient"
+        token_param_name = "proxy_token"
+    elif hasattr(jupyter_kernel_client, "KernelClient"):
+        target_attr = "KernelClient"
+        token_param_name = "token"
+    else:
+        target_attr = "JupyterKernelClient"
+        token_param_name = "token"
 
     with patch.object(jupyter_kernel_client, target_attr) as mock_kc_cls:
         mock_kc = mock_kc_cls.return_value
@@ -47,6 +54,32 @@ def test_colab_runtime_kernel_client():
         mock_kc_cls.assert_called_once_with(**expected_kwargs)
         mock_kc.start.assert_called_once()
         assert kc == mock_kc
+
+
+def test_colab_runtime_kernel_client_jupyter_rename():
+    """jupyter-kernel-client 1.x renamed KernelClient to JupyterKernelClient.
+
+    Installs via `uv tool install google-colab-cli` resolve the PyPI build
+    (ignoring [tool.uv.sources]), so runtime must fall back instead of
+    raising AttributeError.
+    """
+    orig = jupyter_kernel_client.__dict__.copy()
+    try:
+        jupyter_kernel_client.__dict__.pop("ColabKernelClient", None)
+        jupyter_kernel_client.__dict__.pop("KernelClient", None)
+        mock_jkc_cls = MagicMock()
+        jupyter_kernel_client.JupyterKernelClient = mock_jkc_cls
+
+        runtime = ColabRuntime("http://url", "token123")
+        runtime.kernel_client
+
+        mock_jkc_cls.assert_called_once()
+        _, kwargs = mock_jkc_cls.call_args
+        assert kwargs["token"] == "token123"
+        assert kwargs["server_url"] == "http://url"
+    finally:
+        jupyter_kernel_client.__dict__.clear()
+        jupyter_kernel_client.__dict__.update(orig)
 
 
 def test_colab_runtime_execute_code():
