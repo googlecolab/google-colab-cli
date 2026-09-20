@@ -52,6 +52,7 @@ from colab_cli.commands.session import (
     _scope_remediation_message,
     resolve_runtime_options,
     spawn_keep_alive,
+    token_expiry,
 )
 from colab_cli.runtime import ColabRuntime
 from colab_cli.state import SessionState
@@ -349,12 +350,15 @@ def run_command(
         )
         url = res.runtime_proxy_info.url if hasattr(res, "runtime_proxy_info") else ""
         endpoint = res.endpoint
+    info = getattr(res, "runtime_proxy_info", None)
+    token_expires_at = token_expiry(info) if info else None
 
     s = SessionState(
         name=name,
         token=token,
         url=url,
         endpoint=endpoint,
+        token_expires_at=token_expires_at,
         variant=variant.value,
         accelerator=accelerator.value,
         machine_shape=(

@@ -35,6 +35,9 @@ class SessionState(BaseModel):
     last_execution: Optional[Tuple[str, Optional[str], str]] = None
     running: Optional[str] = None
     keep_alive_pid: Optional[int] = None
+    # Unix time at which `token` stops being accepted by the runtime proxy.
+    # None means unknown (state written by an older CLI): renew right away.
+    token_expires_at: Optional[float] = None
 
 
 class Settings(BaseModel):
@@ -135,6 +138,18 @@ class StateStore(_LockedFileStore):
             sessions = self._load_raw(f)
             sessions[state.name] = state
             self._save_raw(f, sessions)
+
+    def update(self, name: str, **fields):
+        """Sets fields on a stored session in one locked read-modify-write.
+
+        Unlike `get` followed by `add`, this cannot overwrite fields another
+        process wrote in between. A no-op if the session does not exist.
+        """
+        with self._lock_exclusive() as f:
+            sessions = self._load_raw(f)
+            if name in sessions:
+                sessions[name] = sessions[name].model_copy(update=fields)
+                self._save_raw(f, sessions)
 
     def get(self, name: str) -> Optional[SessionState]:
         with self._lock_shared() as f:

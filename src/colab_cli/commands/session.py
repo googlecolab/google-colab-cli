@@ -26,6 +26,7 @@ from colab_cli.client import (
     ColabRequestError,
     HIGH_MEM_ONLY_ACCELERATORS,
     PostAssignmentResponse,
+    RuntimeProxyInfo,
     Shape,
     TooManyAssignmentsError,
     Variant,
@@ -147,6 +148,11 @@ def resolve_runtime_options(
     return variant, accelerator, shape
 
 
+def token_expiry(info: RuntimeProxyInfo) -> float:
+    """Unix time at which the runtime proxy token in `info` stops being accepted."""
+    return time.time() + info.token_expires_in_seconds
+
+
 def new(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
@@ -239,6 +245,8 @@ def new(
         )
         url = res.runtime_proxy_info.url if hasattr(res, "runtime_proxy_info") else ""
         endpoint = res.endpoint
+    info = getattr(res, "runtime_proxy_info", None)
+    token_expires_at = token_expiry(info) if info else None
 
     # Importing locally to avoid a top-level circular import via auth.
 
@@ -247,6 +255,7 @@ def new(
         token=token,
         url=url,
         endpoint=endpoint,
+        token_expires_at=token_expires_at,
         variant=variant.value,
         accelerator=accelerator.value,
         machine_shape=(
@@ -481,6 +490,62 @@ def spawn_keep_alive(
     return p.pid
 
 
+# Renew the runtime proxy token once it has less than this many seconds left.
+TOKEN_RENEWAL_MARGIN = 10 * 60
+
+
+def renew_runtime_token(session_name: str, endpoint: str) -> bool:
+    """Stores a fresh runtime proxy token for the session.
+
+    The token issued when a runtime is assigned expires after about an hour
+    (`RuntimeProxyInfo.token_expires_in_seconds`), independently of the
+    assignment: afterwards every request through the tunnel fails with 404
+    while the VM stays assigned and keeps running. The assignment listing
+    returns a freshly issued token for every assignment, so copying it into
+    the store keeps the session reachable. Returns False when the endpoint
+    is no longer assigned.
+    """
+    from colab_cli.common import state
+
+    for a in state.client.list_assignments():
+        if a.endpoint == endpoint:
+            info = a.runtime_proxy_info
+            state.store.update(
+                session_name,
+                token=info.token,
+                url=info.url,
+                token_expires_at=token_expiry(info),
+            )
+            return True
+    return False
+
+
+def _renew_token_if_expiring(s: SessionState) -> None:
+    """Renews the token when it is about to expire or its expiry is unknown."""
+    from colab_cli.common import state
+
+    if (
+        s.token_expires_at is not None
+        and s.token_expires_at - time.time() >= TOKEN_RENEWAL_MARGIN
+    ):
+        return
+    try:
+        renewed = renew_runtime_token(s.name, s.endpoint)
+    except Exception as e:
+        state.history.log_event(
+            s.name,
+            "token_renewal_error",
+            {"error_type": type(e).__name__, "error": str(e)[:500]},
+        )
+        return
+    if renewed:
+        state.history.log_event(s.name, "token_renewed", {"endpoint": s.endpoint})
+    else:
+        state.history.log_event(
+            s.name, "token_renewal_error", {"error": "assignment no longer listed"}
+        )
+
+
 def keep_alive(
     endpoint: Annotated[str, typer.Argument(help="Endpoint ID")],
     session_name: Annotated[str, typer.Argument(help="Session name")],
@@ -548,6 +613,8 @@ def keep_alive(
             else:
                 # For other errors (network), we retry and don't count as 4xx
                 pass
+
+        _renew_token_if_expiring(s)
 
         time.sleep(60)
 

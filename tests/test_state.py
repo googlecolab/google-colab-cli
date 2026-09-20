@@ -325,3 +325,26 @@ def test_state_store_multiprocess_concurrency(temp_config):
     assert p1.exitcode == 0
     assert p2.exitcode == 0
     assert len(StateStore(temp_config).list()) == 80
+
+
+def test_state_store_update_sets_only_given_fields(temp_config):
+    """`update` is a locked read-modify-write of the given fields, so the
+    keep-alive daemon can renew the token without clobbering fields a command
+    wrote in between (unlike `get` followed by `add`)."""
+    store = StateStore(temp_config)
+    store.add(
+        SessionState(name="s", token="old", url="u1", endpoint="e", kernel_id="k1")
+    )
+
+    store.update("s", token="new", token_expires_at=123.5)
+
+    loaded = StateStore(temp_config).get("s")
+    assert loaded.token == "new"
+    assert loaded.token_expires_at == 123.5
+    assert loaded.kernel_id == "k1"
+
+
+def test_state_store_update_missing_session_is_noop(temp_config):
+    store = StateStore(temp_config)
+    store.update("nope", token="new")
+    assert store.list() == {}

@@ -421,3 +421,121 @@ def test_keep_alive_logs_error_events_and_last_error(mock_common_state):
     assert payload["reason"] == "consecutive_4xx_errors"
     assert payload["last_error"]["status_code"] == 404
     assert payload["last_error"]["error_type"] == "ColabRequestError"
+
+
+# --- Runtime proxy token renewal (issue #106) -------------------------------
+#
+# The token stored at `colab new` expires after `token_expires_in_seconds`
+# (3600 s) although the VM stays assigned; the daemon renews it from the
+# assignment listing before that happens.
+
+
+def _assignment(endpoint, token="t2", url="u2", expires_in=3600):
+    return MagicMock(
+        endpoint=endpoint,
+        runtime_proxy_info=MagicMock(
+            token=token, url=url, token_expires_in_seconds=expires_in
+        ),
+    )
+
+
+def _one_keep_alive_iteration(mock_common_state, session, now=1000.0):
+    """Runs the daemon loop once for `session` with the clock frozen at `now`."""
+    mock_common_state.store.get.return_value = session
+    with (
+        patch("time.time", return_value=now),
+        patch("time.sleep", side_effect=InterruptedError),
+    ):
+        with pytest.raises(InterruptedError):
+            keep_alive(session.endpoint, session.name)
+
+
+@patch("colab_cli.commands.session.spawn_keep_alive")
+def test_new_records_token_expiry(mock_spawn, mock_common_state):
+    """`colab new` stores when the proxy token expires so the daemon can renew
+    it in time."""
+    mock_common_state.client.assign.return_value = _assignment(
+        "e1", token="t1", url="u1", expires_in=3600
+    )
+    mock_spawn.return_value = 9999
+
+    with patch("time.time", return_value=1000.0):
+        new(session="test-sess")
+
+    saved = mock_common_state.store.add.call_args.args[0]
+    assert saved.token_expires_at == 1000.0 + 3600
+
+
+def test_keep_alive_renews_expiring_token(mock_common_state):
+    """With less than TOKEN_RENEWAL_MARGIN left, the daemon copies the fresh
+    token, url and expiry of its own endpoint from the assignment listing."""
+    session = SessionState(
+        name="test", token="old", url="u1", endpoint="e1", token_expires_at=1000.0 + 300
+    )
+    mock_common_state.client.list_assignments.return_value = [
+        _assignment("other"),
+        _assignment("e1", token="new", url="u2"),
+    ]
+
+    _one_keep_alive_iteration(mock_common_state, session)
+
+    mock_common_state.store.update.assert_called_once_with(
+        "test", token="new", url="u2", token_expires_at=1000.0 + 3600
+    )
+    events = [c.args[1] for c in mock_common_state.history.log_event.call_args_list]
+    assert "token_renewed" in events
+
+
+def test_keep_alive_leaves_fresh_token_alone(mock_common_state):
+    session = SessionState(
+        name="test", token="t", url="u", endpoint="e1", token_expires_at=1000.0 + 3000
+    )
+
+    _one_keep_alive_iteration(mock_common_state, session)
+
+    mock_common_state.client.list_assignments.assert_not_called()
+    mock_common_state.store.update.assert_not_called()
+
+
+def test_keep_alive_renews_token_of_unknown_expiry(mock_common_state):
+    """State written by an older CLI has no expiry: renew right away."""
+    session = SessionState(name="test", token="t", url="u", endpoint="e1")
+    mock_common_state.client.list_assignments.return_value = [_assignment("e1")]
+
+    _one_keep_alive_iteration(mock_common_state, session)
+
+    mock_common_state.store.update.assert_called_once()
+
+
+def test_keep_alive_survives_renewal_failure(mock_common_state):
+    """A failed listing is logged and retried next iteration; it neither stops
+    the daemon nor counts as a keep-alive ping error."""
+    session = SessionState(
+        name="test", token="t", url="u", endpoint="e1", token_expires_at=1000.0 + 300
+    )
+    mock_common_state.client.list_assignments.side_effect = RuntimeError("boom")
+
+    # Reaching time.sleep proves the loop went on after the failure.
+    _one_keep_alive_iteration(mock_common_state, session)
+
+    mock_common_state.store.update.assert_not_called()
+    events = {
+        c.args[1]: c.args[2] for c in mock_common_state.history.log_event.call_args_list
+    }
+    assert events["token_renewal_error"]["error"] == "boom"
+    assert "keep_alive_error" not in events
+
+
+def test_keep_alive_does_not_renew_unlisted_assignment(mock_common_state):
+    """An endpoint missing from the listing is gone; nothing is written and the
+    existing 4xx handling of the ping decides when the daemon stops."""
+    session = SessionState(
+        name="test", token="t", url="u", endpoint="e1", token_expires_at=1000.0 + 300
+    )
+    mock_common_state.client.list_assignments.return_value = [_assignment("other")]
+
+    _one_keep_alive_iteration(mock_common_state, session)
+
+    mock_common_state.store.update.assert_not_called()
+    events = [c.args[1] for c in mock_common_state.history.log_event.call_args_list]
+    assert "token_renewal_error" in events

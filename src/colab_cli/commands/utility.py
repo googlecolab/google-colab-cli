@@ -236,6 +236,13 @@ def log(
                         f"actual={event.get('actual_endpoint')}"
                     )
                 typer.echo(msg)
+            elif etype == "token_renewed":
+                typer.echo(f"[{ts}] KEEP: token renewed")
+            elif etype == "token_renewal_error":
+                typer.echo(
+                    f"[{ts}] KEEP: token renewal error "
+                    f"msg={event.get('error', '')[:120]}"
+                )
             else:
                 typer.echo(f"[{ts}] EVENT: {etype}")
 
