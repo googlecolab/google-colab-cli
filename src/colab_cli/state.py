@@ -16,7 +16,7 @@ import contextlib
 import json
 import os
 from datetime import datetime
-from typing import Dict, Optional, Tuple, Iterator, IO
+from typing import Any, Dict, Optional, Tuple, Iterator, IO
 
 import filelock
 from pydantic import BaseModel
@@ -136,6 +136,28 @@ class StateStore(_LockedFileStore):
             sessions[state.name] = state
             self._save_raw(f, sessions)
 
+    def update_fields(
+        self, name: str, endpoint: str, **changes: Any
+    ) -> Optional[SessionState]:
+        """Updates selected fields without overwriting concurrent changes.
+
+        Runtime-proxy credentials are refreshed by separate short-lived CLI
+        processes. Long-running commands must therefore merge their metadata
+        (``running``, kernel IDs, execution timestamps) into the latest stored
+        object instead of writing an old in-memory ``SessionState`` back over
+        a fresh token. The endpoint guard also prevents a late writer from
+        mutating or reviving a same-name replacement session.
+        """
+        with self._lock_exclusive() as f:
+            sessions = self._load_raw(f)
+            current = sessions.get(name)
+            if current is None or current.endpoint != endpoint:
+                return None
+            updated = current.model_copy(update=changes)
+            sessions[name] = updated
+            self._save_raw(f, sessions)
+            return updated
+
     def get(self, name: str) -> Optional[SessionState]:
         with self._lock_shared() as f:
             if f is None:
@@ -149,6 +171,17 @@ class StateStore(_LockedFileStore):
             if name in sessions:
                 del sessions[name]
                 self._save_raw(f, sessions)
+
+    def remove_if_endpoint(self, name: str, endpoint: str) -> Optional[SessionState]:
+        """Removes and returns a session only when its endpoint still matches."""
+        with self._lock_exclusive() as f:
+            sessions = self._load_raw(f)
+            current = sessions.get(name)
+            if current is None or current.endpoint != endpoint:
+                return None
+            del sessions[name]
+            self._save_raw(f, sessions)
+            return current
 
     def list(self) -> Dict[str, SessionState]:
         with self._lock_shared() as f:

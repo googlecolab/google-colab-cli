@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -262,7 +262,7 @@ def test_cli_session_resolution(mock_store, mock_common_state):
 
     result = runner.invoke(app, ["stop"])
     assert result.exit_code == 0
-    mock_store.remove.assert_called_with("unique-session")
+    mock_store.remove_if_endpoint.assert_called_with("unique-session", "e1")
 
 
 def test_cli_stop(mock_client, mock_store, mock_common_state):
@@ -279,7 +279,7 @@ def test_cli_stop(mock_client, mock_store, mock_common_state):
     assert result.exit_code == 0
 
     mock_client.unassign.assert_called_with("e1")
-    mock_store.remove.assert_called_with("s1")
+    mock_store.remove_if_endpoint.assert_called_with("s1", "e1")
 
 
 def test_cli_sessions_prune(mock_common_state):
@@ -413,7 +413,72 @@ def test_cli_console(mock_store, mock_common_state):
     with patch("colab_cli.commands.execution.connect_console") as mock_connect:
         result = runner.invoke(app, ["console", "-s", "s1"])
         assert result.exit_code == 0
-        mock_connect.assert_called_once_with(mock_session_state)
+        mock_connect.assert_called_once()
+        assert mock_connect.call_args.args == (mock_session_state,)
+        refresh_session = mock_connect.call_args.kwargs["refresh_session"]
+        refresh_session(mock_session_state)
+        mock_common_state.refresh_session.assert_called_once_with(
+            "s1", expected_session=mock_session_state, timeout=10
+        )
+
+
+def test_cli_console_reconnect_stops_without_http_after_local_stop(
+    mock_store, mock_common_state
+):
+    """A concurrent `colab stop` is already conclusive local evidence."""
+    mock_session_state = MagicMock()
+    mock_session_state.name = "s1"
+    mock_session_state.endpoint = "endpoint-1"
+    mock_store.get.return_value = mock_session_state
+    mock_common_state.resolve_session.return_value = "s1"
+
+    with patch("colab_cli.commands.execution.connect_console") as mock_connect:
+        result = runner.invoke(app, ["console", "-s", "s1"])
+
+    assert result.exit_code == 0
+    refresh_session = mock_connect.call_args.kwargs["refresh_session"]
+    mock_store.get.return_value = None
+
+    assert refresh_session(mock_session_state) is None
+    mock_common_state.refresh_session.assert_not_called()
+
+
+def test_cli_console_auth_failure_does_not_prune_or_revive(
+    mock_store, mock_common_state
+):
+    from colab_cli.utils import RuntimeProxyError
+
+    mock_session_state = MagicMock()
+    mock_session_state.name = "s1"
+    mock_session_state.endpoint = "endpoint-1"
+    mock_store.get.return_value = mock_session_state
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_common_state.run_with_runtime_proxy_retry.side_effect = RuntimeProxyError(401)
+
+    result = runner.invoke(app, ["console", "-s", "s1"])
+
+    assert result.exit_code == 1
+    mock_common_state.prune_session.assert_not_called()
+    mock_store.add.assert_not_called()
+    mock_store.update_fields.assert_any_call("s1", "endpoint-1", running=None)
+
+
+def test_cli_console_piped_disconnect_is_reported(mock_store, mock_common_state):
+    from colab_cli.console import ConsoleConnectionError
+
+    mock_session_state = MagicMock()
+    mock_session_state.name = "s1"
+    mock_session_state.endpoint = "endpoint-1"
+    mock_store.get.return_value = mock_session_state
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_common_state.run_with_runtime_proxy_retry.side_effect = ConsoleConnectionError(
+        "proxy link lost"
+    )
+
+    result = runner.invoke(app, ["console", "-s", "s1"])
+
+    assert result.exit_code == 1
+    assert "Console disconnected: proxy link lost" in result.output
 
 
 @patch("colab_cli.commands.files.ContentsClient")
@@ -439,6 +504,28 @@ def test_cli_ls(mock_contents_class, mock_store, mock_common_state):
 
 
 @patch("colab_cli.commands.files.ContentsClient")
+def test_cli_ls_uses_refreshed_session(
+    mock_contents_class, mock_store, mock_common_state
+):
+    stale = MagicMock()
+    fresh = MagicMock()
+    mock_store.get.return_value = stale
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_common_state.run_with_runtime_proxy_retry.side_effect = (
+        lambda name, operation: operation(fresh)
+    )
+    mock_contents_class.return_value.list_dir.return_value = {
+        "type": "directory",
+        "content": [],
+    }
+
+    result = runner.invoke(app, ["ls", "-s", "s1", "content"])
+
+    assert result.exit_code == 0, result.output
+    mock_contents_class.assert_called_once_with(fresh)
+
+
+@patch("colab_cli.commands.files.ContentsClient")
 def test_cli_rm(mock_contents_class, mock_store, mock_common_state):
     mock_session_state = MagicMock()
     mock_store.get.return_value = mock_session_state
@@ -449,6 +536,36 @@ def test_cli_rm(mock_contents_class, mock_store, mock_common_state):
 
     mock_contents_class.return_value.rm.assert_called_once_with("content/file.txt")
     assert "Deleted content/file.txt" in result.output
+
+
+def test_restart_kernel_uses_runtime_proxy_retry(mock_store, mock_common_state):
+    stale = MagicMock()
+    stale.endpoint = "endpoint-1"
+    stale.url = "https://old"
+    stale.token = "expired"
+    fresh = MagicMock()
+    fresh.endpoint = "endpoint-1"
+    fresh.url = "https://fresh"
+    fresh.token = "fresh"
+    mock_store.get.return_value = stale
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_common_state.run_with_runtime_proxy_retry.side_effect = (
+        lambda name, operation: operation(fresh)
+    )
+
+    with patch("colab_cli.commands.session.ColabRuntime") as runtime_class:
+        result = runner.invoke(app, ["restart-kernel", "-s", "s1"])
+
+    assert result.exit_code == 0, result.output
+    runtime_class.assert_called_once_with(
+        "https://fresh",
+        "fresh",
+        kernel_id=fresh.kernel_id,
+        session_id=fresh.session_id,
+        on_kernel_started=ANY,
+        on_session_started=ANY,
+    )
+    runtime_class.return_value.restart.assert_called_once_with()
 
 
 @patch("colab_cli.commands.files.os.path.isfile")

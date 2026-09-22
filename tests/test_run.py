@@ -28,6 +28,7 @@ from colab_cli.client import (
     TooManyAssignmentsError,
     Variant,
 )
+from colab_cli.utils import RuntimeProxyError
 
 runner = CliRunner()
 
@@ -195,7 +196,54 @@ def test_run_keep_skips_unassign(
     assert result.exit_code == 0, result.output
     mock_client.assign.assert_called_once()
     mock_client.unassign.assert_not_called()
-    mock_store.remove.assert_not_called()
+    mock_store.remove_if_endpoint.assert_not_called()
+
+
+def test_run_keep_finally_preserves_refreshed_runtime_proxy_credentials(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    mock_spawn_keep_alive,
+    assign_response,
+    script_path,
+    mock_common_state,
+):
+    """Late metadata cleanup must merge instead of restoring the old token."""
+    mock_client.assign.return_value = assign_response
+    mock_runtime_class.return_value.execute_code.return_value = []
+    persisted = {}
+
+    def add(session):
+        persisted[session.name] = session.model_copy(deep=True)
+
+    def get(name):
+        return persisted.get(name)
+
+    def update_fields(name, endpoint, **changes):
+        current = persisted.get(name)
+        if current is None or current.endpoint != endpoint:
+            return None
+        persisted[name] = current.model_copy(update=changes)
+        return persisted[name]
+
+    def refresh_then_run(name, operation, initial_session=None):
+        fresh = persisted[name].model_copy(
+            update={"token": "fresh-token", "url": "https://fresh.url"}
+        )
+        persisted[name] = fresh
+        return operation(fresh)
+
+    mock_store.add.side_effect = add
+    mock_store.get.side_effect = get
+    mock_store.update_fields.side_effect = update_fields
+    mock_common_state.run_with_runtime_proxy_retry.side_effect = refresh_then_run
+
+    result = runner.invoke(app, ["run", "--keep", str(script_path)])
+
+    assert result.exit_code == 0, result.output
+    assert persisted[next(iter(persisted))].token == "fresh-token"
+    assert persisted[next(iter(persisted))].url == "https://fresh.url"
+    assert persisted[next(iter(persisted))].running is None
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +473,30 @@ def test_run_unassign_called_on_exception_during_execute(
 
     result = runner.invoke(app, ["run", str(script_path)])
     assert result.exit_code != 0
+    mock_client.unassign.assert_called_once_with("ep-123")
+
+
+def test_run_startup_failure_preserves_error_and_releases_assignment(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    mock_spawn_keep_alive,
+    assign_response,
+    script_path,
+    mock_common_state,
+):
+    """A failure before ``runtime`` is assigned must not be masked by finally."""
+    mock_client.assign.return_value = assign_response
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.setdefault("s", s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+    startup_error = RuntimeProxyError(401)
+    mock_common_state.run_with_runtime_proxy_retry.side_effect = startup_error
+
+    result = runner.invoke(app, ["run", str(script_path)])
+
+    assert result.exit_code != 0
+    assert result.exception is startup_error
     mock_client.unassign.assert_called_once_with("ep-123")
 
 

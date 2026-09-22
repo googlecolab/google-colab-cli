@@ -83,7 +83,11 @@ def test_repl_execute(mock_store, mock_common_state):
         assert mock_session.last_execution[0] == "REPL"
         assert mock_session.last_execution[1] is None
         assert mock_session.last_execution[2] is not None
-        mock_store.add.assert_called_with(mock_session)
+        mock_store.update_fields.assert_called_with(
+            mock_session.name,
+            mock_session.endpoint,
+            last_execution=mock_session.last_execution,
+        )
 
 
 def test_cli_repl_interactive(
@@ -127,7 +131,12 @@ def test_cli_repl_piped(mock_runtime_class, mock_store, mock_common_state):
     assert result.exit_code == 0
     assert mock_session.last_execution[0] == "stdin"
     assert mock_session.last_execution[2] is not None
-    mock_store.add.assert_called_with(mock_session)
+    mock_store.update_fields.assert_any_call(
+        "s1",
+        mock_session.endpoint,
+        last_execution=mock_session.last_execution,
+        running="repl(stdin)",
+    )
     mock_runtime.execute_code.assert_any_call("print(1)", output_hook=ANY)
 
 

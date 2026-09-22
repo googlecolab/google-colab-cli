@@ -24,6 +24,15 @@ from rich.markdown import Markdown
 from rich.text import Text
 
 
+class RuntimeProxyError(Exception):
+    """The runtime tunnel rejected an expired or invalid proxy token."""
+
+    def __init__(self, status_code: int, response_body: bytes = b""):
+        super().__init__(f"Runtime proxy rejected credentials (HTTP {status_code})")
+        self.status_code = status_code
+        self.response_body = response_body
+
+
 def get_status_code(e: Exception) -> Optional[int]:
     """Safely extracts status code from various exception types."""
     if hasattr(e, "response") and e.response is not None:
@@ -34,16 +43,32 @@ def get_status_code(e: Exception) -> Optional[int]:
     return None
 
 
-def is_terminal_error(e: Exception) -> bool:
-    """Checks if an exception indicates a lost session (404/401)."""
+def is_runtime_proxy_error(e: Exception) -> bool:
+    """Returns whether a connection failed due to proxy authentication.
+
+    Prefer structured status codes. A narrow text fallback is retained for
+    jupyter-kernel-client and websocket-client versions that only expose the
+    HTTP handshake status in their exception message.
+    """
+    if isinstance(e, RuntimeProxyError):
+        return True
+    if isinstance(e, FileNotFoundError):
+        return False
     code = get_status_code(e)
-    if code in (404, 401):
+    if code in (401, 404):
         return True
-    # Some exceptions from jupyter-kernel-client might wrap the real one or be different
-    err_msg = str(e)
-    if "404" in err_msg or "401" in err_msg:
-        return True
-    return False
+    message = str(e).lower()
+    return any(
+        marker in message
+        for marker in (
+            "handshake status 401",
+            "handshake status 404",
+            "http 401",
+            "http 404",
+            "401 unauthorized",
+            "404 not found",
+        )
+    )
 
 
 def print_kitty(image_bytes: bytes):

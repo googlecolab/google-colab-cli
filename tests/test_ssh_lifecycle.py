@@ -39,6 +39,9 @@ from colab_cli.commands import ssh as ssh_module
 import pytest
 import typer
 from typer.testing import CliRunner
+import websocket
+
+from colab_cli.utils import RuntimeProxyError
 
 runner = CliRunner()
 
@@ -60,9 +63,7 @@ def _make_session(
 def _patch_proxy(mocker):
     """Stub the proxy-mode I/O seams (pubkey, connect, bridge)."""
     mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
-    mocker.patch.object(
-        ssh_module, "_connect_websocket", return_value=MagicMock()
-    )
+    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
 
@@ -77,16 +78,12 @@ def test_proxy_mode_rm_stops_even_if_bridge_raises(mock_common_state, mocker):
     mocker.patch("signal.signal")
     stop = mocker.patch("colab_cli.commands.session.stop")
     mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
-    mocker.patch.object(
-        ssh_module, "_connect_websocket", return_value=MagicMock()
-    )
+    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
     mocker.patch.object(
         ssh_module, "_bridge_proxy_mode", side_effect=RuntimeError("ws died")
     )
 
-    result = runner.invoke(
-        app, ["ssh", "--proxy-mode", "-s", "colab-ephem", "--rm"]
-    )
+    result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "colab-ephem", "--rm"])
     assert result.exit_code != 0
     stop.assert_called_once_with(session="colab-ephem")
 
@@ -138,6 +135,64 @@ def test_proxy_mode_exit_code_propagates(mock_common_state, mocker, code):
     assert result.exit_code == code
 
 
+def test_proxy_mode_401_retries_once_with_refreshed_session(mock_common_state, mocker):
+    stale = _make_session(token="expired")
+    fresh = _make_session(token="fresh")
+    mock_common_state.store.get.return_value = stale
+    mock_common_state.resolve_session.return_value = "s1"
+    mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
+    connect = mocker.patch.object(
+        ssh_module,
+        "_connect_websocket",
+        side_effect=[RuntimeProxyError(401), MagicMock()],
+    )
+    mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
+
+    def retry(name, operation, initial_session=None):
+        with pytest.raises(RuntimeProxyError):
+            operation(initial_session)
+        return operation(fresh)
+
+    mock_common_state.run_with_runtime_proxy_retry.side_effect = retry
+
+    result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
+
+    assert result.exit_code == 0, result.output
+    assert connect.call_count == 2
+    assert "expired" in connect.call_args_list[0].args[0]
+    assert "fresh" in connect.call_args_list[1].args[0]
+
+
+def test_proxy_mode_repeated_401_has_actionable_error(mock_common_state, mocker):
+    sess = _make_session()
+    mock_common_state.store.get.return_value = sess
+    mock_common_state.resolve_session.return_value = "s1"
+    mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
+    mock_common_state.run_with_runtime_proxy_retry.side_effect = RuntimeProxyError(401)
+
+    result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
+
+    assert result.exit_code == 1
+    assert "Authentication failed (HTTP 401)" in result.stderr
+
+
+def test_proxy_mode_404_keeps_endpoint_unavailable_message(mock_common_state, mocker):
+    sess = _make_session()
+    mock_common_state.store.get.return_value = sess
+    mock_common_state.resolve_session.return_value = "s1"
+    mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
+    error = websocket.WebSocketBadStatusException("Handshake status 404", 404)
+    error.status_code = 404
+    error.resp_body = b""
+    connect = mocker.patch.object(websocket.WebSocket, "connect", side_effect=error)
+
+    result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
+
+    assert result.exit_code == 1
+    assert "Endpoint not found (HTTP 404)" in result.stderr
+    connect.assert_called_once()
+
+
 # --- C. --proxy-mode keeps stdout clean (byte-stream integrity) --------------
 
 
@@ -162,9 +217,7 @@ def test_proxy_bridge_routes_rm_output_to_stderr(mocker, capsys):
     sess = _make_session("colab")
     mocker.patch("signal.signal")
     mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
-    mocker.patch.object(
-        ssh_module, "_connect_websocket", return_value=MagicMock()
-    )
+    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
     def stop_echo(session=None):
@@ -247,21 +300,15 @@ def test_proxy_mode_rm_teardown_idempotent(mock_common_state, mocker):
     mocker.patch("os._exit")  # keep the handler from killing the test process
     stop = mocker.patch("colab_cli.commands.session.stop")
     mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
-    mocker.patch.object(
-        ssh_module, "_connect_websocket", return_value=MagicMock()
-    )
+    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
 
     def bridge_then_hup(ws):
         handlers[_signal.SIGHUP](_signal.SIGHUP, None)  # OpenSSH HUPs us
         return 0
 
-    mocker.patch.object(
-        ssh_module, "_bridge_proxy_mode", side_effect=bridge_then_hup
-    )
+    mocker.patch.object(ssh_module, "_bridge_proxy_mode", side_effect=bridge_then_hup)
 
-    result = runner.invoke(
-        app, ["ssh", "--proxy-mode", "-s", "colab-ephem", "--rm"]
-    )
+    result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "colab-ephem", "--rm"])
     assert result.exit_code == 0
     stop.assert_called_once_with(session="colab-ephem")
 

@@ -38,7 +38,6 @@ _console = Console()
 INTERACTIVE_AUTOMATION_TIMEOUT_SEC = 600
 
 
-
 def run_automation(
     name: str,
     op: str,
@@ -49,8 +48,18 @@ def run_automation(
 ):
     from colab_cli.common import state
 
-    s = state.store.get(name)
-    runtime = ColabRuntime(s.url, s.token, session_name=s.name, history=state.history)
+    def start_runtime(s):
+        runtime = ColabRuntime(
+            s.url, s.token, session_name=s.name, history=state.history
+        )
+        try:
+            _ = runtime.kernel_client
+        except Exception:
+            runtime.stop()
+            raise
+        return runtime, s
+
+    runtime, s = state.run_with_runtime_proxy_retry(name, start_runtime)
 
     def drivefs_hook(deserialize_msg, wsclient):
         content = deserialize_msg.get("content", {})
@@ -133,13 +142,17 @@ def run_automation(
 
     runtime.colab_request_hook = drivefs_hook
     try:
-        s.running = f"automation({op})"
         s.last_execution = (
             f"automation:{op}",
             None,
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
-        state.store.add(s)
+        state.store.update_fields(
+            name,
+            s.endpoint,
+            running=f"automation({op})",
+            last_execution=s.last_execution,
+        )
 
         if op == "drivemount":
             state.history.log_event(
@@ -169,8 +182,7 @@ def run_automation(
                 else:
                     sys.stderr.write(f"{ename}: {evalue}\n")
     finally:
-        s.running = None
-        state.store.add(s)
+        state.store.update_fields(name, s.endpoint, running=None)
         runtime.stop()
 
 
@@ -240,9 +252,11 @@ def install(
         if not os.path.isfile(requirement):
             typer.echo(f"[colab] Requirements file '{requirement}' not found locally.")
             raise typer.Exit(1)
-        contents = ContentsClient(state.store.get(name))
         remote_path = f"content/{os.path.basename(requirement)}"
-        contents.upload(requirement, remote_path)
+        state.run_with_runtime_proxy_retry(
+            name,
+            lambda s: ContentsClient(s).upload(requirement, remote_path),
+        )
         commands.extend(["-r", f"/{remote_path}"])
     if packages:
         commands.extend(packages)

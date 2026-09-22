@@ -68,6 +68,44 @@ def test_state_store_remove(temp_config):
     assert new_store.get("to-be-removed") is None
 
 
+def test_state_store_update_fields_preserves_runtime_proxy(temp_config):
+    """Metadata writers must not overwrite a concurrently refreshed token."""
+    store = StateStore(temp_config)
+    store.add(SessionState(name="s", token="fresh", url="fresh-url", endpoint="e1"))
+
+    updated = store.update_fields("s", "e1", running=None, kernel_id="kernel-1")
+
+    assert updated.token == "fresh"
+    assert updated.url == "fresh-url"
+    assert updated.kernel_id == "kernel-1"
+
+
+def test_state_store_update_fields_does_not_revive_removed_session(temp_config):
+    store = StateStore(temp_config)
+    store.add(SessionState(name="s", token="old", url="old-url", endpoint="e1"))
+    store.remove("s")
+
+    assert store.update_fields("s", "e1", running=None) is None
+    assert store.get("s") is None
+
+
+def test_state_store_update_fields_rejects_same_name_new_endpoint(temp_config):
+    """A stale command must not overwrite a same-name replacement session."""
+    store = StateStore(temp_config)
+    store.add(SessionState(name="s", token="new", url="new-url", endpoint="e2"))
+
+    assert store.update_fields("s", "e1", running=None) is None
+    assert store.get("s").endpoint == "e2"
+
+
+def test_state_store_remove_if_endpoint_rejects_same_name_new_endpoint(temp_config):
+    store = StateStore(temp_config)
+    store.add(SessionState(name="s", token="new", url="new-url", endpoint="e2"))
+
+    assert store.remove_if_endpoint("s", "e1") is None
+    assert store.get("s").endpoint == "e2"
+
+
 def test_state_store_list(temp_config):
     store = StateStore(temp_config)
     s1 = SessionState(name="s1", token="t1", url="u1", endpoint="e1")

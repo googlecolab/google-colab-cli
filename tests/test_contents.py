@@ -16,7 +16,7 @@ import base64
 from unittest.mock import MagicMock, patch
 
 import pytest
-from colab_cli.contents import ContentsClient
+from colab_cli.contents import ContentsClient, RuntimeProxyError
 from requests import Response
 
 from colab_cli.state import SessionState
@@ -61,6 +61,34 @@ def test_list_dir(mock_request, client):
     )
     assert res["type"] == "directory"
     assert len(res["content"]) == 2
+
+
+@pytest.mark.parametrize("status", [401, 404])
+@patch("colab_cli.contents.requests.request")
+def test_empty_auth_failure_is_runtime_proxy_error_not_missing_file(
+    mock_request, client, status
+):
+    """Expired proxy tokens return an empty 404 at the tunnel frontend."""
+    mock_resp = MagicMock(spec=Response)
+    mock_resp.status_code = status
+    mock_resp.content = b""
+    mock_request.return_value = mock_resp
+
+    with pytest.raises(RuntimeProxyError) as exc_info:
+        client.list_dir("content")
+
+    assert exc_info.value.status_code == status
+
+
+@patch("colab_cli.contents.requests.request")
+def test_nonempty_404_remains_file_not_found(mock_request, client):
+    mock_resp = MagicMock(spec=Response)
+    mock_resp.status_code = 404
+    mock_resp.content = b'{"message":"not found"}'
+    mock_request.return_value = mock_resp
+
+    with pytest.raises(FileNotFoundError):
+        client.list_dir("content/missing.txt")
 
 
 @patch("colab_cli.contents.requests.request")

@@ -1,5 +1,6 @@
 ---
 log:
+2026-08-13: Fixed issue #106 for VM-side automation. `auth`, `drivemount`, and `install` start kernels through the shared runtime-proxy refresh/retry path; `install -r` also uploads its requirements file with refreshed Contents API credentials. Metadata cleanup uses endpoint-guarded field updates.
 2026-06-11: Replaced the `oauth2` provider's `run_local_server()` (localhost redirect) with a remote copy-paste flow (`_run_remote_flow` in `auth.py`). The CLI now prints an authorization URL built with `redirect_uri=https://sdk.cloud.google.com/applicationdefaultauthcode.html` and `token_usage=remote`, then reads the pasted authorization code via `input()` and exchanges it with `flow.fetch_token(code=...)`. This is the same flow `gcloud auth application-default login` uses and works identically in local and remote/headless/container environments, removing the heuristic of whether to auto-open a browser. Confirmed server-side acceptance with a live GET-only check against the bundled cloud-SDK client (`764086051850-...`); the OOB redirect and a non-bundled client id were both verified to be rejected (`OOB flow has been blocked` / `redirect_uri_mismatch`). Unit tests in `tests/test_auth.py` assert no localhost server is started, the redirect URI + `token_usage=remote` are set, and the pasted code is exchanged.
 2026-06-01: Enabled `colab update --install` self-update on macOS in addition to Linux. Refactored platform check logic to keep the implementation DRY and updated both tests and documentation. Also, on these platforms, an additional message is shown recommending `colab update --install` to upgrade in place, positioned above the standard `pip`/`uv` installation command.
 2026-05-29: Added default OAuth2 client config (`oauth_config.json`) as a bundled package resource and restored fallback loading logic in `get_credentials()`. The CLI now falls back to using these default credentials when no explicit local config is found. Added `integration/repro_bundled_oauth` integration test.
@@ -121,6 +122,7 @@ remediation guidance) rather than silently after ~1 minute via the daemon.
     subprocess.check_call([sys.executable, "-m", "pip", "install", "..."])`
 -   **Requirements File**: Upload `requirements.txt` if provided with `-r` and
     then run `pip install -r`.
+-   **Runtime credentials**: Kernel startup and the optional requirements-file upload both use the shared runtime-proxy refresh path. A proxy-auth failure refreshes from the assignments endpoint and retries once.
 
 ### 3. Drive Mounting (`colab drivemount`)
 

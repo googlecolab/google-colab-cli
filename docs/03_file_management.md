@@ -1,3 +1,8 @@
+---
+log:
+2026-08-13: Fixed issue #106 for all Contents API commands. File operations now use refreshed runtime-proxy credentials and retry once after an empty 401/404 tunnel response; a non-empty Jupyter Contents 404 remains a normal missing-file error.
+---
+
 # Design: File Management (`ls`, `rm`, `upload`, `download`, `edit`)
 
 ## Overview
@@ -44,7 +49,7 @@ File management on the Colab VM will be implemented using the Jupyter Contents A
 ## Implementation Details
 - **Base URL**: The backend URL obtained during session assignment.
 - **Proxy Token**: The `colab-runtime-proxy-token` is required for each request.
-- **Error Handling**: Handle 404 (not found) and 403 (unauthorized).
+- **Error Handling**: An empty tunnel-level 401/404 is classified as an expired/invalid runtime-proxy credential and retried once after refreshing from `/tun/m/assignments`. A non-empty Jupyter Contents 404 remains `FileNotFoundError`; missing paths are never mistaken for token expiry.
 - **Large Files**: The Contents API might have limitations for very large files. If so, we'll implement a fallback via the kernel (streaming chunks).
 
 ## Testing Strategy
@@ -60,3 +65,4 @@ TDD is mandatory for all file management features.
 ### 2. Error Cases
 - **Test Case**: Verify 404 responses are correctly caught and presented as a "File not found" error to the user.
 - **Test Case**: Verify correct handling of large file uploads exceeding API limits via kernel streaming.
+- **Test Case**: Verify empty 401/404 responses request refreshed credentials and retry once, while JSON/non-empty 404 responses remain missing-file errors.

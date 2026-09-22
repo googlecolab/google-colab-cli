@@ -1,5 +1,6 @@
 ---
 log:
+2026-08-13: Fixed issue #106 by reconciling saved runtime-proxy credentials with every `/tun/m/assignments` response. Explicit and implicit session resolution now adopt the fresh token/URL returned by the control plane; 401/404 runtime handshakes refresh and retry once; local bindings are pruned only after the server confirms their endpoint is absent. State writes are endpoint-guarded and field-level so concurrent commands cannot overwrite refreshed credentials, revive a removed session, or mutate a same-name replacement.
 2026-08-09: Added `--high-mem` to `colab new`, `colab run`, and `colab ssh` (auto-create). Assign requests now send `shape=hm` when high-RAM is requested; `colab sessions` and `colab status` display machine shape.
 2026-06-15: Switched the keep-alive daemon from the `colab.pa.googleapis.com` `RuntimeService/KeepAliveAssignment` RPC to a Tunnel Frontend HTTP ping (`GET /tun/m/<endpoint>/keep-alive/` with `X-Colab-Tunnel: Google`) on `colab.research.google.com`. The RPC required `serviceusage` consumer access to Colab's internal project `1014160490159`, which ordinary user accounts lack, so every external user hit HTTP 403 `USER_PROJECT_DENIED` and their CLI sessions were idle-pruned within minutes (issue #14). Reproduced live with a third-party account; verified the tunnel ping is accepted by the same bearer-token credential that already works for `assign`. A `ReadTimeout` on the ping is treated as success (TFE records activity before forwarding to the often-non-responding VM). Generalized the pre-flight remediation messaging away from the now-irrelevant `colaboratory`/`pa.googleapis.com` framing, and removed the dead grpc-web client-registry/API-key code.
 2026-06-10: Replaced the POSIX-only `fcntl.flock` file locking in `_LockedFileStore` with the cross-platform `filelock` library (reported broken on Windows). Reads use `ReadWriteLock.read_lock()` (shared) and writes use `write_lock()` (exclusive), preserving the original `LOCK_SH`/`LOCK_EX` semantics. The lock is constructed with `is_singleton=False` so two `StateStore` instances for the same path in one process don't collapse into a single reentrant lock (which would raise `RuntimeError` on multi-threaded write contention). Added shared-read, cross-process exclusion, and multi-thread/multi-process regression tests.
@@ -76,9 +77,16 @@ The CLI maps user flags to these backend parameters:
 
 ### 4. Session Listing (`colab sessions`)
 - **API**: `GET https://colab.research.google.com/tun/m/assignments` (based on `colab-agent` implementation).
-- **Function**: Lists all active VM assignments for the user. This is useful for synchronizing local state with actual backend sessions.
+- **Function**: Lists all active VM assignments for the user and reconciles local bindings by endpoint. Every response carries a fresh `RuntimeProxyInfo.token` and URL; locally tracked sessions adopt those values while preserving kernel/session IDs, keep-alive PID, and execution metadata. An endpoint absent from a successful response is pruned. If the lookup fails, local state is preserved because the assignment's absence was not confirmed.
 
-### 5. Keep-Alive Protocol
+### 5. Runtime-Proxy Credential Refresh
+
+- Runtime-proxy tokens expire independently of the VM assignment (issue #106). Both explicit `-s NAME` resolution and unique-session resolution refresh from `/tun/m/assignments` before opening a runtime connection.
+- If a runtime connection still returns a proxy-auth 401/404, the operation performs one fresh assignments lookup and retries once, but only when the returned token or URL changed. A second failure is surfaced without an unbounded retry loop.
+- `prune_session()` never treats a runtime 401/404 alone as proof that the VM is gone. It removes a binding and stops its keep-alive daemon only after the control plane confirms the exact endpoint is absent.
+- State updates merge selected metadata fields into the latest stored object and require the expected endpoint. This prevents a long-running command's `finally` block from restoring an expired token, resurrecting a removed binding, or touching a newly-created session that reused the same name.
+
+### 6. Keep-Alive Protocol
 To prevent Colab VMs from being deleted due to idle timeouts (standard is ~90 minutes), the CLI implements a background keep-alive mechanism.
 - **Daemon Process**: Since the CLI is a fire-and-forget tool, `colab new` spawns a detached background process running a hidden `keep-alive` command.
 - **Tunnel ping**: Every 60 seconds, the daemon issues `GET https://colab.research.google.com/tun/m/<endpoint>/keep-alive/` with the header `X-Colab-Tunnel: Google`, authenticated with the user's own Gaia bearer token (the same credential and host used for `/tun/m/assign`). The Tunnel Frontend (TFE) records `LastActiveTime` before forwarding the request, which refreshes the idle timer. This matches the official `colab-vscode` extension's `sendKeepAlive`. TFE notes the activity on arrival and then forwards to the VM, which often does not answer on this path — so the request commonly read-times-out even though the keep-alive succeeded; a `ReadTimeout` is therefore treated as success, while genuine HTTP errors (e.g. 404 for a deleted assignment) propagate.
@@ -93,7 +101,6 @@ To prevent Colab VMs from being deleted due to idle timeouts (standard is ~90 mi
     - **Repeated 4xx**: After two consecutive 4xx responses, the daemon exits with `reason=consecutive_4xx_errors`. With the TFE tunnel ping, a normal read-timeout is not counted as a 4xx (it is treated as success), so this branch is now reached only by genuine HTTP errors such as a 404 for a deleted/expired assignment.
 
 ## TODO / Future Work
-- **Backend Sync**: Implement a way to reconcile the local `sessions.json` with the output of `colab sessions`.
 - **Resource Usage**: Add real-time resource usage (CPU/RAM/GPU) to the `status` output by executing a diagnostic snippet on the VM.
 
 ## Implementation Details
@@ -128,3 +135,5 @@ TDD is mandatory for all session management features.
 - **Test Case (cross-process exclusion)**: Hold the write lock from a separate process and confirm the store's in-process write blocks until release.
 - **Test Case (concurrent readers)**: Hold a read lock from a separate process and confirm the store can still complete a read concurrently.
 - **Test Case (multi-thread regression)**: Two `StateStore` instances writing from different threads must serialize without raising `RuntimeError` (guards the `is_singleton=False` choice).
+- **Test Case (token refresh)**: Verify named and implicit resolution adopt fresh token/URL values, runtime-proxy failures retry once, failed assignments lookups preserve bindings, and server-confirmed missing endpoints are pruned.
+- **Test Case (stale-writer safety)**: Verify field-level updates preserve refreshed credentials and cannot revive a removed session or modify a same-name replacement endpoint.

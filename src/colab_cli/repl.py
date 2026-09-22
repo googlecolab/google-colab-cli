@@ -28,7 +28,6 @@ from colab_cli.runtime import ColabRuntime
 from colab_cli.utils import handle_image, render_display_data
 
 
-
 class ColabREPL:
     def __init__(
         self,
@@ -120,7 +119,11 @@ class ColabREPL:
                     None,
                     datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 )
-                state.store.add(s)
+                state.store.update_fields(
+                    s.name,
+                    s.endpoint,
+                    last_execution=s.last_execution,
+                )
 
         try:
             outputs = self.runtime.execute_code(
