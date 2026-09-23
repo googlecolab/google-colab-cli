@@ -15,12 +15,21 @@
 import json
 import os
 import sys
-import termios
 from unittest.mock import MagicMock, patch
+
+try:
+    import termios
+except ImportError:
+    # Windows has no termios; tests requiring raw-terminal mode are skipped.
+    termios = None  # type: ignore
 
 from colab_cli.console import connect_console, on_message, on_open
 from colab_cli.state import SessionState
 import pytest
+
+needs_termios = pytest.mark.skipif(
+    termios is None, reason="requires termios (POSIX only)"
+)
 
 
 @pytest.fixture
@@ -33,6 +42,7 @@ def mock_session():
     )
 
 
+@needs_termios
 @patch("colab_cli.console.websocket.WebSocketApp")
 @patch("colab_cli.console.tty.setraw")
 @patch("colab_cli.console.termios.tcgetattr")
@@ -79,6 +89,7 @@ def test_console_initialization(
     )
 
 
+@needs_termios
 @patch("colab_cli.console.websocket.WebSocketApp")
 @patch("colab_cli.console.tty.setraw")
 @patch("colab_cli.console.termios.tcgetattr")
@@ -220,3 +231,31 @@ def test_read_stdin_eof_tty_does_not_close_ws(
     sent_payloads = [json.loads(c.args[0]) for c in mock_ws.send.call_args_list]
     assert {"data": "exit\n"} not in sent_payloads
     mock_ws.close.assert_not_called()
+
+
+@patch("colab_cli.console.websocket.WebSocketApp")
+@patch("colab_cli.console.sys.stdin.isatty")
+def test_console_no_termios_degrades_gracefully(
+    mock_isatty, mock_ws_app, mock_session
+):
+    """Windows has no termios/tty/SIGWINCH. connect_console must not crash.
+
+    Regression test for `ModuleNotFoundError: No module named 'termios'`
+    which broke every `colab` command on Windows via
+    cli -> execution -> console imports.
+    """
+    import colab_cli.console as console_mod
+
+    mock_isatty.return_value = True
+    mock_ws_instance = MagicMock()
+    mock_ws_app.return_value = mock_ws_instance
+    mock_ws_instance.run_forever.return_value = None
+
+    with (
+        patch.object(console_mod, "termios", None),
+        patch.object(console_mod, "tty", None),
+        patch("colab_cli.console.threading.Thread"),
+    ):
+        connect_console(mock_session)
+
+    mock_ws_instance.run_forever.assert_called_once()
