@@ -17,10 +17,14 @@ import logging
 import os
 import signal
 import sys
-import termios
+try:
+    import termios
+    import tty
+except ImportError:
+    termios = None
+    tty = None
 import threading
 import time
-import tty
 from urllib.parse import urlparse
 
 import websocket
@@ -133,8 +137,8 @@ def connect_console(session: SessionState):
     ws_url = f"{ws_scheme}://{parsed.netloc}/colab/tty?colab-runtime-proxy-token={session.token}"
 
     is_tty = sys.stdin.isatty()
-    fd = sys.stdin.fileno() if is_tty else None
-    old_settings = termios.tcgetattr(fd) if is_tty else None
+    fd = sys.stdin.fileno() if (is_tty and hasattr(sys.stdin, "fileno")) else None
+    old_settings = termios.tcgetattr(fd) if (is_tty and termios and fd is not None) else None
 
     ws = websocket.WebSocketApp(
         url=ws_url,
@@ -151,8 +155,10 @@ def connect_console(session: SessionState):
 
     try:
         if is_tty:
-            tty.setraw(fd, termios.TCSANOW)
-            signal.signal(signal.SIGWINCH, handle_sigwinch)
+            if tty and termios and fd is not None:
+                tty.setraw(fd, termios.TCSANOW)
+            if hasattr(signal, "SIGWINCH"):
+                signal.signal(signal.SIGWINCH, handle_sigwinch)
 
         # This is a blocking call until the connection is closed
         ws.run_forever()
@@ -166,7 +172,9 @@ def connect_console(session: SessionState):
     finally:
         if is_tty:
             # Always ensure the terminal is restored to its original state
-            termios.tcsetattr(fd, termios.TCSANOW, old_settings)
+            if termios and old_settings is not None and fd is not None:
+                termios.tcsetattr(fd, termios.TCSANOW, old_settings)
             # Restore the default signal handler for resize
-            signal.signal(signal.SIGWINCH, signal.SIG_DFL)
+            if hasattr(signal, "SIGWINCH"):
+                signal.signal(signal.SIGWINCH, signal.SIG_DFL)
         print("\r\nConnection closed.")
