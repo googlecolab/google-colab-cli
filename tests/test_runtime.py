@@ -20,8 +20,15 @@ from colab_cli.runtime import ColabRuntime
 
 
 def test_colab_runtime_kernel_client():
-    target_attr = "ColabKernelClient" if hasattr(jupyter_kernel_client, "ColabKernelClient") else "KernelClient"
-    token_param_name = "proxy_token" if hasattr(jupyter_kernel_client, "ColabKernelClient") else "token"
+    if hasattr(jupyter_kernel_client, "ColabKernelClient"):
+        target_attr = "ColabKernelClient"
+        token_param_name = "proxy_token"
+    elif hasattr(jupyter_kernel_client, "KernelClient"):
+        target_attr = "KernelClient"
+        token_param_name = "token"
+    else:
+        target_attr = "JupyterKernelClient"
+        token_param_name = "token"
 
     with patch.object(jupyter_kernel_client, target_attr) as mock_kc_cls:
         mock_kc = mock_kc_cls.return_value
@@ -47,6 +54,51 @@ def test_colab_runtime_kernel_client():
         mock_kc_cls.assert_called_once_with(**expected_kwargs)
         mock_kc.start.assert_called_once()
         assert kc == mock_kc
+
+
+def test_colab_runtime_kernel_client_jupyterclient_fallback():
+    """PyPI jupyter-kernel-client>=1.0 renamed KernelClient to
+    JupyterKernelClient. Runtime must fall back to it instead of raising
+    AttributeError (breaks `colab exec` on `uv tool install google-colab-cli`)."""
+    import colab_cli.runtime as runtime_mod
+
+    real_colab = getattr(jupyter_kernel_client, "ColabKernelClient", None)
+    real_legacy = getattr(jupyter_kernel_client, "KernelClient", None)
+    had_colab = hasattr(jupyter_kernel_client, "ColabKernelClient")
+    had_legacy = hasattr(jupyter_kernel_client, "KernelClient")
+
+    if had_colab:
+        delattr(jupyter_kernel_client, "ColabKernelClient")
+    if had_legacy:
+        delattr(jupyter_kernel_client, "KernelClient")
+    try:
+        with patch.object(
+            jupyter_kernel_client, "JupyterKernelClient", create=True
+        ) as mock_kc_cls:
+            mock_kc = mock_kc_cls.return_value
+            runtime = ColabRuntime("http://url", "token123")
+            kc = runtime.kernel_client
+            mock_kc_cls.assert_called_once_with(
+                server_url="http://url",
+                token="token123",
+                kernel_id=None,
+                client_kwargs={
+                    "subprotocol": jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
+                    "extra_params": {"colab-runtime-proxy-token": "token123"},
+                },
+                headers={
+                    "X-Colab-Client-Agent": "colab-cli",
+                    "X-Colab-Runtime-Proxy-Token": "token123",
+                },
+            )
+            mock_kc.start.assert_called_once()
+            assert kc == mock_kc
+    finally:
+        if had_colab:
+            jupyter_kernel_client.ColabKernelClient = real_colab
+        if had_legacy:
+            jupyter_kernel_client.KernelClient = real_legacy
+        assert runtime_mod  # keep import used for clarity
 
 
 def test_colab_runtime_execute_code():
