@@ -146,7 +146,7 @@ def _resolve_session(name: Optional[str]) -> SessionState:
     from colab_cli.common import state
 
     resolved = state.resolve_session(name)
-    s = state.get_session(resolved)
+    s = state.get_session(resolved, ignore_missing_session=True)
     if not s:
         typer.echo(
             f"[colab] session '{resolved}' not found. "

@@ -83,25 +83,32 @@ class State:
             del self._sessions[name]
         self.history.log_event(name, "session_terminated", {"reason": "pruned"})
 
-    def get_session(self, name: str) -> Optional[SessionState]:
+    def get_session(
+        self, name: str, ignore_missing_session: bool = False
+    ) -> Optional[SessionState]:
         """Load a session, refreshing its runtime proxy token if it's near expiry.
 
-        Returns None if the session is unknown locally or its assignment is gone
-        server-side (in which case it's pruned).
+        A session is missing if it's unknown locally or its assignment is gone
+        server-side (in which case it's pruned). Missing sessions print an error
+        and exit, unless ignore_missing_session is set, in which case this
+        returns None.
         """
         s = self.store.get(name)
-        if s is None or (
-            s.token_expires_at
-            and s.token_expires_at - datetime.now(timezone.utc) > TOKEN_REFRESH_MARGIN
+        if s and (
+            not s.token_expires_at
+            or s.token_expires_at - datetime.now(timezone.utc) <= TOKEN_REFRESH_MARGIN
         ):
-            return s
+            by_endpoint = {a.endpoint: a for a in self.client.list_assignments()}
+            if s.endpoint in by_endpoint:
+                _apply_proxy_info(s, by_endpoint[s.endpoint].runtime_proxy_info)
+                self.store.add(s)
+            else:
+                self.prune_session(name)
+                s = None
 
-        by_endpoint = {a.endpoint: a for a in self.client.list_assignments()}
-        if s.endpoint not in by_endpoint:
-            self.prune_session(name)
-            return None
-        _apply_proxy_info(s, by_endpoint[s.endpoint].runtime_proxy_info)
-        self.store.add(s)
+        if s is None and not ignore_missing_session:
+            typer.echo(f"[colab] Session '{name}' not found.")
+            raise typer.Exit(1)
         return s
 
     def sync_sessions(self):

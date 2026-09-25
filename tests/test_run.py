@@ -173,7 +173,7 @@ def test_run_teardown_uses_refreshed_token(
     """A script can outlive the proxy token, so teardown must re-fetch it."""
     mock_client.assign.return_value = assign_response
     mock_runtime_class.return_value.execute_code.return_value = []
-    mock_common_state.get_session.side_effect = lambda name: SessionState(
+    mock_common_state.get_session.side_effect = lambda name, **_: SessionState(
         name=name, token="fresh-tok", url="http://fresh", endpoint="ep-123"
     )
 

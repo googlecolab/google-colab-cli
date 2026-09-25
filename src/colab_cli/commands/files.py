@@ -34,9 +34,6 @@ def ls(
 
     name = state.resolve_session(session)
     s = state.get_session(name)
-    if not s:
-        typer.echo(f"[colab] Session '{name}' not found.")
-        raise typer.Exit(1)
     contents = ContentsClient(s)
     try:
         data = contents.list_dir(path)
@@ -66,9 +63,6 @@ def rm(
 
     name = state.resolve_session(session)
     s = state.get_session(name)
-    if not s:
-        typer.echo(f"[colab] Session '{name}' not found.")
-        raise typer.Exit(1)
     contents = ContentsClient(s)
     try:
         contents.rm(path)
@@ -91,9 +85,6 @@ def upload(
 
     name = state.resolve_session(session)
     s = state.get_session(name)
-    if not s:
-        typer.echo(f"[colab] Session '{name}' not found.")
-        raise typer.Exit(1)
     if not os.path.isfile(local_path):
         typer.echo(f"[colab] Local file '{local_path}' not found.")
         raise typer.Exit(1)
@@ -127,9 +118,6 @@ def download(
 
     name = state.resolve_session(session)
     s = state.get_session(name)
-    if not s:
-        typer.echo(f"[colab] Session '{name}' not found.")
-        raise typer.Exit(1)
     contents = ContentsClient(s)
     try:
         contents.download(remote_path, local_path)
@@ -155,9 +143,6 @@ def edit(
 
     name = state.resolve_session(session)
     s = state.get_session(name)
-    if not s:
-        typer.echo(f"[colab] Session '{name}' not found.")
-        raise typer.Exit(1)
 
     contents = ContentsClient(s)
 

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import pytest
+import typer
 from unittest.mock import MagicMock
 
 
@@ -27,7 +28,14 @@ def mock_common_state(mocker):
     mock_state.history = MagicMock()
 
     # Token refresh is covered in test_common.py; elsewhere just read the store.
-    mock_state.get_session.side_effect = lambda name: mock_state.store.get(name)
+    def get_session(name, ignore_missing_session=False):
+        s = mock_state.store.get(name)
+        if not s and not ignore_missing_session:
+            typer.echo(f"[colab] Session '{name}' not found.")
+            raise typer.Exit(1)
+        return s
+
+    mock_state.get_session.side_effect = get_session
 
     # Default behavior for sync_sessions
     mock_state.sync_sessions.return_value = ({}, [])

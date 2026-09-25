@@ -227,9 +227,6 @@ def restart_kernel(
 
     name = state.resolve_session(session)
     s = state.get_session(name)
-    if not s:
-        typer.echo(f"[colab] Session '{name}' not found.")
-        raise typer.Exit(1)
 
     def on_started(kid):
         s.kernel_id = kid
@@ -333,7 +330,7 @@ def stop(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.get_session(name)
+    s = state.get_session(name, ignore_missing_session=True)
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.")
         return

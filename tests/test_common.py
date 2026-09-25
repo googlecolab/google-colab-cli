@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
+import typer
 
 from colab_cli.client import ListedAssignment
 from colab_cli.common import State
@@ -96,13 +97,21 @@ def test_get_session_prunes_when_assignment_gone(real_state):
     real_state.store.add(_session(None))
     real_state.client.list_assignments.return_value = []
 
-    assert real_state.get_session("s1") is None
+    assert real_state.get_session("s1", ignore_missing_session=True) is None
     assert real_state.store.get("s1") is None
 
 
-def test_get_session_unknown_name(real_state):
-    assert real_state.get_session("nope") is None
+def test_get_session_unknown_name_exits(real_state, capsys):
+    with pytest.raises(typer.Exit) as exc:
+        real_state.get_session("nope")
+
+    assert exc.value.exit_code == 1
+    assert "Session 'nope' not found." in capsys.readouterr().out
     real_state.client.list_assignments.assert_not_called()
+
+
+def test_get_session_unknown_name_ignored(real_state):
+    assert real_state.get_session("nope", ignore_missing_session=True) is None
 
 
 def test_sync_sessions_updates_tokens(real_state):
