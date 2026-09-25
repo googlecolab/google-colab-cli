@@ -27,6 +27,7 @@ class SessionState(BaseModel):
     token: str
     url: str
     endpoint: str
+    token_expires_at: Optional[datetime] = None
     variant: str = "DEFAULT"
     accelerator: str = "NONE"
     machine_shape: str = "STANDARD"
@@ -126,7 +127,9 @@ class StateStore(_LockedFileStore):
             return {}
 
     def _save_raw(self, f, sessions: Dict[str, SessionState]):
-        content = json.dumps({k: v.model_dump() for k, v in sessions.items()}, indent=2)
+        content = json.dumps(
+            {k: v.model_dump(mode="json") for k, v in sessions.items()}, indent=2
+        )
         self._write_data(f, content)
 
     def add(self, state: SessionState):

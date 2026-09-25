@@ -26,6 +26,9 @@ def mock_common_state(mocker):
     mock_state.client = MagicMock()
     mock_state.history = MagicMock()
 
+    # Token refresh is covered in test_common.py; elsewhere just read the store.
+    mock_state.get_session.side_effect = lambda name: mock_state.store.get(name)
+
     # Default behavior for sync_sessions
     mock_state.sync_sessions.return_value = ({}, [])
 

@@ -33,7 +33,7 @@ def ls(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
+    s = state.get_session(name)
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.")
         raise typer.Exit(1)
@@ -65,7 +65,7 @@ def rm(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
+    s = state.get_session(name)
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.")
         raise typer.Exit(1)
@@ -90,7 +90,7 @@ def upload(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
+    s = state.get_session(name)
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.")
         raise typer.Exit(1)
@@ -126,7 +126,7 @@ def download(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
+    s = state.get_session(name)
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.")
         raise typer.Exit(1)
@@ -154,7 +154,7 @@ def edit(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
+    s = state.get_session(name)
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.")
         raise typer.Exit(1)

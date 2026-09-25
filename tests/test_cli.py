@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import time
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,6 +24,7 @@ from colab_cli.client import (
     Assignment,
     ColabRequestError,
     PostAssignmentResponse,
+    RuntimeProxyInfo,
     TooManyAssignmentsError,
 )
 from colab_cli.consumption import ConsumptionUserInfo
@@ -48,8 +50,9 @@ def mock_history(mock_common_state):
 def test_cli_new_tpu(mock_client, mock_store):
     mock_res = MagicMock()
     mock_res.__class__ = PostAssignmentResponse
-    mock_res.runtime_proxy_info.token = "t1"
-    mock_res.runtime_proxy_info.url = "u1"
+    mock_res.runtime_proxy_info = RuntimeProxyInfo(
+        token="t1", tokenExpiresInSeconds=3600, url="u1"
+    )
     mock_res.endpoint = "e1"
     mock_client.assign.return_value = mock_res
 
@@ -60,6 +63,9 @@ def test_cli_new_tpu(mock_client, mock_store):
     assert added_state.name == "my-session"
     assert added_state.variant == "TPU"
     assert added_state.accelerator == "V5E1"
+    assert added_state.token_expires_at > datetime.now(timezone.utc) + timedelta(
+        minutes=55
+    )
 
 
 def test_cli_new_gpu(mock_client, mock_store):

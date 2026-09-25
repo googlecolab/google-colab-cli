@@ -14,6 +14,7 @@
 
 import abc
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import json
 import logging
@@ -121,6 +122,12 @@ class RuntimeProxyInfo(BaseModel):
     token: str
     token_expires_in_seconds: int = Field(..., alias="tokenExpiresInSeconds")
     url: str
+
+    def expires_at(self) -> datetime:
+        """Absolute expiry; call right after receiving the response."""
+        return datetime.now(timezone.utc) + timedelta(
+            seconds=self.token_expires_in_seconds
+        )
 
 
 class ListedAssignment(BaseModel):

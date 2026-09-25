@@ -350,6 +350,11 @@ def run_command(
         token=token,
         url=url,
         endpoint=endpoint,
+        token_expires_at=(
+            res.runtime_proxy_info.expires_at()
+            if hasattr(res, "runtime_proxy_info")
+            else None
+        ),
         variant=variant.value,
         accelerator=accelerator.value,
         machine_shape=(

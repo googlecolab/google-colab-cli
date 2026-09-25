@@ -17,7 +17,7 @@ import os
 import pytest
 import tempfile
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 
 import filelock
 
@@ -87,6 +87,25 @@ def test_state_store_invalid_json(temp_config):
 
     store = StateStore(temp_config)
     assert store.list() == {}
+
+
+def test_state_store_loads_session_without_token_expiry(temp_config):
+    with open(temp_config, "w") as f:
+        f.write('{"s": {"name": "s", "token": "t", "url": "u", "endpoint": "e"}}')
+
+    assert StateStore(temp_config).get("s").token_expires_at is None
+
+
+def test_state_store_round_trips_token_expiry(temp_config):
+    expires_at = datetime.now(timezone.utc)
+    store = StateStore(temp_config)
+    store.add(
+        SessionState(
+            name="s", token="t", url="u", endpoint="e", token_expires_at=expires_at
+        )
+    )
+
+    assert store.get("s").token_expires_at == expires_at
 
 
 def test_state_store_concurrency(temp_config):

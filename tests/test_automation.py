@@ -34,7 +34,7 @@ def mock_session():
 @patch("colab_cli.commands.automation.ColabRuntime")
 @patch("colab_cli.common.state")
 def test_cli_auth(mock_state, mock_runtime_class, mock_session):
-    mock_state.store.get.return_value = mock_session
+    mock_state.get_session.return_value = mock_session
     mock_state.resolve_session.return_value = "test-session"
 
     mock_runtime = mock_runtime_class.return_value
@@ -59,7 +59,7 @@ def test_cli_auth(mock_state, mock_runtime_class, mock_session):
 @patch("colab_cli.commands.automation.ColabRuntime")
 @patch("colab_cli.common.state")
 def test_cli_install(mock_state, mock_runtime_class, mock_session):
-    mock_state.store.get.return_value = mock_session
+    mock_state.get_session.return_value = mock_session
     mock_state.resolve_session.return_value = "test-session"
 
     mock_runtime = mock_runtime_class.return_value
@@ -83,7 +83,7 @@ def test_cli_install(mock_state, mock_runtime_class, mock_session):
 @patch("colab_cli.commands.automation.ColabRuntime")
 @patch("colab_cli.common.state")
 def test_cli_drivemount(mock_state, mock_runtime_class, mock_session):
-    mock_state.store.get.return_value = mock_session
+    mock_state.get_session.return_value = mock_session
     mock_state.resolve_session.return_value = "test-session"
 
     mock_runtime = mock_runtime_class.return_value
@@ -112,7 +112,7 @@ def test_cli_auth_uses_long_timeout(mock_state, mock_runtime_class, mock_session
     """`colab auth` walks the user through a paste-the-code flow that
     routinely takes >10s, so it must pass a generous timeout to
     runtime.execute_code or the call will TimeoutError mid-flow."""
-    mock_state.store.get.return_value = mock_session
+    mock_state.get_session.return_value = mock_session
     mock_state.resolve_session.return_value = "test-session"
 
     mock_runtime = mock_runtime_class.return_value

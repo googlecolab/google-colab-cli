@@ -1,5 +1,6 @@
 ---
 log:
+2026-09-25: Runtime proxy tokens are now refreshed before expiry. `SessionState` persists `token_expires_at`, and `State.get_session` re-fetches the token via `GET /tun/m/assignments` when it's within 5 minutes of expiring.
 2026-09-25: Removed the keep-alive background daemon and related client/CLI ping functions. VM liveness is automatically maintained by the Colab backend based on kernel activity.
 2026-08-10: Added `colab usage` for account-level compute-unit rate/balance via `GET /tun/m/ccu-info` on the session backend (same bearer token as `colab new`).
 2026-08-09: Added `--high-mem` to `colab new`, `colab run`, and `colab ssh` (auto-create). Assign requests now send `shape=hm` when high-RAM is requested; `colab sessions` and `colab status` display machine shape.
@@ -82,6 +83,9 @@ The CLI maps user flags to these backend parameters:
 
 ### 5. Session Liveness
 VM liveness is automatically maintained by the Colab backend based on active kernel executions and interactions. The CLI runs no keep-alive daemon. A session persists until explicitly terminated via `colab stop` or until the backend reclaims it due to inactivity.
+
+### 6. Runtime Proxy Token Refresh
+The runtime proxy token (`runtimeProxyInfo.token`) authenticates every request to the VM and expires after `tokenExpiresInSeconds` (1 hour). `SessionState.token_expires_at` stores the absolute expiry, computed when the token is received. Commands that talk to the VM load their session through `State.get_session(name)`, which, when the token is missing an expiry or is within 5 minutes of it, calls `GET /tun/m/assignments`, takes the fresh token/URL for the matching endpoint, and persists it. If the endpoint is no longer assigned, the session is pruned. `sync_sessions` also writes back the fresh tokens it already fetches. Long-lived connections (`repl`, `console`, `ssh`) only present the token on initial connect and aren't refreshed mid-session.
 
 ## TODO / Future Work
 - **Backend Sync**: Implement a way to reconcile the local `sessions.json` with the output of `colab sessions`.
