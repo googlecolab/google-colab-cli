@@ -53,10 +53,11 @@ steps:
       - -c
       - |
         set -e
-        gcloud artifacts packages delete "${_EG_PROJECT_NAME}" \
-          --project="${_AR_PROJECT}" \
-          --repository="${_AR_REPOSITORY}" \
-          --location="${_AR_LOCATION}" \
+        gcloud artifacts versions delete ${TAG_NAME}  \
+          --package={_EG_PROJECT_NAME} \
+          --project={_AR_PROJECT} \
+          --repository=${_AR_REPOSITORY} \
+          --location=us \
           --quiet || true
 
   # 2. Build sdist + wheel into dist/ using uv.
@@ -81,7 +82,7 @@ steps:
   #    Delete any existing artifact for this tag which can happen if the
   #    build failed to publish in step 4.
   - id: publish-to-ar
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    name: python:3.13-slim
     entrypoint: bash
     args:
       - -c
@@ -89,12 +90,6 @@ steps:
         set -e
         pip install --quiet --root-user-action=ignore \
           twine keyrings.google-artifactregistry-auth
-        gcloud artifacts versions delete ${TAG_NAME}  \
-          --package={_EG_PROJECT_NAME} \
-          --project={_AR_PROJECT} \
-          --repository=${_AR_REPOSITORY} \
-          --location=us \
-          --quiet
         twine upload \
           --repository-url "https://${_AR_LOCATION}-python.pkg.dev/${_AR_PROJECT}/${_AR_REPOSITORY}/" \
           --verbose \
