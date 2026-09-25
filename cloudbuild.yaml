@@ -81,7 +81,7 @@ steps:
   #    Delete any existing artifact for this tag which can happen if the
   #    build failed to publish in step 4.
   - id: publish-to-ar
-    name: python:3.13-slim
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     entrypoint: bash
     args:
       - -c
