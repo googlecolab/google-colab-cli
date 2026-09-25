@@ -49,12 +49,6 @@ def mock_runtime_class(mocker):
 
 
 @pytest.fixture
-def mock_spawn_keep_alive(mocker):
-    """Don't actually spawn a daemon during tests."""
-    return mocker.patch("colab_cli.commands.run.spawn_keep_alive", return_value=12345)
-
-
-@pytest.fixture
 def assign_response():
     """A minimal PostAssignmentResponse-shaped mock for client.assign."""
     res = MagicMock()
@@ -81,7 +75,6 @@ def test_run_basic_flow(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -120,7 +113,6 @@ def test_run_high_mem_passes_shape_to_assign(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -152,7 +144,6 @@ def test_run_412_shows_friendly_error_and_exits(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     script_path,
 ):
     """A 412 from `assign` (TooManyAssignmentsError) should surface a
@@ -176,7 +167,6 @@ def test_run_keep_skips_unassign(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -207,7 +197,6 @@ def test_run_passes_argv(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -242,7 +231,6 @@ def test_run_env_flag_after_script_sets_env_and_preserves_argv(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -277,7 +265,6 @@ def test_run_env_flags_accumulate_and_split_on_first_equals(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -314,7 +301,6 @@ def test_run_env_flag_escapes_tricky_literals(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -341,7 +327,6 @@ def test_run_sets_dunder_main(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -370,7 +355,6 @@ def test_run_propagates_error_exit_code(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -409,7 +393,6 @@ def test_run_unassign_called_on_exception_during_execute(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -437,7 +420,6 @@ def test_run_with_gpu_flag(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -462,7 +444,6 @@ def test_run_with_tpu_flag(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -537,7 +518,6 @@ def test_run_systemexit_zero_treated_as_success(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
     capfd,
@@ -577,7 +557,6 @@ def test_run_systemexit_nonzero_propagates_code(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -608,7 +587,6 @@ def test_run_systemexit_string_message_exits_one(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -640,7 +618,6 @@ def test_run_prelude_suppresses_ipython_exit_warning(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):
@@ -670,7 +647,6 @@ def test_run_with_timeout_flag(
     mock_client,
     mock_store,
     mock_runtime_class,
-    mock_spawn_keep_alive,
     assign_response,
     script_path,
 ):

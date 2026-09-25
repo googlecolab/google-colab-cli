@@ -202,40 +202,6 @@ def log(
                 typer.echo(f"[{ts}] INPT: {event.get('prompt', '').strip()}")
             elif etype == "input_reply":
                 typer.echo(f"[{ts}] RPLY: {event.get('value', '').strip()}")
-            elif etype == "keep_alive_started":
-                typer.echo(
-                    f"[{ts}] KEEP: started endpoint={event.get('endpoint')} pid={event.get('pid')}"
-                )
-            elif etype == "keep_alive_error":
-                msg = (
-                    f"[{ts}] KEEP: error iter={event.get('iteration')} "
-                    f"status={event.get('status_code')} "
-                    f"type={event.get('error_type')} "
-                    f"msg={event.get('error', '')[:120]}"
-                )
-                body = event.get("response_body")
-                if body:
-                    msg += f" body={body[:300]}"
-                typer.echo(msg)
-            elif etype == "keep_alive_stopped":
-                msg = (
-                    f"[{ts}] KEEP: stopped reason={event.get('reason')} "
-                    f"iters={event.get('iterations')} "
-                    f"duration={event.get('duration_seconds')}s"
-                )
-                last_err = event.get("last_error")
-                if last_err:
-                    msg += (
-                        f" last_error=[status={last_err.get('status_code')} "
-                        f"type={last_err.get('error_type')} "
-                        f"msg={str(last_err.get('error', ''))[:120]}]"
-                    )
-                if event.get("expected_endpoint") or event.get("actual_endpoint"):
-                    msg += (
-                        f" expected={event.get('expected_endpoint')} "
-                        f"actual={event.get('actual_endpoint')}"
-                    )
-                typer.echo(msg)
             else:
                 typer.echo(f"[{ts}] EVENT: {etype}")
 

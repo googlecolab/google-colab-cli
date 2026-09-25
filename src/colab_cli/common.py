@@ -14,9 +14,7 @@
 
 import logging
 import os
-import signal
 import sys
-import time
 from typing import Optional
 
 import typer
@@ -69,10 +67,7 @@ class State:
         return self._client
 
     def prune_session(self, name: str):
-        """Removes a session from local state and kills its keep-alive process."""
-        s = self.store.get(name)
-        if s and s.keep_alive_pid:
-            kill_process(s.keep_alive_pid)
+        """Removes a session from local state."""
         self.store.remove(name)
         if self._sessions and name in self._sessions:
             del self._sessions[name]
@@ -145,23 +140,6 @@ class State:
 
 
 state = State()
-
-
-def kill_process(pid: int):
-    """Safely terminates a process by PID."""
-    if not pid:
-        return
-    try:
-        os.kill(pid, signal.SIGTERM)
-        # Give it a moment to exit
-        for _ in range(5):
-            time.sleep(0.1)
-            os.kill(pid, 0)
-    except OSError:
-        # Already dead
-        pass
-    except Exception:
-        logging.debug(f"Failed to kill process {pid}")
 
 
 def setup_logging(log_to_stderr: bool):

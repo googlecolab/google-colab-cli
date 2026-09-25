@@ -132,11 +132,10 @@ def test_get_credentials_adc_suppresses_quota_project_warning(mocker, recwarn):
     You might receive a 'quota exceeded' or 'API not enabled' error.") whenever
     ADC user credentials lack a quota project.
 
-    For this CLI the warning is strictly false: we send
-    `X-Goog-User-Project: 1014160490159` (Colab's project) ourselves
-    (AGENTS.md item 18), so google-auth's heuristic does not apply. Suppress
-    it locally around the `google.auth.default()` call so it never reaches
-    the user's terminal on every `colab` invocation.
+    For this CLI the warning is not applicable: the quota project setting is
+    not required for Colab endpoints. Suppress it locally around the
+    `google.auth.default()` call so it never reaches the user's terminal on
+    every `colab` invocation.
     """
     import warnings
 

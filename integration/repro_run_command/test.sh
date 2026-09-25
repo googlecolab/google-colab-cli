@@ -23,7 +23,7 @@
 
 # Don't `set -e` so we can capture failures and clean up explicitly.
 
-# ---------- Auth detection (mirrors integration/repro_keep_alive/test.sh) ----
+# ---------- Auth detection ----------------------------------------------------
 if [ -f "$HOME/.config/colab-cli/token.json" ]; then
     AUTH_FLAGS="--auth=oauth2"
 elif command -v gcloud > /dev/null && gcloud auth application-default print-access-token > /dev/null 2>&1; then

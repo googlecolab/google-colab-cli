@@ -28,7 +28,7 @@ TMP_DIR=$(mktemp -d)
 SESSION_FILE="$TMP_DIR/sessions.json"
 SESSION_NAME="test-piped-console"
 
-# Auth selection (same priority order as repro_keep_alive).
+# Auth selection (OAuth2 if token cached, else ADC).
 if [ -f "$HOME/.config/colab-cli/token.json" ]; then
     AUTH_FLAGS="--auth=oauth2"
 elif command -v gcloud > /dev/null && gcloud auth application-default print-access-token > /dev/null 2>&1; then

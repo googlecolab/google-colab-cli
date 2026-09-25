@@ -47,12 +47,7 @@ from colab_cli.client import (
     TooManyAssignmentsError,
 )
 from colab_cli.commands.execution import _build_env_prelude, _parse_env_vars
-from colab_cli.commands.session import (
-    _is_scope_error,
-    _scope_remediation_message,
-    resolve_runtime_options,
-    spawn_keep_alive,
-)
+from colab_cli.commands.session import resolve_runtime_options
 from colab_cli.runtime import ColabRuntime
 from colab_cli.state import SessionState
 from colab_cli.utils import get_status_code, is_terminal_error
@@ -362,34 +357,6 @@ def run_command(
         ),
     )
 
-    # Pre-flight keep-alive: same scope-detection dance as `colab new` so a
-    # missing OAuth scope doesn't leak a billable assignment.
-    try:
-        state.client.keep_alive_assignment(endpoint)
-    except ColabRequestError as e:
-        if get_status_code(e) == 403 and _is_scope_error(e):
-            typer.echo(
-                "[colab] Keep-alive pre-flight failed: your credentials "
-                "are missing an OAuth scope required by Colab.\n",
-                err=True,
-            )
-            typer.echo(_scope_remediation_message(state.auth_provider), err=True)
-            try:
-                state.client.unassign(endpoint)
-            except Exception:
-                pass
-            raise typer.Exit(code=1)
-        # Other failures: don't block — the daemon will retry.
-
-    # AGENTS.md item 17: persist BEFORE spawning the daemon so the daemon's
-    # initial state.store.get(name) doesn't race the parent.
-    state.store.add(s)
-    s.keep_alive_pid = spawn_keep_alive(
-        endpoint,
-        name,
-        auth_provider=state.auth_provider,
-        config_path=state.config_path,
-    )
     state.store.add(s)
     state.history.log_event(
         name,
@@ -487,22 +454,16 @@ def run_command(
 
 
 def _teardown(name: str, s: SessionState, *, reason: str) -> None:
-    """Best-effort full session teardown: kill the keep-alive daemon, ask the
-    remote kernel to shut down, unassign the VM, and remove local state.
+    """Best-effort full session teardown: ask the remote kernel to shut down,
+    unassign the VM, and remove local state.
 
     Mirrors `commands.session.stop` but with a richer history event reason and
     swallowing all errors (we don't want a teardown failure to mask the user's
     exit code).
     """
-    from colab_cli.common import kill_process, state
+    from colab_cli.common import state
 
     typer.echo(f"[colab] Stopping session '{name}'...", err=True)
-    if s.keep_alive_pid:
-        try:
-            kill_process(s.keep_alive_pid)
-        except Exception:
-            pass
-
     try:
         rt = ColabRuntime(s.url, s.token, kernel_id=s.kernel_id)
         rt.stop(shutdown_kernel=True)

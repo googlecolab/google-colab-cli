@@ -37,16 +37,6 @@ COLAB_CLIENT_AGENT_HEADER = {
     "value": "colab-cli",
 }
 COLAB_XSRF_TOKEN_HEADER = {"key": "X-Goog-Colab-Token", "value": ""}
-# Marks a request as one that should be resolved through the Colab tunnel
-# (Tunnel Frontend). Required by TFE-intercepted paths such as the keep-alive
-# ping; without it the front-door rejects the request with HTTP 400.
-COLAB_TUNNEL_HEADER = {"key": "X-Colab-Tunnel", "value": "Google"}
-
-# Per-request timeout (seconds) for the keep-alive tunnel ping. TFE records the
-# activity as soon as the request arrives, so we do not need to wait long for
-# the (often non-responding) VM. A short timeout keeps the keep-alive daemon
-# responsive on its 60s cadence.
-KEEP_ALIVE_TIMEOUT = 10
 
 
 @dataclass
@@ -239,9 +229,9 @@ class Client:
         body = self._strip_xssi_prefix(response.text)
         if not body:
             return
-        # Some endpoints (e.g. KeepAliveAssignment) return a non-empty body
-        # but the caller doesn't care about the response content — skip
-        # pydantic validation entirely when no schema was supplied.
+        # Some endpoints return a non-empty body but the caller doesn't care
+        # about the response content — skip pydantic validation entirely when
+        # no schema was supplied.
         if schema is None:
             return
         return TypeAdapter(schema).validate_python(json.loads(body))
@@ -333,23 +323,3 @@ class Client:
             url, method="POST", headers=headers, schema=PostAssignmentResponse
         )
 
-    def keep_alive_assignment(self, endpoint: str):
-        """Refreshes the idle timer for the given assignment endpoint.
-
-        TFE notes the activity as soon as the request arrives, then forwards it
-        to the VM, which does not always respond on this path — so the request
-        commonly read-times-out even though the keep-alive succeeded. A read
-        timeout is therefore treated as success; only an actual HTTP error
-        response (4xx/5xx, e.g. 404 for a deleted assignment) is surfaced.
-        """
-        url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/{endpoint}/keep-alive/")
-        headers = {COLAB_TUNNEL_HEADER["key"]: COLAB_TUNNEL_HEADER["value"]}
-        try:
-            return self._issue_request(
-                url, method="GET", headers=headers, timeout=KEEP_ALIVE_TIMEOUT
-            )
-        except requests.exceptions.ReadTimeout:
-            # The activity was recorded by TFE before the request was forwarded;
-            # the VM simply didn't answer in time. This is the normal,
-            # successful case for this path.
-            return None
