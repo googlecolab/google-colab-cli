@@ -78,6 +78,35 @@ class State:
             del self._sessions[name]
         self.history.log_event(name, "session_terminated", {"reason": "pruned"})
 
+    def refresh_session(self, name: str) -> bool:
+        """Refresh proxy credentials for a session from live server assignments.
+
+        The runtime-proxy token expires (~1h) while the VM assignment keeps
+        running, so a 401/404 on connect usually means stale local credentials,
+        not a dead session. Fetch fresh token/url from list_assignments() and
+        update local state in place. Returns True when a matching assignment
+        was found and credentials were refreshed.
+        """
+        s = self.store.get(name)
+        if not s:
+            return False
+        try:
+            assignments = self.client.list_assignments()
+        except Exception:
+            return False
+        for a in assignments:
+            if a.endpoint != s.endpoint:
+                continue
+            info = a.runtime_proxy_info
+            s.token = info.token
+            s.url = info.url
+            self.store.add(s)
+            self.history.log_event(
+                name, "session_refreshed", {"endpoint": s.endpoint}
+            )
+            return True
+        return False
+
     def sync_sessions(self):
         if self._sessions is not None:
             return self._sessions, self.client.list_assignments()

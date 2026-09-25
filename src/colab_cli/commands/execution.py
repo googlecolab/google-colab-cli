@@ -137,6 +137,63 @@ def display_output(out, output_image=None):
         pass
 
 
+
+def _connect_with_refresh(state, name, make_runtime, probe_timeout=45.0):
+    """Build the runtime and run the /content probe with a hard wall-clock cap.
+
+    The runtime-proxy token expires (~1h) while the VM assignment stays alive,
+    so a 401/404 usually means stale local credentials. On terminal error we
+    refresh credentials from list_assignments() and persist them, then fail
+    with exit code 2 (no prune) so the caller can simply re-invoke the CLI —
+    a fresh process with refreshed credentials is the path that reliably
+    reconnects. Only prune when the assignment is really gone server-side.
+    """
+    import queue
+    import threading
+
+    runtime = make_runtime()
+    done: "queue.Queue[BaseException | None]" = queue.Queue()
+
+    def _probe():
+        try:
+            runtime.execute_code(
+                "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
+            )
+            done.put(None)
+        except BaseException as e:  # noqa: BLE001
+            done.put(e)
+
+    t = threading.Thread(target=_probe, daemon=True)
+    t.start()
+    try:
+        result = done.get(timeout=probe_timeout)
+    except queue.Empty:
+        # daemon thread: process exit will not wait for the hung connect
+        typer.echo(
+            f"[colab] Kernel connect for '{name}' timed out "
+            f"({probe_timeout:.0f}s); credentials NOT pruned."
+        )
+        raise typer.Exit(2)
+    if result is not None:
+        e = result
+        if not is_terminal_error(e):
+            raise e
+        if state.refresh_session(name):
+            typer.echo(
+                f"[colab] Proxy token for '{name}' expired; credentials "
+                "refreshed from live assignment and saved. Re-run the "
+                "command to reconnect (exit 2, session kept)."
+            )
+            raise typer.Exit(2)
+        typer.echo(
+            f"[colab] Session '{name}' appears to be lost (404/401) and no "
+            "live assignment matches. Cleaning up."
+        )
+        state.prune_session(name)
+        raise typer.Exit(1)
+    return runtime
+
+
 def exec_command(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
@@ -207,27 +264,18 @@ def exec_command(
         s.session_id = sid
         state.store.add(s)
 
-    runtime = ColabRuntime(
-        s.url,
-        s.token,
-        kernel_id=s.kernel_id,
-        session_id=s.session_id,
-        on_kernel_started=on_started,
-        on_session_started=on_sess_started,
+    runtime = _connect_with_refresh(
+        state,
+        name,
+        lambda: ColabRuntime(
+            s.url,
+            s.token,
+            kernel_id=s.kernel_id,
+            session_id=s.session_id,
+            on_kernel_started=on_started,
+            on_session_started=on_sess_started,
+        ),
     )
-    try:
-        # Ensure we are in /content which is the standard Colab working directory
-        runtime.execute_code(
-            "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
-        )
-    except Exception as e:
-        if is_terminal_error(e):
-            typer.echo(
-                f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
-            )
-            state.prune_session(name)
-            raise typer.Exit(1)
-        raise e
 
     try:
         is_nb = file and file.endswith(".ipynb")
@@ -311,27 +359,18 @@ def repl(
         s.session_id = sid
         state.store.add(s)
 
-    runtime = ColabRuntime(
-        s.url,
-        s.token,
-        kernel_id=s.kernel_id,
-        session_id=s.session_id,
-        on_kernel_started=on_started,
-        on_session_started=on_sess_started,
+    runtime = _connect_with_refresh(
+        state,
+        name,
+        lambda: ColabRuntime(
+            s.url,
+            s.token,
+            kernel_id=s.kernel_id,
+            session_id=s.session_id,
+            on_kernel_started=on_started,
+            on_session_started=on_sess_started,
+        ),
     )
-    try:
-        # Ensure we are in /content which is the standard Colab working directory
-        runtime.execute_code(
-            "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
-        )
-    except Exception as e:
-        if is_terminal_error(e):
-            typer.echo(
-                f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
-            )
-            state.prune_session(name)
-            raise typer.Exit(1)
-        raise e
 
     if not is_stdin_tty():
         code = sys.stdin.read()
@@ -394,13 +433,29 @@ def console(
     try:
         connect_console(s)
     except Exception as e:
-        if is_terminal_error(e):
+        if is_terminal_error(e) and state.refresh_session(name):
+            typer.echo(
+                f"[colab] Proxy token for '{name}' expired; "
+                "refreshed from live assignment, retrying."
+            )
+            try:
+                connect_console(s)
+            except Exception as e2:
+                if is_terminal_error(e2):
+                    typer.echo(
+                        f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
+                    )
+                    state.prune_session(name)
+                    raise typer.Exit(1)
+                raise e2
+        elif is_terminal_error(e):
             typer.echo(
                 f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
             )
             state.prune_session(name)
             raise typer.Exit(1)
-        raise e
+        else:
+            raise e
     finally:
         s.running = None
         state.store.add(s)

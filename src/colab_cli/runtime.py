@@ -95,10 +95,23 @@ class ColabRuntime:
 
             for i in range(retries):
                 try:
+                    # jupyter-kernel-client moved JupyterSubprotocol into the
+                    # wsclient submodule in >=0.8 and dropped the top-level
+                    # re-export in >=1.0; resolve defensively and omit the
+                    # kwarg entirely when unavailable.
+                    _subproto = getattr(jupyter_kernel_client, "JupyterSubprotocol", None)
+                    if _subproto is None:
+                        try:
+                            from jupyter_kernel_client.wsclient import (
+                                JupyterSubprotocol as _subproto,
+                            )
+                        except Exception:
+                            _subproto = None
                     client_kwargs = {
-                        "subprotocol": jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
                         "extra_params": {"colab-runtime-proxy-token": self.token},
                     }
+                    if _subproto is not None:
+                        client_kwargs["subprotocol"] = _subproto.DEFAULT
                     if self.session_id:
                         # WSSession (Session) expects 'session' for the ID
                         client_kwargs["session"] = self.session_id
