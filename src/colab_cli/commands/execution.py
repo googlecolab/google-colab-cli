@@ -25,7 +25,12 @@ from typing import List, Optional
 from typing_extensions import Annotated
 
 from colab_cli.runtime import ColabRuntime
-from colab_cli.utils import handle_image, is_terminal_error, render_display_data
+from colab_cli.utils import (
+    get_status_code,
+    handle_image,
+    is_terminal_error,
+    render_display_data,
+)
 from colab_cli.console import connect_console
 
 _console = Console()
@@ -138,59 +143,98 @@ def display_output(out, output_image=None):
 
 
 
-def _connect_with_refresh(state, name, make_runtime, probe_timeout=45.0):
-    """Build the runtime and run the /content probe with a hard wall-clock cap.
+def _is_kernel_error(e: BaseException) -> bool:
+    """Kernel-instance-level failures: the session/VM is fine, the kernel id is stale."""
+    msg = str(e).lower()
+    return (
+        get_status_code(e) == 503
+        or "no such kernel" in msg
+        or "connection was lost" in msg
+        or "kernel not found" in msg
+        or "dead kernel" in msg
+    )
 
-    The runtime-proxy token expires (~1h) while the VM assignment stays alive,
-    so a 401/404 usually means stale local credentials. On terminal error we
-    refresh credentials from list_assignments() and persist them, then fail
-    with exit code 2 (no prune) so the caller can simply re-invoke the CLI —
-    a fresh process with refreshed credentials is the path that reliably
-    reconnects. Only prune when the assignment is really gone server-side.
+
+def _connect_with_refresh(state, name, make_runtime, probe_timeout=45.0):
+    """Build the runtime and run the /content probe with layered self-healing.
+
+    Failure layers and remedies (cheapest first):
+      1. kernel-instance error (503 / no-such-kernel / lost connection):
+         drop kernel_id/session_id and retry once with a brand-new kernel.
+      2. 401/404: the ~1h runtime-proxy token expired while the assignment is
+         alive — refresh credentials from list_assignments(), persist, exit 2
+         (no prune) so a fresh process reconnects.
+      3. wall-clock timeout: daemon thread guarantees the CLI never hangs.
+    Prune only when no live assignment matches server-side.
     """
     import queue
     import threading
 
-    runtime = make_runtime()
-    done: "queue.Queue[BaseException | None]" = queue.Queue()
+    def _probe(rt):
+        done: "queue.Queue[BaseException | None]" = queue.Queue()
 
-    def _probe():
+        def run():
+            try:
+                rt.execute_code(
+                    "import os; os.makedirs('/content', exist_ok=True); "
+                    "os.chdir('/content')"
+                )
+                done.put(None)
+            except BaseException as e:  # noqa: BLE001
+                done.put(e)
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
         try:
-            runtime.execute_code(
-                "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
-            )
-            done.put(None)
-        except BaseException as e:  # noqa: BLE001
-            done.put(e)
+            return done.get(timeout=probe_timeout)
+        except queue.Empty:
+            raise _TimedOut()
 
-    t = threading.Thread(target=_probe, daemon=True)
-    t.start()
-    try:
-        result = done.get(timeout=probe_timeout)
-    except queue.Empty:
-        # daemon thread: process exit will not wait for the hung connect
-        typer.echo(
-            f"[colab] Kernel connect for '{name}' timed out "
-            f"({probe_timeout:.0f}s); credentials NOT pruned."
-        )
-        raise typer.Exit(2)
-    if result is not None:
-        e = result
-        if not is_terminal_error(e):
-            raise e
-        if state.refresh_session(name):
+    class _TimedOut(Exception):
+        pass
+
+    runtime = make_runtime()
+    for attempt in range(2):
+        try:
+            result = _probe(runtime)
+        except _TimedOut:
+            result = "TIMED_OUT"
+        if result == "TIMED_OUT":
             typer.echo(
-                f"[colab] Proxy token for '{name}' expired; credentials "
-                "refreshed from live assignment and saved. Re-run the "
-                "command to reconnect (exit 2, session kept)."
+                f"[colab] Kernel connect for '{name}' timed out "
+                f"({probe_timeout:.0f}s); credentials NOT pruned."
             )
             raise typer.Exit(2)
-        typer.echo(
-            f"[colab] Session '{name}' appears to be lost (404/401) and no "
-            "live assignment matches. Cleaning up."
-        )
-        state.prune_session(name)
-        raise typer.Exit(1)
+        err = result  # None on success, exception otherwise
+        if err is None:
+            return runtime
+        if _is_kernel_error(err) and attempt == 0:
+            s_ = state.store.get(name)
+            if s_ is not None and (s_.kernel_id or s_.session_id):
+                s_.kernel_id = None
+                s_.session_id = None
+                state.store.add(s_)
+                typer.echo(
+                    f"[colab] Kernel for '{name}' is dead; retrying with a "
+                    "fresh kernel (session kept)."
+                )
+                runtime = make_runtime()
+                continue
+        if is_terminal_error(err):
+            if state.refresh_session(name):
+                typer.echo(
+                    f"[colab] Proxy token for '{name}' expired; credentials "
+                    "refreshed from live assignment and saved. Re-run the "
+                    "command to reconnect (exit 2, session kept)."
+                )
+                raise typer.Exit(2)
+            typer.echo(
+                f"[colab] Session '{name}' appears to be lost (404/401) and no "
+                "live assignment matches. Cleaning up."
+            )
+            state.prune_session(name)
+            raise typer.Exit(1)
+        raise err
     return runtime
 
 
