@@ -157,7 +157,8 @@ def _get_adc_credentials() -> Credentials:
     Honors the standard ADC discovery chain (``GOOGLE_APPLICATION_CREDENTIALS``,
     ``gcloud auth application-default login``, GCE/GKE metadata server, etc.).
 
-    Most ADC credential types (service accounts, GCE/GKE, impersonated)
+    The RuntimeService at colab.pa.googleapis.com requires the `colaboratory`
+    scope. Most ADC credential types (service accounts, GCE/GKE, impersonated)
     support `with_scopes`; user credentials minted by
     `gcloud auth application-default login` do not. For the latter, the user
     must run `gcloud auth application-default login` with
