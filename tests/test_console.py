@@ -15,7 +15,6 @@
 import json
 import os
 import sys
-import termios
 from unittest.mock import MagicMock, patch
 
 from colab_cli.console import connect_console, on_message, on_open
@@ -34,27 +33,29 @@ def mock_session():
 
 
 @patch("colab_cli.console.websocket.WebSocketApp")
-@patch("colab_cli.console.tty.setraw")
-@patch("colab_cli.console.termios.tcgetattr")
-@patch("colab_cli.console.termios.tcsetattr")
+@patch("colab_cli.console._terminal.unregister_resize_handler")
+@patch("colab_cli.console._terminal.register_resize_handler")
+@patch("colab_cli.console._terminal.restore")
+@patch("colab_cli.console._terminal.set_raw")
+@patch("colab_cli.console._terminal.get_fd")
 @patch("colab_cli.console.os.get_terminal_size")
-@patch("colab_cli.console.sys.stdin.fileno")
 @patch("colab_cli.console.sys.stdin.isatty")
 def test_console_initialization(
     mock_isatty,
-    mock_fileno,
     mock_get_term_size,
-    mock_tcsetattr,
-    mock_tcgetattr,
-    mock_setraw,
+    mock_get_fd,
+    mock_set_raw,
+    mock_restore,
+    mock_register_resize,
+    mock_unregister_resize,
     mock_ws_app,
     mock_session,
 ):
     # Setup mocks
     mock_isatty.return_value = True
-    mock_fileno.return_value = 0
+    mock_get_fd.return_value = 0
     mock_get_term_size.return_value = os.terminal_size((80, 24))
-    mock_tcgetattr.return_value = ["fake_attrs"]
+    mock_set_raw.return_value = 12345  # opaque old settings token
     mock_ws_instance = MagicMock()
     mock_ws_app.return_value = mock_ws_instance
 
@@ -69,30 +70,31 @@ def test_console_initialization(
     mock_ws_app.assert_called_once()
     assert mock_ws_app.call_args[1]["url"] == expected_url
 
-    # 2. Verify raw mode setup and teardown
-    mock_tcgetattr.assert_called_once_with(sys.stdin.fileno())
-    mock_setraw.assert_called_once_with(sys.stdin.fileno(), termios.TCSANOW)
+    # 2. Verify raw mode setup via the platform abstraction
+    mock_get_fd.assert_called_once()
+    mock_set_raw.assert_called_once_with(0)
+    mock_register_resize.assert_called_once()
 
-    # Teardown should happen in a finally block
-    mock_tcsetattr.assert_called_once_with(
-        sys.stdin.fileno(), termios.TCSANOW, ["fake_attrs"]
-    )
+    # 3. Teardown should happen in a finally block
+    mock_restore.assert_called_once_with(0, 12345)
+    mock_unregister_resize.assert_called_once()
 
 
 @patch("colab_cli.console.websocket.WebSocketApp")
-@patch("colab_cli.console.tty.setraw")
-@patch("colab_cli.console.termios.tcgetattr")
-@patch("colab_cli.console.termios.tcsetattr")
+@patch("colab_cli.console._terminal.set_raw")
+@patch("colab_cli.console._terminal.get_fd")
+@patch("colab_cli.console._terminal.restore")
 @patch("colab_cli.console.sys.stdin.isatty")
 def test_console_piped_input(
     mock_isatty,
-    mock_tcsetattr,
-    mock_tcgetattr,
-    mock_setraw,
+    mock_restore,
+    mock_get_fd,
+    mock_set_raw,
     mock_ws_app,
     mock_session,
 ):
     mock_isatty.return_value = False
+    mock_get_fd.return_value = None
     mock_ws_instance = MagicMock()
     mock_ws_app.return_value = mock_ws_instance
     mock_ws_instance.run_forever.return_value = None
@@ -100,10 +102,9 @@ def test_console_piped_input(
     with patch("colab_cli.console.threading.Thread"):
         connect_console(mock_session)
 
-    # In a piped environment, we should not attempt to use termios or tty
-    mock_tcgetattr.assert_not_called()
-    mock_setraw.assert_not_called()
-    mock_tcsetattr.assert_not_called()
+    # In a piped environment, we should not attempt to use terminal raw mode
+    mock_set_raw.assert_not_called()
+    mock_restore.assert_not_called()
 
 
 @patch("colab_cli.console.os.get_terminal_size")
@@ -194,7 +195,7 @@ def test_read_stdin_eof_tty_does_not_close_ws(
 ):
     """When stdin is a real TTY and read() returns empty (which happens on
     Ctrl-D in raw mode), we should NOT inject 'exit\\n' or close the websocket
-    \u2014 the user is in interactive mode and may have intended Ctrl-D as a literal
+    — the user is in interactive mode and may have intended Ctrl-D as a literal
     char. The websocket lifecycle is owned by the remote shell in this case.
     """
     import colab_cli.console as console_mod
