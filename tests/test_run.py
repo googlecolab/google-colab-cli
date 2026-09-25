@@ -30,6 +30,7 @@ from colab_cli.client import (
     TooManyAssignmentsError,
     Variant,
 )
+from colab_cli.state import SessionState
 
 runner = CliRunner()
 
@@ -160,6 +161,29 @@ def test_run_412_shows_friendly_error_and_exits(
     assert "precondition" in result.output.lower()
     mock_client.unassign.assert_not_called()
     mock_store.add.assert_not_called()
+
+
+def test_run_teardown_uses_refreshed_token(
+    mock_common_state,
+    mock_client,
+    mock_runtime_class,
+    assign_response,
+    script_path,
+):
+    """A script can outlive the proxy token, so teardown must re-fetch it."""
+    mock_client.assign.return_value = assign_response
+    mock_runtime_class.return_value.execute_code.return_value = []
+    mock_common_state.get_session.side_effect = lambda name: SessionState(
+        name=name, token="fresh-tok", url="http://fresh", endpoint="ep-123"
+    )
+
+    result = runner.invoke(app, ["run", str(script_path)])
+
+    assert result.exit_code == 0, result.output
+    teardown_call = mock_runtime_class.call_args_list[-1]
+    assert teardown_call.args[:2] == ("http://fresh", "fresh-tok")
+    mock_runtime_class.return_value.stop.assert_called_with(shutdown_kernel=True)
+    mock_client.unassign.assert_called_once_with("ep-123")
 
 
 # ---------------------------------------------------------------------------
