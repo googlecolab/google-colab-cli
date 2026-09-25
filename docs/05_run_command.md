@@ -1,5 +1,6 @@
 ---
 log:
+2026-09-25: Removed keep-alive daemon spawning from session allocation and teardown. `--keep` remains supported and skips unassignment on completion.
 2026-08-09: Added `--high-mem` flag (passthrough to session creation; sends `shape=hm` on assign when supported).
 2026-05-12: Initial design and implementation of `colab run <script.py> [args...]`. Combines `colab new` + `colab exec` + `colab stop` into a single fire-and-forget invocation so a Python file can use `#!/usr/bin/env -S colab run` as a shebang line and execute on a freshly-allocated Colab VM. Adds `--keep` (skip auto-stop), `--gpu` / `--tpu` (passthrough to session creation), `-s/--session` (name the ephemeral session), and propagates the script's exit status (non-zero on any uncaught exception in the kernel). The script's `sys.argv` is re-set inside the kernel to mirror native `python script.py arg1 arg2` semantics, and `__name__` is set to `"__main__"`.
 2026-05-12: Native CPython exit-code semantics for `sys.exit()` / `raise SystemExit(...)` from the script body. The Colab kernel reports a `SystemExit` as `output_type=='error'`, which under the previous logic would have (a) printed the IPython traceback (`An exception has occurred, use %tb...`) and (b) flagged the run as a failure regardless of the integer exit code. Now: `sys.exit()` / `sys.exit(0)` exit 0 silently; `sys.exit(N)` exits N; `sys.exit('msg')` exits 1 (matching CPython). The IPython "To exit: use 'exit', 'quit', or Ctrl-D." UserWarning is filtered via the prelude. Encoded after running `examples/gpu_hello.py` end-to-end and seeing the noisy `SystemExit: 0` traceback at the end of an otherwise-successful GPU run.
@@ -49,7 +50,7 @@ print(torch.cuda.get_device_name(0))
 
 ## Behavior
 
-1. **Allocate**: Creates a fresh session (mirrors `colab new` end-to-end: `assign` → keep-alive pre-flight → spawn keep-alive daemon → persist `SessionState`). Session name defaults to `run-<6 hex>`.
+1. **Allocate**: Creates a fresh session (mirrors `colab new`: `assign` → persist `SessionState`). Session name defaults to `run-<6 hex>`.
 2. **Execute**: Reads the script file. Prepends a deterministic prelude that re-sets `sys.argv` and `__name__` so the script body sees the same execution context as `python script.py arg1 arg2`:
    ```python
    import sys
@@ -62,16 +63,13 @@ print(torch.cuda.get_device_name(0))
    - Sends `runtime.stop(shutdown_kernel=True)` (best-effort).
    - Calls `state.client.unassign(endpoint)` to free the billable VM.
    - Removes the session from `StateStore`.
-   - Kills the keep-alive daemon (`kill_process(s.keep_alive_pid)`).
    - Logs `session_terminated` with `reason="run_completed"` (or `"run_failed"`).
 
-If `--keep` is set, the session remains visible in `colab sessions` and `colab status` and can be reused with `colab exec -s <name>`, `colab repl -s <name>`, etc., until the user runs `colab stop` (or the keep-alive daemon hits its 24h cap).
+If `--keep` is set, the session remains visible in `colab sessions` and `colab status` and can be reused with `colab exec -s <name>`, `colab repl -s <name>`, etc., until the user runs `colab stop` (or the backend reclaims it due to inactivity).
 
 ## AGENTS.md Constraints Honoured
-- **Item 7 (no background threads)**: The keep-alive daemon is the existing detached process from `colab new`; this command introduces no new threads.
+- **Item 7 (fire-and-forget)**: No background threads or daemons are created; commands execute and exit cleanly.
 - **Item 10 (live probes allocate real resources)**: The teardown is in a `try/finally` so an exception during execution still releases the VM. Tests assert `unassign` is called even when the script errors.
-- **Item 16 (daemon flag propagation)**: Reuses `spawn_keep_alive(...)` which already propagates `--auth` and `--config`.
-- **Item 17 (persist-before-spawn)**: Uses the same persist-before-spawn pattern as `colab new`.
 
 ## Testing Strategy (TDD)
 

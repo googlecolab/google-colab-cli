@@ -19,7 +19,7 @@ Designed to support seamless developer productivity, headless automation, and AI
 * **Instant VM Provisioning:** Spin up CPU, GPU (T4, L4, G4, H100, A100), or TPU (v5e1, v6e1) runtimes in seconds.
 * **Robust Code Execution:** Run local Python scripts, Jupyter Notebooks (`.ipynb`), or piped `stdin` code; launch interactive REPLs or raw TTY console shells.
 * **Ephemeral Job Runner (`colab run`):** Provision a fresh VM, execute a local script with forwarded arguments, retrieve output files, and automatically tear down the runtime in a single command.
-* **Automatic Keep-Alive:** Built-in background daemon automatically prevents idle VM termination, keeping resource allocations active without requiring open browser tabs.
+* **Activity-Based Liveness:** Sessions stay alive as long as the kernel is active, with the Colab backend automatically maintaining liveness.
 * **Seamless Workspace Automation:** Mount Google Drive, authenticate Google Cloud Platform (GCP) credentials, and install dependencies with high-performance `uv` package management.
 * **State & Log Archival:** Inspect local session states or export interactive history logs to standard Jupyter Notebooks, Markdown, or structured JSONL.
 
@@ -72,7 +72,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab sessions` | List all active sessions currently active on the backend |
 | `colab status [-s NAME]` | Display hardware, machine shape, status, and local metadata for active sessions |
 | `colab restart-kernel [-s NAME]` | Restart the active session's Jupyter kernel |
-| `colab stop [-s NAME]` | Terminate a session VM and tear down its keep-alive daemon |
+| `colab stop [-s NAME]` | Terminate a session VM and release its resources |
 | `colab url [-s NAME] [--open]` | Print or open a browser URL connecting to the active session |
 
 ### Execution
@@ -177,7 +177,7 @@ Make the script executable (`chmod +x script.py`) and run it: `./script.py`. The
 
 For comprehensive architectural overviews and deep-dives into specific CLI sub-systems, refer to the detailed documentation:
 
-* [Session Management & Keep-Alive Architecture](docs/01_session_management.md)
+* [Session Management Architecture](docs/01_session_management.md)
 * [Interactive & Non-Interactive Execution Design](docs/02_execution_and_interactive.md)
 * [File Management & Jupyter Contents API](docs/03_file_management.md)
 * [Authentication Providers & VM Automation](docs/04_automation_and_utility.md)

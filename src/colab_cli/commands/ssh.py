@@ -185,8 +185,7 @@ def _auto_create_session(
 ) -> SessionState:
     """Creates a runtime via ``colab new`` and returns its session.
 
-    Reuses ``colab new``'s creation path (assignment, keep-alive daemon, scope
-    pre-flight) verbatim so the two commands cannot drift.
+    Reuses ``colab new``'s creation path verbatim so the two commands cannot drift.
 
     Args:
       gpu: GPU accelerator to request, or None for CPU.
@@ -535,7 +534,7 @@ def _install_rm_signal_handlers(do_rm: Callable[[], None]) -> None:
 
     OpenSSH ends a ProxyCommand on disconnect by sending SIGHUP (not just
     stdin EOF); Python's default SIGHUP action would terminate us WITHOUT
-    running teardown, leaking the runtime and its keep-alive daemon. Convert
+    running teardown, leaking the runtime. Convert
     SIGHUP/SIGTERM/SIGINT into ``do_rm`` + ``os._exit`` so ``--rm`` teardown
     always runs.
 

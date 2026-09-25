@@ -157,15 +157,13 @@ def _get_adc_credentials() -> Credentials:
     Honors the standard ADC discovery chain (``GOOGLE_APPLICATION_CREDENTIALS``,
     ``gcloud auth application-default login``, GCE/GKE metadata server, etc.).
 
-    The RuntimeService at colab.pa.googleapis.com requires the
-    `colaboratory` scope (otherwise keep-alive returns 403 SCOPE_NOT_PERMITTED).
     Most ADC credential types (service accounts, GCE/GKE, impersonated)
     support `with_scopes`; user credentials minted by
     `gcloud auth application-default login` do not. For the latter, the user
-    must re-run `gcloud auth application-default login` with
+    must run `gcloud auth application-default login` with
     `--scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`
     (`openid` and `cloud-platform` are required by `gcloud` itself; `userinfo.email`
-    is required by the session backend; `colaboratory` is required by this RPC).
+    is required by the session backend; `colaboratory` is retained for Colab APIs).
     """
     # `google.auth._default` emits a UserWarning when ADC user credentials
     # don't have a quota project pinned ("Your application has authenticated
@@ -173,13 +171,9 @@ def _get_adc_credentials() -> Credentials:
     # project. You might receive a 'quota exceeded' or 'API not enabled'
     # error.").
     #
-    # That heuristic does not apply to this CLI: every call we make to
-    # `colab.pa.googleapis.com` carries `X-Goog-User-Project: 1014160490159`
-    # (Colab's project id) — see AGENTS.md item 18 — so the user's
-    # quota-project setting is irrelevant. The warning shows up on every
-    # single `colab` invocation under ADC, which is pure noise. Filter it,
-    # but keep the scope as tight as possible: only this exact message,
-    # only during this one call.
+    # That warning shows up on every single `colab` invocation under ADC,
+    # which is pure noise. Filter it, but keep the scope as tight as possible:
+    # only this exact message, only during this one call.
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",

@@ -12,12 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import subprocess
-import sys
-import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Optional
 import typer
 from typing_extensions import Annotated
 
@@ -35,58 +31,6 @@ from colab_cli.client import (
 from colab_cli.utils import get_status_code
 from colab_cli.state import SessionState
 from colab_cli.runtime import ColabRuntime
-
-
-def _is_scope_error(e: Exception) -> bool:
-    """True if a ColabRequestError's response body indicates a missing OAuth scope.
-
-    The frontend returns a `google.rpc.Status` with `code=7` (PERMISSION_DENIED)
-    and a `DebugInfo` payload mentioning `SCOPE_NOT_PERMITTED` /
-    "insufficient authentication scopes". Match on either substring so we
-    don't depend on the exact wording of one of them.
-    """
-    body = getattr(e, "response_body", None) or ""
-    body_str = str(body)
-    return (
-        "SCOPE_NOT_PERMITTED" in body_str
-        or "insufficient authentication scopes" in body_str
-    )
-
-
-def _scope_remediation_message(provider) -> str:
-    """User-facing remediation hint, tailored per auth provider.
-
-    Keep-alive is a Tunnel Frontend ping against the Colab session backend
-    (colab.research.google.com), authenticated with the user's own Gaia bearer
-    token — the same credential and host used to assign the VM. A missing-scope
-    error here is rare (assignment would normally have failed first), but if it
-    happens the fix is to re-authenticate with the standard Colab scopes.
-    """
-    # Importing locally to avoid a circular import at module load time.
-    from colab_cli.auth import AuthProvider
-
-    common = (
-        "Keeping the session alive requires valid Colab credentials for "
-        "colab.research.google.com."
-    )
-    if provider == AuthProvider.ADC:
-        return (
-            f"{common}\n"
-            "Re-authenticate ADC with the standard Colab scopes (the "
-            "cloud-platform and openid scopes are required by gcloud itself):\n"
-            "  gcloud auth application-default login \\\n"
-            "      --scopes=openid,"
-            "https://www.googleapis.com/auth/cloud-platform,"
-            "https://www.googleapis.com/auth/userinfo.email,"
-            "https://www.googleapis.com/auth/colaboratory\n"
-            "Then re-run `colab new`."
-        )
-    # OAuth2 (and any future provider) fallback.
-    return (
-        f"{common}\n"
-        "Delete the cached token at ~/.config/colab-cli/token.json and "
-        "re-run `colab new` to trigger a fresh consent flow."
-    )
 
 
 def _hardware_label(accelerator: str) -> str:
@@ -254,42 +198,6 @@ def new(
         ),
     )
 
-    # Pre-flight the keep-alive ping once. If it returns a 403 caused by
-    # missing OAuth scopes we know the daemon will fail and the VM would be
-    # idle-pruned. Catch it now so we (a) never leak a billable assignment,
-    # (b) surface an actionable remediation instead of a session that quietly
-    # disappears a few minutes later.
-    try:
-        state.client.keep_alive_assignment(endpoint)
-    except ColabRequestError as e:
-        if get_status_code(e) == 403 and _is_scope_error(e):
-            typer.echo(
-                "[colab] Keep-alive pre-flight failed: your credentials "
-                "are missing an OAuth scope required by Colab.\n",
-                err=True,
-            )
-            typer.echo(_scope_remediation_message(state.auth_provider), err=True)
-            # Don't leak the assignment we just created.
-            try:
-                state.client.unassign(endpoint)
-            except Exception:
-                pass
-            raise typer.Exit(code=1)
-        # Other failures: don't block session creation — the daemon will
-        # retry and log via the existing keep_alive_error event path.
-
-    # Persist the session BEFORE spawning the daemon so the daemon's
-    # initial `state.store.get(session_name)` check doesn't race and
-    # exit with `reason=session_not_found`. We re-persist below to also
-    # capture the daemon PID.
-    state.store.add(s)
-    s.keep_alive_pid = spawn_keep_alive(
-        endpoint,
-        name,
-        auth_provider=state.auth_provider,
-        config_path=state.config_path,
-    )
-
     state.store.add(s)
     state.history.log_event(
         name,
@@ -423,11 +331,6 @@ def stop(
         return
 
     typer.echo(f"[colab] Stopping session '{name}'...")
-    if s.keep_alive_pid:
-        from colab_cli.common import kill_process
-
-        kill_process(s.keep_alive_pid)
-
     try:
         runtime = ColabRuntime(s.url, s.token, kernel_id=s.kernel_id)
         runtime.stop(shutdown_kernel=True)
@@ -440,132 +343,10 @@ def stop(
     typer.echo("[colab] Session terminated.")
 
 
-def spawn_keep_alive(
-    endpoint: str, session_name: str, auth_provider=None, config_path=None
-):
-    """Spawns a detached keep-alive process.
-
-    Both `auth_provider` and `config_path` are propagated as global flags
-    so the detached child uses the same authentication strategy AND the
-    same session state file as the parent that invoked `colab new`.
-    Without this, the child inherits Typer's defaults (`--auth=oauth2`,
-    `--config=~/.config/colab-cli/sessions.json`), which causes:
-      (a) wrong auth backend, and
-      (b) the daemon's `state.store.get(session_name)` check finds nothing
-          and exits with `reason=session_not_found` when the parent used
-          `--config` to write to a non-default path.
-    """
-    cmd = [sys.executable, "-m", "colab_cli.cli"]
-    if auth_provider is not None:
-        cmd.append(f"--auth={auth_provider.value}")
-    if config_path is not None:
-        cmd.extend(["--config", config_path])
-    cmd.extend(["keep-alive", endpoint, session_name])
-    # Detach process
-    kwargs = {}
-    if sys.platform != "win32":
-        kwargs["start_new_session"] = True
-    else:
-        # https://stackoverflow.com/questions/1356540/how-can-i-make-a-python-script-run-in-the-background-as-a-service-on-windows
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        DETACHED_PROCESS = 0x00000008
-        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-
-    p = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        **kwargs,
-    )
-    return p.pid
-
-
-def keep_alive(
-    endpoint: Annotated[str, typer.Argument(help="Endpoint ID")],
-    session_name: Annotated[str, typer.Argument(help="Session name")],
-):
-    """Hidden command to run keep-alive loop. Terminate after 24h."""
-    from colab_cli.common import state
-
-    state.history.log_event(
-        session_name,
-        "keep_alive_started",
-        {"endpoint": endpoint, "pid": os.getpid()},
-    )
-
-    start_time = time.time()
-    # 24 hours limit
-    max_duration = 24 * 3600
-    consecutive_4xx = 0
-    iterations = 0
-    last_error: Optional[Dict[str, Any]] = None
-
-    reason = "time_limit_reached"
-    extra: Dict[str, Any] = {}
-    while time.time() - start_time < max_duration:
-        iterations += 1
-        # Check if session still exists in local state
-        s = state.store.get(session_name)
-        if not s:
-            reason = "session_not_found"
-            break
-        if s.endpoint != endpoint:
-            reason = "endpoint_mismatch"
-            extra["expected_endpoint"] = endpoint
-            extra["actual_endpoint"] = s.endpoint
-            break
-
-        try:
-            state.client.keep_alive_assignment(endpoint)
-            consecutive_4xx = 0
-            last_error = None
-        except Exception as e:
-            code = get_status_code(e)
-            response_body = getattr(e, "response_body", None)
-            err_info = {
-                "status_code": code,
-                "error_type": type(e).__name__,
-                "error": str(e)[:500],
-                "response_body": (str(response_body)[:1000] if response_body else None),
-            }
-            last_error = err_info
-            state.history.log_event(
-                session_name,
-                "keep_alive_error",
-                {
-                    **err_info,
-                    "iteration": iterations,
-                    "consecutive_4xx": consecutive_4xx
-                    + (1 if code is not None and 400 <= code < 500 else 0),
-                },
-            )
-            if code is not None and 400 <= code < 500:
-                consecutive_4xx += 1
-                if consecutive_4xx >= 2:
-                    reason = "consecutive_4xx_errors"
-                    break
-            else:
-                # For other errors (network), we retry and don't count as 4xx
-                pass
-
-        time.sleep(60)
-
-    payload: Dict[str, Any] = {
-        "reason": reason,
-        "iterations": iterations,
-        "duration_seconds": round(time.time() - start_time, 2),
-    }
-    if last_error is not None:
-        payload["last_error"] = last_error
-    payload.update(extra)
-    state.history.log_event(session_name, "keep_alive_stopped", payload)
-
-
 def register(app: typer.Typer):
     app.command()(new)
     app.command(name="sessions")(sessions_command)
     app.command(name="restart-kernel")(restart_kernel)
     app.command()(status)
     app.command()(stop)
-    app.command(hidden=True)(keep_alive)
+
