@@ -167,11 +167,7 @@ class LoopbackWSServer:
 
     def _response(self, req: Optional[CapturedRequest]) -> bytes:
         if self.mode == "handshake":
-            key = (
-                req.headers_lower.get("sec-websocket-key", ("", ""))[1]
-                if req
-                else ""
-            )
+            key = req.headers_lower.get("sec-websocket-key", ("", ""))[1] if req else ""
             accept = base64.b64encode(
                 hashlib.sha1((key + _WS_GUID).encode()).digest()
             ).decode()
@@ -236,9 +232,7 @@ def _session_for(port: int, token: str = TOKEN) -> SessionState:
 # --- the reusable contract assertion (this is what mutation must break) ------
 
 
-def _assert_wire_contract(
-    req: CapturedRequest, token: str, pubkey: str
-) -> None:
+def _assert_wire_contract(req: CapturedRequest, token: str, pubkey: str) -> None:
     """Assert the captured upgrade request honors the SSH wire contract.
 
     A wrong `_SSH_PATH` breaks the path/query assertions; a wrong
@@ -255,9 +249,7 @@ def _assert_wire_contract(
         f"pubkey header absent; headers sent: {sorted(req.headers)!r}"
     )
     sent_name, sent_value = req.headers_lower["x-colab-ssh-pubkey"]
-    assert sent_name == "X-Colab-Ssh-Pubkey", (
-        f"header name on wire: {sent_name!r}"
-    )
+    assert sent_name == "X-Colab-Ssh-Pubkey", f"header name on wire: {sent_name!r}"
     assert sent_value == pubkey, f"pubkey not verbatim: {sent_value!r}"
 
 
@@ -370,9 +362,7 @@ def test_real_status_mapping_via_loopback(
     Content-Length body into resp_body), which the mocked suite only reaches by
     hand-constructing the exception with a mocked resp_body.
     """
-    server = ws_server_factory(
-        mode="status", status=status, reason=reason, body=body
-    )
+    server = ws_server_factory(mode="status", status=status, reason=reason, body=body)
     session = _session_for(server.port)
 
     with pytest.raises(typer.Exit) as exc_info:

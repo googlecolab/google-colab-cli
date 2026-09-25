@@ -14,6 +14,7 @@
 
 import abc
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 import json
 import logging
@@ -43,12 +44,14 @@ COLAB_XSRF_TOKEN_HEADER = {"key": "X-Goog-Colab-Token", "value": ""}
 class ColabEnvironment(abc.ABC):
     domain: str
     api: str
+    public_api: str = "https://colaboratory.googleapis.com"
 
 
 @dataclass
 class Prod(ColabEnvironment):
     domain: str = "https://colab.research.google.com"
     api: str = "https://colab.pa.googleapis.com"
+    public_api: str = "https://colaboratory.googleapis.com"
 
 
 def uuid_to_web_safe_base64(uuid_val: uuid.UUID) -> str:
@@ -135,6 +138,43 @@ class ListedAssignments(BaseModel):
     assignments: List[ListedAssignment]
 
 
+class PublicVariant(str, Enum):
+    VARIANT_UNSPECIFIED = "VARIANT_UNSPECIFIED"
+    VARIANT_CPU = "VARIANT_CPU"
+    VARIANT_GPU = "VARIANT_GPU"
+    VARIANT_TPU = "VARIANT_TPU"
+
+
+class PublicShape(str, Enum):
+    SHAPE_UNSPECIFIED = "SHAPE_UNSPECIFIED"
+    SHAPE_STANDARD = "SHAPE_STANDARD"
+    SHAPE_HIGHMEM = "SHAPE_HIGHMEM"
+
+
+class ConnectionInfo(BaseModel):
+    expire_time: str = Field(..., alias="expireTime")
+    endpoint: str
+    url: str
+    token: str
+
+
+class RuntimeSpecKey(BaseModel):
+    variant: PublicVariant
+    accelerator: str
+    shape: PublicShape
+
+
+class Runtime(BaseModel):
+    name: str
+    version: Optional[str] = None
+    connection_info: ConnectionInfo = Field(..., alias="connectionInfo")
+    runtime_spec: RuntimeSpecKey = Field(..., alias="runtimeSpec")
+
+
+class ListRuntimesResponse(BaseModel):
+    runtimes: Optional[List[Runtime]] = None
+
+
 class PostAssignmentResponse(BaseModel):
     accelerator: Accelerator
     endpoint: str
@@ -178,6 +218,7 @@ class Client:
     def __init__(self, env: ColabEnvironment, session, logger=None):
         self.colab_domain = env.domain
         self.colab_api_domain = env.api
+        self.colab_public_api = env.public_api
         self.session = session
         self.logger = logger or logging.getLogger(__name__)
 
@@ -243,9 +284,56 @@ class Client:
         return consumption_user_info_from_tunnel(ccu)
 
     def list_assignments(self) -> List[ListedAssignment]:
-        url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/assignments")
-        assignments = self._issue_request(url, schema=ListedAssignments)
-        return assignments.assignments
+        url = urljoin(self.colab_public_api, "/v1beta/runtimes")
+        resp = self._issue_request(url, schema=ListRuntimesResponse)
+        if not resp or not resp.runtimes:
+            return []
+
+        assignments = []
+        for r in resp.runtimes:
+            if r.runtime_spec.shape == PublicShape.SHAPE_HIGHMEM:
+                mapped_shape = Shape.HIGH_RAM
+            else:
+                mapped_shape = Shape.STANDARD
+
+            if r.runtime_spec.variant == PublicVariant.VARIANT_GPU:
+                mapped_variant = AssignmentVariant.GPU
+            elif r.runtime_spec.variant == PublicVariant.VARIANT_TPU:
+                mapped_variant = AssignmentVariant.TPU
+            else:
+                mapped_variant = AssignmentVariant.DEFAULT
+
+            try:
+                mapped_accelerator = Accelerator(r.runtime_spec.accelerator)
+            except ValueError:
+                mapped_accelerator = Accelerator.NONE
+
+            expires_in = 3600
+            try:
+                dt = datetime.fromisoformat(
+                    r.connection_info.expire_time.replace("Z", "+00:00")
+                )
+                now = datetime.now(timezone.utc)
+                expires_in = max(0, int((dt - now).total_seconds()))
+            except Exception:
+                pass
+
+            proxy_info = RuntimeProxyInfo(
+                token=r.connection_info.token,
+                tokenExpiresInSeconds=expires_in,
+                url=r.connection_info.url,
+            )
+
+            assignments.append(
+                ListedAssignment(
+                    accelerator=mapped_accelerator,
+                    endpoint=r.connection_info.endpoint,
+                    variant=mapped_variant,
+                    machineShape=mapped_shape,
+                    runtimeProxyInfo=proxy_info,
+                )
+            )
+        return assignments
 
     def unassign(self, endpoint: str):
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/unassign/{endpoint}")
@@ -262,9 +350,7 @@ class Client:
         accelerator: Optional[Accelerator] = None,
         shape: Optional[Shape] = None,
     ) -> Union[PostAssignmentResponse, Assignment]:
-        assignment = self._get_assignment(
-            notebook_hash, variant, accelerator, shape
-        )
+        assignment = self._get_assignment(notebook_hash, variant, accelerator, shape)
         if isinstance(assignment, Assignment):
             return assignment
 

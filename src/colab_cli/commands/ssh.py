@@ -93,9 +93,7 @@ def _pubkey_from_identity(identity: str) -> str:
         raise typer.Exit(code=2)
     pubkey = res.stdout.strip()
     if not pubkey:
-        typer.echo(
-            f"[colab] ssh-keygen produced no key for {identity}.", err=True
-        )
+        typer.echo(f"[colab] ssh-keygen produced no key for {identity}.", err=True)
         raise typer.Exit(code=2)
     return pubkey
 
@@ -482,9 +480,7 @@ def _select_proxy_session(
     """
     if session and not _session_exists(session):
         with contextlib.redirect_stdout(sys.stderr):
-            return _auto_create_session(
-                gpu, tpu, name=session, high_mem=high_mem
-            ), True
+            return _auto_create_session(gpu, tpu, name=session, high_mem=high_mem), True
     return _resolve_session(session), False
 
 
@@ -553,9 +549,7 @@ def _install_rm_signal_handlers(do_rm: Callable[[], None]) -> None:
             pass  # e.g. not running in the main thread
 
 
-def _run_proxy_bridge(
-    s: SessionState, identity: Optional[str], rm: bool
-) -> int:
+def _run_proxy_bridge(s: SessionState, identity: Optional[str], rm: bool) -> int:
     """Runs the ``--proxy-mode`` WebSocket-stdio bridge, honoring ``--rm``.
 
     Args:

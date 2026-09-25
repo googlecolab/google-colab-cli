@@ -149,18 +149,21 @@ def test_client_list_assignments(client, mock_session):
     # Mock list_assignments (GET)
     resp = MagicMock()
     resp.ok = True
-    resp.text = ")]}'\n" + json.dumps(
+    resp.text = json.dumps(
         {
-            "assignments": [
+            "runtimes": [
                 {
-                    "accelerator": "NONE",
-                    "endpoint": "e1",
-                    "variant": 0,
-                    "machineShape": 0,
-                    "runtimeProxyInfo": {
-                        "token": "t1",
-                        "tokenExpiresInSeconds": 3600,
+                    "name": "runtimes/r1",
+                    "connectionInfo": {
+                        "expireTime": "2026-09-24T19:00:00Z",
+                        "endpoint": "e1",
                         "url": "u1",
+                        "token": "t1",
+                    },
+                    "runtimeSpec": {
+                        "variant": "VARIANT_CPU",
+                        "accelerator": "NONE",
+                        "shape": "SHAPE_STANDARD",
                     },
                 }
             ]
@@ -174,7 +177,7 @@ def test_client_list_assignments(client, mock_session):
 
     assert len(res) == 1
     assert res[0].endpoint == "e1"
-    assert "tun/m/assignments" in mock_session.request.call_args.args[1]
+    assert "/v1beta/runtimes" in mock_session.request.call_args.args[1]
 
 
 def test_client_assign_url_includes_shape_hm(client, mock_session):

@@ -143,9 +143,7 @@ def test_resolve_pubkey_default_scan_key_order(
     if present:
         content = f"ssh-key-content-for-{present}\n"
         (ssh_dir / present).write_text(content)
-    monkeypatch.setattr(
-        "os.path.expanduser", lambda p: p.replace("~", str(fake_home))
-    )
+    monkeypatch.setattr("os.path.expanduser", lambda p: p.replace("~", str(fake_home)))
     if expect_found:
         assert ssh_module._resolve_pubkey(None) == content.strip()
     else:
@@ -343,18 +341,14 @@ def test_ssh_proxy_mode_calls_websocket(mock_common_state, mocker):
     connect = mocker.patch.object(
         ssh_module, "_connect_websocket", return_value=fake_ws
     )
-    bridge = mocker.patch.object(
-        ssh_module, "_bridge_proxy_mode", return_value=0
-    )
+    bridge = mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
     ssh_subprocess = mocker.patch.object(ssh_module, "_run_interactive_ssh")
 
     result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
     assert result.exit_code == 0
     connect.assert_called_once()
     args, _ = connect.call_args
-    assert args[0].startswith(
-        "wss://abc-foo.colab.googleusercontent.com/colab/ssh"
-    )
+    assert args[0].startswith("wss://abc-foo.colab.googleusercontent.com/colab/ssh")
     assert args[1] == fake_pub
     bridge.assert_called_once_with(fake_ws)
     ssh_subprocess.assert_not_called()
@@ -401,9 +395,7 @@ def test_ssh_pubkey_passes_through_verbatim(mock_common_state, mocker):
         captured["url"] = url
         return MagicMock()
 
-    mocker.patch.object(
-        ssh_module, "_connect_websocket", side_effect=fake_connect
-    )
+    mocker.patch.object(ssh_module, "_connect_websocket", side_effect=fake_connect)
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
     runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
@@ -430,9 +422,7 @@ def test_ssh_handshake_400_emits_actionable_message(
         ssh_module, "_resolve_pubkey", return_value="ssh-rsa AAAAfake u@h"
     )
 
-    err = websocket.WebSocketBadStatusException(
-        "Handshake status 400 Bad Request", 400
-    )
+    err = websocket.WebSocketBadStatusException("Handshake status 400 Bad Request", 400)
     err.status_code = 400
     err.resp_body = resp_body
     mocker.patch.object(websocket.WebSocket, "connect", side_effect=err)

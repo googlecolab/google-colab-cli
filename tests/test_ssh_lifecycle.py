@@ -60,9 +60,7 @@ def _make_session(
 def _patch_proxy(mocker):
     """Stub the proxy-mode I/O seams (pubkey, connect, bridge)."""
     mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
-    mocker.patch.object(
-        ssh_module, "_connect_websocket", return_value=MagicMock()
-    )
+    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
 
@@ -77,16 +75,12 @@ def test_proxy_mode_rm_stops_even_if_bridge_raises(mock_common_state, mocker):
     mocker.patch("signal.signal")
     stop = mocker.patch("colab_cli.commands.session.stop")
     mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
-    mocker.patch.object(
-        ssh_module, "_connect_websocket", return_value=MagicMock()
-    )
+    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
     mocker.patch.object(
         ssh_module, "_bridge_proxy_mode", side_effect=RuntimeError("ws died")
     )
 
-    result = runner.invoke(
-        app, ["ssh", "--proxy-mode", "-s", "colab-ephem", "--rm"]
-    )
+    result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "colab-ephem", "--rm"])
     assert result.exit_code != 0
     stop.assert_called_once_with(session="colab-ephem")
 
@@ -162,9 +156,7 @@ def test_proxy_bridge_routes_rm_output_to_stderr(mocker, capsys):
     sess = _make_session("colab")
     mocker.patch("signal.signal")
     mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
-    mocker.patch.object(
-        ssh_module, "_connect_websocket", return_value=MagicMock()
-    )
+    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
     def stop_echo(session=None):
@@ -247,21 +239,15 @@ def test_proxy_mode_rm_teardown_idempotent(mock_common_state, mocker):
     mocker.patch("os._exit")  # keep the handler from killing the test process
     stop = mocker.patch("colab_cli.commands.session.stop")
     mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
-    mocker.patch.object(
-        ssh_module, "_connect_websocket", return_value=MagicMock()
-    )
+    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
 
     def bridge_then_hup(ws):
         handlers[_signal.SIGHUP](_signal.SIGHUP, None)  # OpenSSH HUPs us
         return 0
 
-    mocker.patch.object(
-        ssh_module, "_bridge_proxy_mode", side_effect=bridge_then_hup
-    )
+    mocker.patch.object(ssh_module, "_bridge_proxy_mode", side_effect=bridge_then_hup)
 
-    result = runner.invoke(
-        app, ["ssh", "--proxy-mode", "-s", "colab-ephem", "--rm"]
-    )
+    result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "colab-ephem", "--rm"])
     assert result.exit_code == 0
     stop.assert_called_once_with(session="colab-ephem")
 
