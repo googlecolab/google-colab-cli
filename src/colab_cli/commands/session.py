@@ -191,6 +191,11 @@ def new(
         token=token,
         url=url,
         endpoint=endpoint,
+        token_expires_at=(
+            res.runtime_proxy_info.expires_at()
+            if hasattr(res, "runtime_proxy_info")
+            else None
+        ),
         variant=variant.value,
         accelerator=accelerator.value,
         machine_shape=(
@@ -221,7 +226,7 @@ def restart_kernel(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
+    s = state.get_session(name)
 
     def on_started(kid):
         s.kernel_id = kid
@@ -325,7 +330,7 @@ def stop(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
+    s = state.get_session(name, ignore_missing_session=True)
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.")
         return

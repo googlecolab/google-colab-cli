@@ -167,10 +167,7 @@ def exec_command(
 
     env_vars = _parse_env_vars(env)
     name = state.resolve_session(session)
-    s = state.store.get(name)
-    if not s:
-        typer.echo(f"[colab] Session '{name}' not found.")
-        raise typer.Exit(1)
+    s = state.get_session(name)
 
     code_blocks = []
     if file:
@@ -298,10 +295,7 @@ def repl(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
-    if not s:
-        typer.echo(f"[colab] Session '{name}' not found.")
-        raise typer.Exit(1)
+    s = state.get_session(name)
 
     def on_started(kid):
         s.kernel_id = kid
@@ -384,10 +378,7 @@ def console(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.store.get(name)
-    if not s:
-        typer.echo(f"[colab] Session '{name}' not found.")
-        raise typer.Exit(1)
+    s = state.get_session(name)
     state.history.log_event(s.name, "console_started", {})
     s.running = "console"
     state.store.add(s)

@@ -15,14 +15,24 @@
 import logging
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import typer
 
 from colab_cli.auth import AuthProvider, get_credentials
-from colab_cli.client import Client, Prod
+from colab_cli.client import Client, Prod, RuntimeProxyInfo
 from colab_cli.history import HistoryLogger
-from colab_cli.state import StateStore, SettingsStore
+from colab_cli.state import SessionState, StateStore, SettingsStore
+
+# Headroom so a token doesn't expire mid-command.
+TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
+
+
+def _apply_proxy_info(s: SessionState, info: RuntimeProxyInfo):
+    s.token = info.token
+    s.url = info.url
+    s.token_expires_at = info.expires_at()
 
 
 class State:
@@ -73,6 +83,34 @@ class State:
             del self._sessions[name]
         self.history.log_event(name, "session_terminated", {"reason": "pruned"})
 
+    def get_session(
+        self, name: str, ignore_missing_session: bool = False
+    ) -> Optional[SessionState]:
+        """Load a session, refreshing its runtime proxy token if it's near expiry.
+
+        A session is missing if it's unknown locally or its assignment is gone
+        server-side (in which case it's pruned). Missing sessions print an error
+        and exit, unless ignore_missing_session is set, in which case this
+        returns None.
+        """
+        s = self.store.get(name)
+        if s and (
+            not s.token_expires_at
+            or s.token_expires_at - datetime.now(timezone.utc) <= TOKEN_REFRESH_MARGIN
+        ):
+            by_endpoint = {a.endpoint: a for a in self.client.list_assignments()}
+            if s.endpoint in by_endpoint:
+                _apply_proxy_info(s, by_endpoint[s.endpoint].runtime_proxy_info)
+                self.store.add(s)
+            else:
+                self.prune_session(name)
+                s = None
+
+        if s is None and not ignore_missing_session:
+            typer.echo(f"[colab] Session '{name}' not found.")
+            raise typer.Exit(1)
+        return s
+
     def sync_sessions(self):
         if self._sessions is not None:
             return self._sessions, self.client.list_assignments()
@@ -92,14 +130,17 @@ class State:
             return self._sessions, assignments
 
         assignments = self.client.list_assignments()
-        active_endpoints = {a.endpoint for a in assignments}
+        by_endpoint = {a.endpoint: a for a in assignments}
 
         self._sessions = local_sessions
         pruned = 0
         for name, s in list(self._sessions.items()):
-            if s.endpoint not in active_endpoints:
+            if s.endpoint not in by_endpoint:
                 self.prune_session(name)
                 pruned += 1
+            else:
+                _apply_proxy_info(s, by_endpoint[s.endpoint].runtime_proxy_info)
+                self.store.add(s)
 
         if pruned > 0:
             typer.echo(f"[colab] Pruned {pruned} stale local session(s).")

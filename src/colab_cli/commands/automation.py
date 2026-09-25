@@ -49,7 +49,7 @@ def run_automation(
 ):
     from colab_cli.common import state
 
-    s = state.store.get(name)
+    s = state.get_session(name)
     runtime = ColabRuntime(s.url, s.token, session_name=s.name, history=state.history)
 
     def drivefs_hook(deserialize_msg, wsclient):
@@ -240,7 +240,7 @@ def install(
         if not os.path.isfile(requirement):
             typer.echo(f"[colab] Requirements file '{requirement}' not found locally.")
             raise typer.Exit(1)
-        contents = ContentsClient(state.store.get(name))
+        contents = ContentsClient(state.get_session(name))
         remote_path = f"content/{os.path.basename(requirement)}"
         contents.upload(requirement, remote_path)
         commands.extend(["-r", f"/{remote_path}"])

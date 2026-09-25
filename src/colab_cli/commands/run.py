@@ -350,6 +350,11 @@ def run_command(
         token=token,
         url=url,
         endpoint=endpoint,
+        token_expires_at=(
+            res.runtime_proxy_info.expires_at()
+            if hasattr(res, "runtime_proxy_info")
+            else None
+        ),
         variant=variant.value,
         accelerator=accelerator.value,
         machine_shape=(
@@ -465,8 +470,11 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
 
     typer.echo(f"[colab] Stopping session '{name}'...", err=True)
     try:
-        rt = ColabRuntime(s.url, s.token, kernel_id=s.kernel_id)
-        rt.stop(shutdown_kernel=True)
+        # The script may have outlived the proxy token.
+        fresh = state.get_session(name, ignore_missing_session=True)
+        if fresh:
+            rt = ColabRuntime(fresh.url, fresh.token, kernel_id=fresh.kernel_id)
+            rt.stop(shutdown_kernel=True)
     except Exception:
         pass
 
