@@ -48,7 +48,7 @@ Run a CPU-based VM runtime, execute some code, and clean up:
 colab new
 
 # 2. Execute code from stdin
-echo "print('Hello from Google Colab!')" | colab exec
+echo 'print("Hello from Google Colab!")' | colab exec
 
 # 3. Stop and release the VM resource
 colab stop
