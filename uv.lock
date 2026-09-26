@@ -414,7 +414,7 @@ requires-dist = [
     { name = "rich", specifier = ">=14.3.3" },
     { name = "typer", specifier = ">=0.24.1" },
     { name = "typing-extensions", specifier = ">=4.0" },
-    { name = "websocket-client", specifier = ">=1.0" },
+    { name = "websocket-client", specifier = ">=1.6" },
 ]
 
 [package.metadata.requires-dev]
