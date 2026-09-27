@@ -27,6 +27,12 @@ def mock_common_state(mocker):
     mock_state.client = MagicMock()
     mock_state.history = MagicMock()
 
+    mock_state.run_with_runtime_proxy_retry.side_effect = (
+        lambda name, operation, initial_session=None: operation(
+            initial_session or mock_state.store.get(name)
+        )
+    )
+
     # Token refresh is covered in test_common.py; elsewhere just read the store.
     def get_session(name, ignore_missing_session=False):
         s = mock_state.store.get(name)

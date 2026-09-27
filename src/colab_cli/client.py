@@ -249,9 +249,14 @@ class Client:
         ccu = self._issue_request(url, schema=CcuInfo)
         return consumption_user_info_from_tunnel(ccu)
 
-    def list_assignments(self) -> List[ListedAssignment]:
+    def list_assignments(
+        self, *, timeout: Optional[float] = None
+    ) -> List[ListedAssignment]:
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/assignments")
-        assignments = self._issue_request(url, schema=ListedAssignments)
+        request_kwargs = {"timeout": timeout} if timeout is not None else {}
+        assignments = self._issue_request(
+            url, schema=ListedAssignments, **request_kwargs
+        )
         return assignments.assignments
 
     def unassign(self, endpoint: str):

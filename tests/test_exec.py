@@ -276,6 +276,27 @@ def test_cli_exec_lost_session_prunes(
     mock_common_state.prune_session.assert_called_once_with("lost-sess")
 
 
+def test_cli_exec_keeps_binding_when_lost_session_cannot_be_confirmed(
+    mock_runtime_class, mock_store, mock_common_state
+):
+    """A 404/401 must not drop a binding the control plane still lists."""
+    mock_session = MagicMock()
+    mock_session.name = "maybe-lost"
+    mock_store.get.return_value = mock_session
+    mock_common_state.resolve_session.return_value = "maybe-lost"
+    mock_common_state.prune_session.return_value = False
+
+    mock_runtime_class.return_value.execute_code.side_effect = Exception(
+        "404 Not Found"
+    )
+
+    result = runner.invoke(app, ["exec", "-s", "maybe-lost"], input="print(1)")
+
+    assert result.exit_code == 1
+    assert "keeping the local binding" in result.output
+    mock_common_state.prune_session.assert_called_once_with("maybe-lost")
+
+
 def test_cli_exec_timeout(mock_store, mock_runtime_class, mock_common_state, tmp_path):
     mock_session = MagicMock()
     mock_session.url = "http://url"
