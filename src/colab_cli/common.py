@@ -16,23 +16,25 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Callable, Optional, TypeVar
 
 import typer
 
 from colab_cli.auth import AuthProvider, get_credentials
-from colab_cli.client import Client, Prod, RuntimeProxyInfo
+from colab_cli.client import Client, Prod
 from colab_cli.history import HistoryLogger
 from colab_cli.state import SessionState, StateStore, SettingsStore
+from colab_cli.utils import is_runtime_proxy_error
 
-# Headroom so a token doesn't expire mid-command.
+
+T = TypeVar("T")
+
+# Headroom so a token does not expire mid-command.
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 
-
-def _apply_proxy_info(s: SessionState, info: RuntimeProxyInfo):
-    s.token = info.token
-    s.url = info.url
-    s.token_expires_at = info.expires_at()
+# Bound every control-plane refresh so a blackholed backend cannot hang a
+# session command indefinitely.
+SESSION_REFRESH_TIMEOUT_SECONDS = 10
 
 
 class State:
@@ -76,35 +78,148 @@ class State:
             self._client = Client(Prod(), creds)
         return self._client
 
-    def prune_session(self, name: str):
-        """Removes a session from local state."""
-        self.store.remove(name)
+    def _remove_session(self, name: str, endpoint: str) -> bool:
+        """Removes a binding only if it still refers to ``endpoint``."""
+        s = self.store.remove_if_endpoint(name, endpoint)
+        if s is None:
+            return False
         if self._sessions and name in self._sessions:
             del self._sessions[name]
         self.history.log_event(name, "session_terminated", {"reason": "pruned"})
+        return True
+
+    def _refresh_session_from_assignments(
+        self,
+        name: str,
+        assignments,
+        expected_session: Optional[SessionState] = None,
+    ):
+        """Reconciles one local binding with a known server-side snapshot."""
+        s = expected_session or self.store.get(name)
+        if s is None:
+            return None
+        assignment = next(
+            (
+                candidate
+                for candidate in assignments
+                if candidate.endpoint == s.endpoint
+            ),
+            None,
+        )
+        if assignment is None:
+            if self._remove_session(name, s.endpoint):
+                return None
+            # Another process replaced the name after this server snapshot
+            # began. The snapshot says nothing about that new endpoint, so
+            # preserve it and let a later resolution reconcile it.
+            current = self.store.get(name)
+            if current is not None and self._sessions is not None:
+                self._sessions[name] = current
+            return current
+
+        rpi = assignment.runtime_proxy_info
+        refreshed = self.store.update_fields(
+            name,
+            s.endpoint,
+            token=rpi.token,
+            url=rpi.url,
+            token_expires_at=rpi.expires_at(),
+        )
+        if refreshed is None:
+            # A same-name replacement won the endpoint guard. Do not apply
+            # credentials from the old endpoint to it.
+            refreshed = self.store.get(name)
+        if refreshed is not None and self._sessions is not None:
+            self._sessions[name] = refreshed
+        return refreshed
+
+    def refresh_session(
+        self,
+        name: str,
+        expected_session: Optional[SessionState] = None,
+        timeout: Optional[float] = None,
+    ):
+        """Fetches and adopts the current runtime-proxy credentials."""
+        s = expected_session or self.store.get(name)
+        if s is None:
+            return None
+        request_kwargs = {"timeout": timeout} if timeout is not None else {}
+        return self._refresh_session_from_assignments(
+            name,
+            self.client.list_assignments(**request_kwargs),
+            expected_session=s,
+        )
+
+    def prune_session(self, name: str) -> bool:
+        """Prunes only after the control plane confirms the assignment is gone.
+
+        If the check is inconclusive, preserve the binding: deleting local
+        access to a potentially live, billable VM is the worse failure mode.
+        """
+        s = self.store.get(name)
+        if s is None:
+            return False
+        try:
+            refreshed = self.refresh_session(
+                name,
+                expected_session=s,
+                timeout=SESSION_REFRESH_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            return False
+        return refreshed is None
+
+    def run_with_runtime_proxy_retry(
+        self,
+        name: str,
+        operation: Callable[[SessionState], T],
+        initial_session: Optional[SessionState] = None,
+    ) -> T:
+        """Runs an operation and retries once with fresh proxy credentials."""
+        s = initial_session or self.store.get(name)
+        if s is None:
+            raise RuntimeError(f"Session '{name}' not found")
+        try:
+            return operation(s)
+        except Exception as error:
+            if not is_runtime_proxy_error(error):
+                raise
+            old_credentials = (s.token, s.url)
+            try:
+                refreshed = self.refresh_session(
+                    name,
+                    expected_session=s,
+                    timeout=SESSION_REFRESH_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                raise error
+            if (
+                refreshed is None
+                or refreshed.endpoint != s.endpoint
+                or (refreshed.token, refreshed.url) == old_credentials
+            ):
+                raise error
+            return operation(refreshed)
 
     def get_session(
         self, name: str, ignore_missing_session: bool = False
     ) -> Optional[SessionState]:
-        """Load a session, refreshing its runtime proxy token if it's near expiry.
+        """Load a session and refresh credentials that are missing or near expiry.
 
-        A session is missing if it's unknown locally or its assignment is gone
-        server-side (in which case it's pruned). Missing sessions print an error
-        and exit, unless ignore_missing_session is set, in which case this
-        returns None.
+        If another process replaces the name while the refresh is in flight,
+        the replacement is returned untouched instead of being overwritten
+        with credentials belonging to the old endpoint.
         """
         s = self.store.get(name)
         if s and (
             not s.token_expires_at
             or s.token_expires_at - datetime.now(timezone.utc) <= TOKEN_REFRESH_MARGIN
         ):
-            by_endpoint = {a.endpoint: a for a in self.client.list_assignments()}
-            if s.endpoint in by_endpoint:
-                _apply_proxy_info(s, by_endpoint[s.endpoint].runtime_proxy_info)
-                self.store.add(s)
-            else:
-                self.prune_session(name)
-                s = None
+            s = self.refresh_session(
+                name,
+                expected_session=s,
+                timeout=SESSION_REFRESH_TIMEOUT_SECONDS,
+            )
 
         if s is None and not ignore_missing_session:
             typer.echo(f"[colab] Session '{name}' not found.")
@@ -130,17 +245,16 @@ class State:
             return self._sessions, assignments
 
         assignments = self.client.list_assignments()
-        by_endpoint = {a.endpoint: a for a in assignments}
-
         self._sessions = local_sessions
         pruned = 0
         for name, s in list(self._sessions.items()):
-            if s.endpoint not in by_endpoint:
-                self.prune_session(name)
+            if (
+                self._refresh_session_from_assignments(
+                    name, assignments, expected_session=s
+                )
+                is None
+            ):
                 pruned += 1
-            else:
-                _apply_proxy_info(s, by_endpoint[s.endpoint].runtime_proxy_info)
-                self.store.add(s)
 
         if pruned > 0:
             typer.echo(f"[colab] Pruned {pruned} stale local session(s).")
@@ -148,6 +262,11 @@ class State:
         return self._sessions, assignments
 
     def resolve_session(self, session_name: Optional[str]) -> str:
+        # Picking a name is deliberately offline: commands that need VM
+        # credentials call get_session() (which refreshes a missing/near-expiry
+        # token) and the ones that do not (e.g. `colab url`) stay usable without
+        # control-plane access. Making this refresh would also let a stale
+        # assignments snapshot prune a binding that was just created.
         if session_name:
             return session_name
 
