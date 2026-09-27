@@ -24,9 +24,14 @@ from rich.console import Console
 from typing import List, Optional
 from typing_extensions import Annotated
 
+from colab_cli.console import ConsoleConnectionError, connect_console
 from colab_cli.runtime import ColabRuntime
-from colab_cli.utils import handle_image, is_terminal_error, render_display_data
-from colab_cli.console import connect_console
+from colab_cli.utils import (
+    handle_image,
+    is_runtime_proxy_error,
+    is_terminal_error,
+    render_display_data,
+)
 
 _console = Console()
 
@@ -36,6 +41,38 @@ ENV_KEY_REGEX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 def is_stdin_tty():
     return sys.stdin.isatty()
+
+
+def _refresh_console_session(state, name, expected):
+    """Refreshes one Console binding without reviving a locally stopped VM."""
+    from colab_cli.common import SESSION_REFRESH_TIMEOUT_SECONDS
+
+    current = state.store.get(name)
+    if current is None:
+        # `colab stop` removes the endpoint only after unassign succeeds, so a
+        # missing local binding is already conclusive and needs no HTTP lookup.
+        return None
+    if current.endpoint != expected.endpoint:
+        # Let Console's endpoint guard report and reject the replacement.
+        return current
+    return state.refresh_session(
+        name,
+        expected_session=current,
+        timeout=SESSION_REFRESH_TIMEOUT_SECONDS,
+    )
+
+
+def _raise_runtime_connection_error(state, name, error):
+    """Report a runtime-proxy failure without pruning a possibly-live VM."""
+    if is_runtime_proxy_error(error):
+        if state.store.get(name) is None:
+            typer.echo(f"[colab] Session '{name}' is no longer active.")
+        else:
+            typer.echo(
+                f"[colab] Session '{name}' rejected refreshed runtime credentials."
+            )
+        raise typer.Exit(1)
+    raise error
 
 
 def _parse_env_vars(env: Optional[List[str]]) -> dict[str, str]:
@@ -219,10 +256,16 @@ def exec_command(
         )
     except Exception as e:
         if is_terminal_error(e):
-            typer.echo(
-                f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
-            )
-            state.prune_session(name)
+            if state.prune_session(name):
+                typer.echo(
+                    f"[colab] Session '{name}' appears to be lost (404/401). "
+                    "Cleaning up."
+                )
+            else:
+                typer.echo(
+                    f"[colab] Session '{name}' rejected its runtime credentials; "
+                    "keeping the local binding."
+                )
             raise typer.Exit(1)
         raise e
 
@@ -320,10 +363,16 @@ def repl(
         )
     except Exception as e:
         if is_terminal_error(e):
-            typer.echo(
-                f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
-            )
-            state.prune_session(name)
+            if state.prune_session(name):
+                typer.echo(
+                    f"[colab] Session '{name}' appears to be lost (404/401). "
+                    "Cleaning up."
+                )
+            else:
+                typer.echo(
+                    f"[colab] Session '{name}' rejected its runtime credentials; "
+                    "keeping the local binding."
+                )
             raise typer.Exit(1)
         raise e
 
@@ -381,20 +430,25 @@ def console(
     s = state.get_session(name)
     state.history.log_event(s.name, "console_started", {})
     s.running = "console"
-    state.store.add(s)
+    state.store.update_fields(name, s.endpoint, running="console")
     try:
-        connect_console(s)
+        state.run_with_runtime_proxy_retry(
+            name,
+            lambda current: connect_console(
+                current,
+                refresh_session=lambda expected: _refresh_console_session(
+                    state, name, expected
+                ),
+            ),
+            initial_session=s,
+        )
+    except ConsoleConnectionError as e:
+        typer.echo(f"[colab] Console disconnected: {e}", err=True)
+        raise typer.Exit(1) from e
     except Exception as e:
-        if is_terminal_error(e):
-            typer.echo(
-                f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
-            )
-            state.prune_session(name)
-            raise typer.Exit(1)
-        raise e
+        _raise_runtime_connection_error(state, name, e)
     finally:
-        s.running = None
-        state.store.add(s)
+        state.store.update_fields(name, s.endpoint, running=None)
 
 
 def register(app: typer.Typer):

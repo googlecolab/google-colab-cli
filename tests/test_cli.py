@@ -448,8 +448,76 @@ def test_cli_console(mock_store, mock_common_state):
     with patch("colab_cli.commands.execution.connect_console") as mock_connect:
         result = runner.invoke(app, ["console", "-s", "s1"])
         assert result.exit_code == 0
-        mock_connect.assert_called_once_with(mock_session_state)
+        mock_connect.assert_called_once()
+        assert mock_connect.call_args.args == (mock_session_state,)
+        refresh_session = mock_connect.call_args.kwargs["refresh_session"]
+        refresh_session(mock_session_state)
+        mock_common_state.refresh_session.assert_called_once_with(
+            "s1", expected_session=mock_session_state, timeout=10
+        )
+        # Hand the already-resolved session to the retry wrapper so a
+        # concurrent stop cannot make it raise a bare "session not found".
+        retry_kwargs = mock_common_state.run_with_runtime_proxy_retry.call_args.kwargs
+        assert retry_kwargs["initial_session"] is mock_session_state
 
+
+def test_cli_console_reconnect_stops_without_http_after_local_stop(
+    mock_store, mock_common_state
+):
+    """A concurrent `colab stop` is already conclusive local evidence."""
+    mock_session_state = MagicMock()
+    mock_session_state.name = "s1"
+    mock_session_state.endpoint = "endpoint-1"
+    mock_store.get.return_value = mock_session_state
+    mock_common_state.resolve_session.return_value = "s1"
+
+    with patch("colab_cli.commands.execution.connect_console") as mock_connect:
+        result = runner.invoke(app, ["console", "-s", "s1"])
+
+    assert result.exit_code == 0
+    refresh_session = mock_connect.call_args.kwargs["refresh_session"]
+    mock_store.get.return_value = None
+
+    assert refresh_session(mock_session_state) is None
+    mock_common_state.refresh_session.assert_not_called()
+
+
+def test_cli_console_auth_failure_does_not_prune_or_revive(
+    mock_store, mock_common_state
+):
+    mock_session_state = MagicMock()
+    mock_session_state.name = "s1"
+    mock_session_state.endpoint = "endpoint-1"
+    mock_store.get.return_value = mock_session_state
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_common_state.run_with_runtime_proxy_retry.side_effect = RuntimeError(
+        "Handshake status 401 Unauthorized"
+    )
+
+    result = runner.invoke(app, ["console", "-s", "s1"])
+
+    assert result.exit_code == 1
+    mock_common_state.prune_session.assert_not_called()
+    mock_store.add.assert_not_called()
+    mock_store.update_fields.assert_any_call("s1", "endpoint-1", running=None)
+
+
+def test_cli_console_piped_disconnect_is_reported(mock_store, mock_common_state):
+    from colab_cli.console import ConsoleConnectionError
+
+    mock_session_state = MagicMock()
+    mock_session_state.name = "s1"
+    mock_session_state.endpoint = "endpoint-1"
+    mock_store.get.return_value = mock_session_state
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_common_state.run_with_runtime_proxy_retry.side_effect = ConsoleConnectionError(
+        "proxy link lost"
+    )
+
+    result = runner.invoke(app, ["console", "-s", "s1"])
+
+    assert result.exit_code == 1
+    assert "Console disconnected: proxy link lost" in result.output
 
 @patch("colab_cli.commands.files.ContentsClient")
 def test_cli_ls(mock_contents_class, mock_store, mock_common_state):

@@ -145,6 +145,17 @@ def test_client_assign_existing(client, mock_session):
     assert mock_session.request.call_count == 1
 
 
+def test_client_list_assignments_forwards_request_timeout(client, mock_session):
+    """Interactive reconnects can bound a stalled control-plane lookup."""
+    resp = MagicMock()
+    resp.ok = True
+    resp.text = ")]}'\n" + json.dumps({"assignments": []})
+    mock_session.request.return_value = resp
+
+    assert client.list_assignments(timeout=10) == []
+    assert mock_session.request.call_args.kwargs["timeout"] == 10
+
+
 def test_client_list_assignments(client, mock_session):
     # Mock list_assignments (GET)
     resp = MagicMock()

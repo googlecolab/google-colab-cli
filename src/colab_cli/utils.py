@@ -34,6 +34,27 @@ def get_status_code(e: Exception) -> Optional[int]:
     return None
 
 
+def is_runtime_proxy_error(e: Exception) -> bool:
+    """Return whether an exception indicates proxy authentication failure."""
+    if isinstance(e, FileNotFoundError):
+        return False
+    code = get_status_code(e)
+    if code in (401, 404):
+        return True
+    message = str(e).lower()
+    return any(
+        marker in message
+        for marker in (
+            "handshake status 401",
+            "handshake status 404",
+            "http 401",
+            "http 404",
+            "401 unauthorized",
+            "404 not found",
+        )
+    )
+
+
 def is_terminal_error(e: Exception) -> bool:
     """Checks if an exception indicates a lost session (404/401)."""
     code = get_status_code(e)
