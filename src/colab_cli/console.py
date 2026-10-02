@@ -17,11 +17,19 @@ import logging
 import os
 import signal
 import sys
-import termios
 import threading
 import time
-import tty
 from urllib.parse import urlparse
+
+try:
+    import termios
+    import tty
+
+    HAS_TERMIOS = True
+except ImportError:
+    termios = None
+    tty = None
+    HAS_TERMIOS = False
 
 import websocket
 
@@ -91,8 +99,33 @@ def on_open(ws):
         is_tty = sys.stdin.isatty()
         while _is_running:
             try:
-                # Read a single character (or escape sequence byte)
-                char = sys.stdin.read(1)
+                if sys.platform == "win32" and is_tty:
+                    import msvcrt
+
+                    if not msvcrt.kbhit():
+                        time.sleep(0.02)
+                        continue
+                    ch = msvcrt.getwch()
+                    if ch in ("\x00", "\xe0"):
+                        ch2 = msvcrt.getwch()
+                        arrow_map = {
+                            "H": "\x1b[A",  # Up
+                            "P": "\x1b[B",  # Down
+                            "M": "\x1b[C",  # Right
+                            "K": "\x1b[D",  # Left
+                            "G": "\x1b[H",  # Home
+                            "O": "\x1b[F",  # End
+                            "S": "\x1b[3~",  # Delete
+                        }
+                        char = arrow_map.get(ch2, "")
+                    elif ch == "\r":
+                        char = "\r"
+                    else:
+                        char = ch
+                else:
+                    # Read a single character (or escape sequence byte)
+                    char = sys.stdin.read(1)
+
                 if not char:
                     if not is_tty:
                         # Piped input has reached EOF. The remote /colab/tty
@@ -134,7 +167,32 @@ def connect_console(session: SessionState):
 
     is_tty = sys.stdin.isatty()
     fd = sys.stdin.fileno() if is_tty else None
-    old_settings = termios.tcgetattr(fd) if is_tty else None
+    old_settings = None
+    old_mode_in = None
+
+    if is_tty:
+        if sys.platform == "win32":
+            try:
+                import ctypes
+
+                kernel32 = ctypes.windll.kernel32
+                # Enable virtual terminal processing for stdout
+                hStdOut = kernel32.GetStdHandle(-11)
+                mode_out = ctypes.c_ulong()
+                if kernel32.GetConsoleMode(hStdOut, ctypes.byref(mode_out)):
+                    kernel32.SetConsoleMode(
+                        hStdOut, mode_out.value | 0x0004 | 0x0001
+                    )
+                # Set raw mode for stdin
+                hStdIn = kernel32.GetStdHandle(-10)
+                mode_in = ctypes.c_ulong()
+                if kernel32.GetConsoleMode(hStdIn, ctypes.byref(mode_in)):
+                    old_mode_in = mode_in.value
+                    kernel32.SetConsoleMode(hStdIn, old_mode_in & ~0x0007)
+            except Exception as e:
+                logger.debug(f"Failed to enable Windows raw console mode: {e}")
+        elif termios:
+            old_settings = termios.tcgetattr(fd)
 
     ws = websocket.WebSocketApp(
         url=ws_url,
@@ -151,8 +209,10 @@ def connect_console(session: SessionState):
 
     try:
         if is_tty:
-            tty.setraw(fd, termios.TCSANOW)
-            signal.signal(signal.SIGWINCH, handle_sigwinch)
+            if sys.platform != "win32" and tty and termios:
+                tty.setraw(fd, termios.TCSANOW)
+            if hasattr(signal, "SIGWINCH"):
+                signal.signal(signal.SIGWINCH, handle_sigwinch)
 
         # This is a blocking call until the connection is closed
         ws.run_forever()
@@ -165,8 +225,17 @@ def connect_console(session: SessionState):
                 raise RuntimeError(f"Connection failed: {err_msg}")
     finally:
         if is_tty:
-            # Always ensure the terminal is restored to its original state
-            termios.tcsetattr(fd, termios.TCSANOW, old_settings)
-            # Restore the default signal handler for resize
-            signal.signal(signal.SIGWINCH, signal.SIG_DFL)
+            if sys.platform == "win32" and old_mode_in is not None:
+                try:
+                    import ctypes
+
+                    kernel32 = ctypes.windll.kernel32
+                    hStdIn = kernel32.GetStdHandle(-10)
+                    kernel32.SetConsoleMode(hStdIn, old_mode_in)
+                except Exception:
+                    pass
+            elif termios and old_settings is not None:
+                termios.tcsetattr(fd, termios.TCSANOW, old_settings)
+                if hasattr(signal, "SIGWINCH"):
+                    signal.signal(signal.SIGWINCH, signal.SIG_DFL)
         print("\r\nConnection closed.")
