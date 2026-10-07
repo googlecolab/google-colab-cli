@@ -143,8 +143,14 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
 
         # Save the credentials for the next run
         try:
+            os.makedirs(os.path.dirname(TOKEN_CONFIG_PATH), exist_ok=True)
             with open(TOKEN_CONFIG_PATH, "w") as token_file:
                 token_file.write(creds.to_json())
+            if os.name != "nt":
+                try:
+                    os.chmod(TOKEN_CONFIG_PATH, 0o600)
+                except OSError:
+                    pass
         except Exception as e:
             logger.error(f"Failed to save token to {TOKEN_CONFIG_PATH}: {e}")
 
@@ -207,7 +213,7 @@ def _get_adc_credentials() -> Credentials:
             "https://www.googleapis.com/auth/colaboratory\n",
             err=True,
         )
-        exit(1)
+        raise typer.Exit(code=1)
 
     # Some credential subclasses ignore the `scopes=` kwarg in `default()`
     # (e.g. user creds), so re-apply via `with_scopes` when supported.
