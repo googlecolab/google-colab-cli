@@ -203,7 +203,15 @@ class Client:
         **kwargs,
     ):
         parsed_endpoint = urlparse(endpoint)
-        if parsed_endpoint.hostname in urlparse(self.colab_domain).hostname:
+        colab_host = urlparse(self.colab_domain).hostname
+        if (
+            colab_host
+            and parsed_endpoint.hostname
+            and (
+                colab_host in parsed_endpoint.hostname
+                or parsed_endpoint.hostname in colab_host
+            )
+        ):
             if params is None:
                 params = {}
             params["authuser"] = "0"
@@ -269,9 +277,7 @@ class Client:
         accelerator: Optional[Accelerator] = None,
         shape: Optional[Shape] = None,
     ) -> Union[PostAssignmentResponse, Assignment]:
-        assignment = self._get_assignment(
-            notebook_hash, variant, accelerator, shape
-        )
+        assignment = self._get_assignment(notebook_hash, variant, accelerator, shape)
         if isinstance(assignment, Assignment):
             return assignment
 
@@ -329,4 +335,3 @@ class Client:
         return self._issue_request(
             url, method="POST", headers=headers, schema=PostAssignmentResponse
         )
-
