@@ -190,3 +190,9 @@ To view interactive walkthroughs of eleven real-world automated scenarios, check
 ## Contributing
 
 Feedback and contributions are welcome! Please read [`CONTRIBUTING.md`](./CONTRIBUTING.md) for details.
+
+---
+
+## Legal & Privacy
+
+See Colab's [Terms of Service](https://research.google.com/colaboratory/tos_v5.html) and the [Google Privacy Policy](https://policies.google.com/privacy), which apply to usage of this CLI.
