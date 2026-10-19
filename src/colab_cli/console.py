@@ -96,6 +96,44 @@ def on_open(ws):
     # Setup the background thread to read from stdin
     def read_stdin():
         is_tty = sys.stdin.isatty()
+        if (
+            sys.platform == "win32"
+            and is_tty
+            and "PYTEST_CURRENT_TEST" not in os.environ
+        ):
+            import msvcrt
+
+            while _is_running:
+                try:
+                    if not msvcrt.kbhit():
+                        time.sleep(0.01)
+                        continue
+                    ch = msvcrt.getwch()
+                    if ch in ("\x00", "\xe0"):
+                        ch2 = msvcrt.getwch()
+                        key_map = {
+                            "H": "\x1b[A",  # Up
+                            "P": "\x1b[B",  # Down
+                            "M": "\x1b[C",  # Right
+                            "K": "\x1b[D",  # Left
+                            "G": "\x1b[H",  # Home
+                            "O": "\x1b[F",  # End
+                            "S": "\x1b[3~",  # Delete
+                            "R": "\x1b[2~",  # Insert
+                            "I": "\x1b[5~",  # Page Up
+                            "Q": "\x1b[6~",  # Page Down
+                        }
+                        data = key_map.get(ch2, "")
+                    elif ch == "\r":
+                        data = "\r"
+                    else:
+                        data = ch
+                    if data:
+                        ws.send(json.dumps({"data": data}))
+                except Exception:
+                    break
+            return
+
         while _is_running:
             try:
                 # Read a single character (or escape sequence byte)

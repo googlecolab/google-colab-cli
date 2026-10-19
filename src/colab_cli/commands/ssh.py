@@ -92,9 +92,7 @@ def _pubkey_from_identity(identity: str) -> str:
         raise typer.Exit(code=2)
     pubkey = res.stdout.strip()
     if not pubkey:
-        typer.echo(
-            f"[colab] ssh-keygen produced no key for {identity}.", err=True
-        )
+        typer.echo(f"[colab] ssh-keygen produced no key for {identity}.", err=True)
         raise typer.Exit(code=2)
     return pubkey
 
@@ -417,7 +415,7 @@ def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
-        "UserKnownHostsFile=/dev/null",
+        f"UserKnownHostsFile={os.devnull}",
         "-o",
         "LogLevel=ERROR",
     ]
@@ -478,9 +476,7 @@ def _select_proxy_session(
     """
     if session and not _session_exists(session):
         with contextlib.redirect_stdout(sys.stderr):
-            return _auto_create_session(
-                gpu, tpu, name=session, high_mem=high_mem
-            ), True
+            return _auto_create_session(gpu, tpu, name=session, high_mem=high_mem), True
     return _resolve_session(session), False
 
 
@@ -542,16 +538,19 @@ def _install_rm_signal_handlers(do_rm: Callable[[], None]) -> None:
         do_rm()
         os._exit(0)
 
-    for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
+    signals = [
+        getattr(signal, s, None) for s in ("SIGHUP", "SIGTERM", "SIGINT", "SIGBREAK")
+    ]
+    for sig in signals:
+        if sig is None:
+            continue
         try:
             signal.signal(sig, _on_signal)
         except (ValueError, OSError):
             pass  # e.g. not running in the main thread
 
 
-def _run_proxy_bridge(
-    s: SessionState, identity: Optional[str], rm: bool
-) -> int:
+def _run_proxy_bridge(s: SessionState, identity: Optional[str], rm: bool) -> int:
     """Runs the ``--proxy-mode`` WebSocket-stdio bridge, honoring ``--rm``.
 
     Args:

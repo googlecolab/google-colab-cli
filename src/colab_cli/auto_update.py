@@ -137,7 +137,9 @@ def _get_install_command() -> str:
     """Return the recommended installation command based on the environment."""
     import sys
 
-    if is_self_install_supported() and "/uv/tools/" in sys.executable:
+    if is_self_install_supported() and "/uv/tools/" in sys.executable.replace(
+        "\\", "/"
+    ):
         return f"uv tool install -U {PYPI_PACKAGE_NAME}"
     return f"pip install --upgrade {PYPI_PACKAGE_NAME}"
 
@@ -237,7 +239,7 @@ def self_install() -> None:
 
     # If the executable path contains "/uv/", we assume it was installed via
     # `uv tool install` and use `uv` to upgrade it.
-    if "/uv/tools/" in sys.executable:
+    if "/uv/tools/" in sys.executable.replace("\\", "/"):
         cmd = ["uv", "tool", "install", "-U", PYPI_PACKAGE_NAME]
     else:
         cmd = [sys.executable, "-m", "pip", "install", "-U", PYPI_PACKAGE_NAME]
