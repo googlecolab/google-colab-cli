@@ -405,6 +405,9 @@ def _proxy_command(session: SessionState, identity: Optional[str]) -> str:
     ]
     if identity:
         self_cmd.extend(["--identity", identity])
+    if sys.platform == "win32":
+        # Windows OpenSSH launches ProxyCommand via CreateProcessW.
+        return subprocess.list2cmdline(self_cmd)
     return shlex.join(self_cmd)
 
 
@@ -417,7 +420,7 @@ def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
-        "UserKnownHostsFile=/dev/null",
+        f"UserKnownHostsFile={os.devnull}",
         "-o",
         "LogLevel=ERROR",
     ]
@@ -542,7 +545,10 @@ def _install_rm_signal_handlers(do_rm: Callable[[], None]) -> None:
         do_rm()
         os._exit(0)
 
-    for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
+    for name in ("SIGHUP", "SIGTERM", "SIGINT"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
         try:
             signal.signal(sig, _on_signal)
         except (ValueError, OSError):

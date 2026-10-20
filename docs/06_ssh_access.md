@@ -1,5 +1,6 @@
 ---
 log:
+2026-10-20: Fixed Windows OpenSSH ProxyCommand argument quoting, local null-device selection, and cleanup signal registration. Added native Windows process/OpenSSH regression tests and a three-platform SSH CI job; live Colab verification remains required before claiming Windows support.
 2026-09-25: Cleaned up keep-alive daemon references in session creation and teardown documentation.
 2026-08-09: Added `--high-mem` passthrough when `colab ssh` auto-creates a runtime (forwards to `colab new --high-mem`).
 2026-07-17: Initial design and implementation of `colab ssh` — client side of SSH-over-WebSocket runtime access. Adds three modes (interactive shell, `-s SESSION`, and `--proxy-mode` OpenSSH ProxyCommand bridge), `--identity/-i` key selection, and per-HTTP-status handshake error messages. Server side is out of scope for this repo; the subcommand is a no-op against runtimes that do not expose the `/colab/ssh` endpoint (surfaces an actionable HTTP 404 message).
@@ -71,6 +72,9 @@ remote command, so to also land in `/content` add `RequestTTY yes` and
    PTY (`-t`) and runs `cd /content 2>/dev/null; exec $SHELL -l` so you land in
    `/content` (Colab's working dir) rather than root's home; a missing `/content`
    falls back to the login home.
+   On native Windows, the ProxyCommand uses `subprocess.list2cmdline` for
+   CreateProcessW argument parsing; POSIX systems continue to use `shlex.join`.
+   The local `UserKnownHostsFile` uses `os.devnull` (`nul` on Windows).
 4. **`--proxy-mode` bridge**: Bridges the WebSocket ↔ stdin/stdout for use as an
    OpenSSH `ProxyCommand`. Honors every flag: `-s NAME` creates the session if
    missing (creation output routed to stderr so stdout stays the clean ssh byte
@@ -80,9 +84,12 @@ remote command, so to also land in `/content` add `RequestTTY yes` and
    **SIGHUP** (verified), not just stdin EOF, and Python's default SIGHUP action
     would terminate the process before the teardown `finally` ran — leaking the
     runtime. `--rm` therefore installs
-   SIGHUP/SIGTERM/SIGINT handlers that run the stop, idempotent with the
-   `finally`. `SIGKILL` cannot be intercepted, so a `kill -9`/hard crash can
+   handlers for the available SIGHUP/SIGTERM/SIGINT signals that run the stop,
+   idempotent with the `finally`. `SIGKILL` cannot be intercepted, so a `kill -9`/hard crash can
    still leak; a normal disconnect is SIGHUP and is handled.
+   Windows has no SIGHUP, so registration skips it and retains SIGTERM/SIGINT.
+   Forced process termination on Windows can also bypass cleanup; this change
+   does not guarantee teardown after a killed process.
 6. **Error handling**: The WebSocket upgrade maps each common HTTP status to an
    actionable message:
 
@@ -135,3 +142,24 @@ command over the WebSocket bridge -- exercising the same connect ->
 pubkey-header auth -> handshake -> bridge -> remote-exec path as the interactive
 shell, minus the TTY -- asserts the RSA-key rejection, and verifies ``colab
 stop`` leaves no orphan VM.
+
+### Windows regression tests (`tests/test_windows_ssh.py`)
+Real Windows child processes run the generated ProxyCommand using a Python
+interpreter installed under a path with spaces. Assertions check exact argv
+preservation for spaces, quotes, shell punctuation, backslashes, Unicode, and
+identity paths. A separate test launches the real Windows OpenSSH client with
+a local stub ProxyCommand and verifies its argv, without contacting Colab.
+Portable tests also check registration without SIGHUP and the local null
+device. Existing POSIX shell quoting and teardown tests remain in the suite.
+
+The SSH CI workflow runs these and the existing SSH tests on Windows, Linux,
+and macOS with Python 3.12. This covers SSH compatibility only. Interactive
+console behavior, local file editing, self-update, and a live Colab session
+require separate validation before the project's overall platform support
+statement can change.
+
+`uv run python integration/repro_windows_ssh/test.py` provides a native Windows
+live test using cached OAuth2 credentials. It creates a CPU runtime, executes a
+remote command through the generated ProxyCommand with a key path containing
+spaces, exercises `--rm`, and cleans up the recorded endpoint on failure. Exit
+77 is a prerequisite skip, not a successful live validation.

@@ -306,13 +306,14 @@ def test_bridge_proxy_mode_pumps_stdin_to_ws(mocker):
 @pytest.mark.parametrize(
     "identity", [None, "/k/id ed25519"], ids=["no-identity", "identity-space"]
 )
-def test_proxy_command_round_trips_through_the_shell(name, identity):
+def test_proxy_command_round_trips_through_the_shell(name, identity, mocker):
     """The ProxyCommand string must re-parse into the exact argv.
 
     `ssh` hands the ProxyCommand to /bin/sh, so every argument has to survive
     word-splitting verbatim -- a hostile session name must arrive as one
     literal argument, never as a new word or a substitution.
     """
+    mocker.patch.object(ssh_module.sys, "platform", "linux")
     cmd = ssh_module._proxy_command(_make_session(name=name), identity)
     argv = shlex.split(cmd)
 
