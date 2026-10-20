@@ -1,5 +1,6 @@
 ---
 log:
+2026-10-20: Passed the native Windows 11 / Python 3.12.14 live CPU SSH test: generated ProxyCommand, identity path with spaces, remote marker execution, and recorded-endpoint cleanup; the final sessions query reported no active assignments. SSH CI also passed on Windows, Linux, and macOS.
 2026-10-20: Fixed Windows OpenSSH ProxyCommand argument quoting, local null-device selection, and cleanup signal registration. Added native Windows process/OpenSSH regression tests and a three-platform SSH CI job; live Colab verification remains required before claiming Windows support.
 2026-09-25: Cleaned up keep-alive daemon references in session creation and teardown documentation.
 2026-08-09: Added `--high-mem` passthrough when `colab ssh` auto-creates a runtime (forwards to `colab new --high-mem`).
@@ -163,3 +164,7 @@ live test using cached OAuth2 credentials. It creates a CPU runtime, executes a
 remote command through the generated ProxyCommand with a key path containing
 spaces, exercises `--rm`, and cleans up the recorded endpoint on failure. Exit
 77 is a prerequisite skip, not a successful live validation.
+
+The native Windows live test passed on 2026-10-20 with Python 3.12.14 and the
+Windows OpenSSH client. This validates remote command execution and cleanup
+for this SSH path, not overall native Windows feature parity.
