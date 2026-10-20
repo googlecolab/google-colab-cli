@@ -25,6 +25,7 @@ way OpenSSH ends a ProxyCommand).
 
 from unittest.mock import MagicMock
 
+from click import unstyle
 from colab_cli.cli import app
 from colab_cli.commands import ssh as ssh_module
 import pytest
@@ -329,9 +330,12 @@ def test_proxy_mode_signal_handler_installation(
 # --- help --------------------------------------------------------------------
 
 
-def test_ssh_help_advertises_autocreate_flags():
+@pytest.mark.parametrize("force_color", [False, True])
+def test_ssh_help_advertises_autocreate_flags(mocker, force_color):
     """`colab ssh --help` advertises --rm, --gpu, and --tpu."""
+    mocker.patch("typer.rich_utils.FORCE_TERMINAL", force_color)
+    mocker.patch("colab_cli.cli.auto_update.run_background_check")
     result = runner.invoke(app, ["ssh", "--help"])
     assert result.exit_code == 0
     for flag in ("--rm", "--gpu", "--tpu"):
-        assert flag in result.output
+        assert flag in unstyle(result.output)
