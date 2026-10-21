@@ -1,8 +1,6 @@
 ---
 log:
-2026-10-21: Removed the proposed SSH CI workflow at maintainer request; retained regression tests and recorded cross-platform and live Windows validation.
-2026-10-20: Passed the native Windows 11 / Python 3.12.14 live CPU SSH test: generated ProxyCommand, identity path with spaces, remote marker execution, and recorded-endpoint cleanup; the final sessions query reported no active assignments. SSH CI also passed on Windows, Linux, and macOS.
-2026-10-20: Fixed Windows OpenSSH ProxyCommand argument quoting, local null-device selection, and cleanup signal registration. Added native Windows process/OpenSSH regression tests and a three-platform SSH CI job; live Colab verification remains required before claiming Windows support.
+2026-10-20: Fixed Windows SSH ProxyCommand quoting, local null-device selection, and cleanup signal registration. Added native Windows regression and live integration tests; verified the SSH suite on Windows, Linux, and macOS, plus live Windows remote execution and runtime cleanup.
 2026-09-25: Cleaned up keep-alive daemon references in session creation and teardown documentation.
 2026-08-09: Added `--high-mem` passthrough when `colab ssh` auto-creates a runtime (forwards to `colab new --high-mem`).
 2026-07-17: Initial design and implementation of `colab ssh` — client side of SSH-over-WebSocket runtime access. Adds three modes (interactive shell, `-s SESSION`, and `--proxy-mode` OpenSSH ProxyCommand bridge), `--identity/-i` key selection, and per-HTTP-status handshake error messages. Server side is out of scope for this repo; the subcommand is a no-op against runtimes that do not expose the `/colab/ssh` endpoint (surfaces an actionable HTTP 404 message).
@@ -155,9 +153,7 @@ Portable tests also check registration without SIGHUP and the local null
 device. Existing POSIX shell quoting and teardown tests remain in the suite.
 
 These and the existing SSH tests passed on Windows, Linux, and macOS with
-Python 3.12 before the proposed SSH CI workflow was removed at maintainer
-request. The regression tests remain available for manual or existing CI
-execution. This covers SSH compatibility only; interactive console behavior,
+Python 3.12. This covers SSH compatibility only; interactive console behavior,
 local file editing, and self-update require separate platform validation.
 
 `uv run python integration/repro_windows_ssh/test.py` provides a native Windows
