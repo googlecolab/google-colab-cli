@@ -406,7 +406,6 @@ def _proxy_command(session: SessionState, identity: Optional[str]) -> str:
     if identity:
         self_cmd.extend(["--identity", identity])
     if sys.platform == "win32":
-        # Windows OpenSSH launches ProxyCommand via CreateProcessW.
         return subprocess.list2cmdline(self_cmd)
     return shlex.join(self_cmd)
 

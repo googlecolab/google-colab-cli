@@ -1,5 +1,6 @@
 ---
 log:
+2026-10-21: Removed the proposed SSH CI workflow at maintainer request; retained regression tests and recorded cross-platform and live Windows validation.
 2026-10-20: Passed the native Windows 11 / Python 3.12.14 live CPU SSH test: generated ProxyCommand, identity path with spaces, remote marker execution, and recorded-endpoint cleanup; the final sessions query reported no active assignments. SSH CI also passed on Windows, Linux, and macOS.
 2026-10-20: Fixed Windows OpenSSH ProxyCommand argument quoting, local null-device selection, and cleanup signal registration. Added native Windows process/OpenSSH regression tests and a three-platform SSH CI job; live Colab verification remains required before claiming Windows support.
 2026-09-25: Cleaned up keep-alive daemon references in session creation and teardown documentation.
@@ -153,11 +154,11 @@ a local stub ProxyCommand and verifies its argv, without contacting Colab.
 Portable tests also check registration without SIGHUP and the local null
 device. Existing POSIX shell quoting and teardown tests remain in the suite.
 
-The SSH CI workflow runs these and the existing SSH tests on Windows, Linux,
-and macOS with Python 3.12. This covers SSH compatibility only. Interactive
-console behavior, local file editing, self-update, and a live Colab session
-require separate validation before the project's overall platform support
-statement can change.
+These and the existing SSH tests passed on Windows, Linux, and macOS with
+Python 3.12 before the proposed SSH CI workflow was removed at maintainer
+request. The regression tests remain available for manual or existing CI
+execution. This covers SSH compatibility only; interactive console behavior,
+local file editing, and self-update require separate platform validation.
 
 `uv run python integration/repro_windows_ssh/test.py` provides a native Windows
 live test using cached OAuth2 credentials. It creates a CPU runtime, executes a
