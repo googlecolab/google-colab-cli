@@ -464,3 +464,46 @@ def test_public_models_connection_info_and_operation():
     assert op.done is True
     assert op.error.code == 9
     assert op.error.details[0]["reason"] == "NO_RUNTIMES"
+
+
+def test_check_api_access_caches_results(tmp_path, mock_session):
+    from colab_cli.state import SettingsStore
+
+    store = SettingsStore(str(tmp_path / "settings.json"))
+    c = Client(Prod(), mock_session, settings_store=store)
+
+    pub_resp = MagicMock(ok=False, status_code=403, reason="Forbidden", text="denied")
+    tun_resp = MagicMock(ok=True, text=")]}'\n" + json.dumps({"assignments": []}))
+    mock_session.request.side_effect = [pub_resp, tun_resp]
+
+    pub_ok, tun_ok = c.check_api_access()
+
+    assert pub_ok is False
+    assert tun_ok is True
+    saved = store.load()
+    assert saved.public_api_supported is False
+    assert saved.tunnel_api_supported is True
+
+
+def test_issue_request_auth_error_uses_cached_support_for_hint(tmp_path, mock_session):
+    from colab_cli.state import Settings, SettingsStore
+
+    store = SettingsStore(str(tmp_path / "settings.json"))
+    store.save(Settings(public_api_supported=True, tunnel_api_supported=True))
+    c = Client(Prod(), mock_session, settings_store=store)
+
+    resp = MagicMock(ok=False, status_code=403, reason="Forbidden", text="denied")
+    mock_session.request.return_value = resp
+
+    with pytest.raises(ColabRequestError) as exc:
+        c._issue_request("https://colaboratory.googleapis.com/v1beta/runtimes")
+
+    assert "--no-public-api" in str(exc.value)
+    assert store.load().public_api_supported is False
+
+    store.save(Settings(public_api_supported=True, tunnel_api_supported=True))
+    with pytest.raises(ColabRequestError) as exc2:
+        c._issue_request("https://colab.research.google.com/tun/m/assignments")
+
+    assert "--public-api" in str(exc2.value)
+    assert store.load().tunnel_api_supported is False

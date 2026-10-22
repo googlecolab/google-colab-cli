@@ -87,7 +87,12 @@ class State:
                 if self.use_public_api is not None
                 else self.settings_store.load().use_public_api
             )
-            self._client = Client(Prod(), creds, use_public_api=use_public)
+            self._client = Client(
+                Prod(),
+                creds,
+                use_public_api=use_public,
+                settings_store=self.settings_store,
+            )
         return self._client
 
     def prune_session(self, name: str):

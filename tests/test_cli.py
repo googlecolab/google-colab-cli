@@ -704,3 +704,17 @@ def test_cli_public_api_flag_and_env(args, env, expected):
     result = runner.invoke(app, args, env=env)
     assert result.exit_code == 0
     assert cli.state.use_public_api is expected
+
+
+def test_cli_test_public_api_hidden_and_reports_status(mock_common_state):
+    help_res = runner.invoke(app, ["--help"])
+    assert "test-public-api" not in help_res.output
+
+    sub_help = runner.invoke(app, ["test-public-api", "--help"])
+    assert sub_help.exit_code == 0
+
+    mock_common_state.client.check_api_access.return_value = (False, True)
+    res = runner.invoke(app, ["test-public-api"])
+    assert res.exit_code == 0
+    assert "Public API" in res.output
+    assert "Tunnel API" in res.output

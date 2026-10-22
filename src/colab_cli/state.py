@@ -44,6 +44,8 @@ class Settings(BaseModel):
     # Highest version seen on the update source; cached for the banner.
     latest_version: Optional[str] = None
     use_public_api: bool = False
+    public_api_supported: Optional[bool] = None
+    tunnel_api_supported: Optional[bool] = None
 
 
 _OWNER_ONLY_MODE = 0o600

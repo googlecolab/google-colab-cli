@@ -125,6 +125,7 @@ def callback(
         "help",
         "url",
         "whoami",
+        "test-public-api",
         "readme",
         "README",
         "skill",

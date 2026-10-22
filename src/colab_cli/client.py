@@ -244,6 +244,7 @@ class Client:
         session,
         logger=None,
         use_public_api: bool = False,
+        settings_store=None,
     ):
         self.colab_domain = env.domain
         self.colab_api_domain = env.api
@@ -251,6 +252,24 @@ class Client:
         self.session = session
         self.logger = logger or logging.getLogger(__name__)
         self.use_public_api = use_public_api
+        self.settings_store = settings_store
+
+    def _auth_error_hint(self, endpoint: str, status_code: int) -> str:
+        if status_code not in (401, 403) or self.settings_store is None:
+            return ""
+        host = urlparse(endpoint).hostname
+        settings = self.settings_store.load()
+        if host == urlparse(self.colab_public_api).hostname:
+            settings.public_api_supported = False
+            self.settings_store.save(settings)
+            if settings.tunnel_api_supported:
+                return " (Public API access denied; pass --no-public-api to use the tunnel API)"
+        elif host == urlparse(self.colab_domain).hostname:
+            settings.tunnel_api_supported = False
+            self.settings_store.save(settings)
+            if settings.public_api_supported:
+                return " (Tunnel API access denied; pass --public-api to use the Public API)"
+        return " (Run 'colab test-public-api' or 'colab whoami' to check auth access)"
 
     def _strip_xssi_prefix(self, v: str) -> str:
         if not v.startswith(XSSI_PREFIX):
@@ -296,8 +315,9 @@ class Client:
         self.logger.debug(f"Response Headers: {response.headers}")
         self.logger.debug(f"Response Body: {response.text}")
         if not response.ok:
+            hint = self._auth_error_hint(endpoint, response.status_code)
             raise ColabRequestError(
-                f"Failed to issue request {method} {endpoint}: {response.reason}",
+                f"Failed to issue request {method} {endpoint}: {response.reason}{hint}",
                 request=response.request,
                 response=response,
                 response_body=response.text,
@@ -318,6 +338,24 @@ class Client:
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/ccu-info")
         ccu = self._issue_request(url, schema=CcuInfo)
         return consumption_user_info_from_tunnel(ccu)
+
+    def check_api_access(self) -> tuple[bool, bool]:
+        try:
+            self._list_assignments_public()
+            pub_ok = True
+        except Exception:
+            pub_ok = False
+        try:
+            self._list_assignments_tunnel()
+            tun_ok = True
+        except Exception:
+            tun_ok = False
+        if self.settings_store is not None:
+            settings = self.settings_store.load()
+            settings.public_api_supported = pub_ok
+            settings.tunnel_api_supported = tun_ok
+            self.settings_store.save(settings)
+        return pub_ok, tun_ok
 
     def list_assignments(self) -> List[ListedAssignment]:
         if self.use_public_api:
