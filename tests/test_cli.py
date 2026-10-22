@@ -686,3 +686,21 @@ def test_cli_new_412_without_accelerator_shows_friendly_error(mock_client, mock_
     assert result.exit_code != 0
     assert "precondition" in result.output.lower()
     mock_store.add.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "args,env,expected",
+    [
+        (["sessions"], {}, False),
+        (["--public-api", "sessions"], {}, True),
+        (["--no-public-api", "sessions"], {}, False),
+        (["sessions"], {"COLAB_CLI_PUBLIC_API": "1"}, True),
+        (["sessions"], {"COLAB_CLI_PUBLIC_API": "0"}, False),
+    ],
+)
+def test_cli_public_api_flag_and_env(args, env, expected):
+    from colab_cli import cli
+
+    result = runner.invoke(app, args, env=env)
+    assert result.exit_code == 0
+    assert cli.state.use_public_api is expected

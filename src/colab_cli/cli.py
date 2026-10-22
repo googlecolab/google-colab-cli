@@ -85,6 +85,14 @@ def callback(
             case_sensitive=False,
         ),
     ] = AuthProvider.OAUTH2,
+    public_api: Annotated[
+        bool,
+        typer.Option(
+            "--public-api/--no-public-api",
+            envvar="COLAB_CLI_PUBLIC_API",
+            help="Use the Colab Public API (colaboratory.googleapis.com) instead of the legacy tunnel API.",
+        ),
+    ] = False,
 ):
     """
     Colab CLI global configuration.
@@ -93,6 +101,7 @@ def callback(
     state.config_path = config
     state.logtostderr = logtostderr
     state.auth_provider = auth
+    state.use_public_api = public_api
     setup_logging(logtostderr)
 
     # Daily fetch + cached banner on every invocation.

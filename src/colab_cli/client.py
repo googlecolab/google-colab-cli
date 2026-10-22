@@ -238,12 +238,19 @@ class TooManyAssignmentsError(Exception):
 
 
 class Client:
-    def __init__(self, env: ColabEnvironment, session, logger=None):
+    def __init__(
+        self,
+        env: ColabEnvironment,
+        session,
+        logger=None,
+        use_public_api: bool = False,
+    ):
         self.colab_domain = env.domain
         self.colab_api_domain = env.api
         self.colab_public_api = env.public_api
         self.session = session
         self.logger = logger or logging.getLogger(__name__)
+        self.use_public_api = use_public_api
 
     def _strip_xssi_prefix(self, v: str) -> str:
         if not v.startswith(XSSI_PREFIX):
@@ -313,6 +320,16 @@ class Client:
         return consumption_user_info_from_tunnel(ccu)
 
     def list_assignments(self) -> List[ListedAssignment]:
+        if self.use_public_api:
+            return self._list_assignments_public()
+        return self._list_assignments_tunnel()
+
+    def _list_assignments_tunnel(self) -> List[ListedAssignment]:
+        url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/assignments")
+        resp = self._issue_request(url, schema=ListedAssignments)
+        return resp.assignments if resp else []
+
+    def _list_assignments_public(self) -> List[ListedAssignment]:
         url = urljoin(self.colab_public_api, "/v1beta/runtimes")
         resp = self._issue_request(url, schema=ListRuntimesResponse)
         if not resp or not resp.runtimes:

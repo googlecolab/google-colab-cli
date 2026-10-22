@@ -123,3 +123,26 @@ def test_sync_sessions_updates_tokens(real_state):
     assert sessions["s1"].token == "new-token"
     assert real_state.store.get("s1").token == "new-token"
     assert real_state.store.get("s1").token_expires_at is not None
+
+
+@pytest.mark.parametrize(
+    "flag_val,setting_val,expected",
+    [
+        (None, False, False),
+        (None, True, True),
+        (True, False, True),
+        (False, True, False),
+    ],
+)
+def test_state_client_use_public_api_precedence(
+    tmp_path, mocker, flag_val, setting_val, expected
+):
+    from colab_cli.state import Settings, SettingsStore
+
+    st = State()
+    st._settings_store = SettingsStore(str(tmp_path / "settings.json"))
+    st._settings_store.save(Settings(use_public_api=setting_val))
+    st.use_public_api = flag_val
+    mocker.patch("colab_cli.common.get_credentials", return_value=MagicMock())
+
+    assert st.client.use_public_api is expected

@@ -306,7 +306,37 @@ def test_client_assign_existing(client, mock_session):
 
 
 def test_client_list_assignments(client, mock_session):
-    # Mock list_assignments (GET)
+    resp = MagicMock()
+    resp.ok = True
+    resp.text = ")]}'\n" + json.dumps(
+        {
+            "assignments": [
+                {
+                    "accelerator": "NONE",
+                    "endpoint": "e1",
+                    "variant": 0,
+                    "machineShape": 0,
+                    "runtimeProxyInfo": {
+                        "token": "t1",
+                        "tokenExpiresInSeconds": 3600,
+                        "url": "u1",
+                    },
+                }
+            ]
+        }
+    )
+
+    mock_session.request.return_value = resp
+
+    res = client.list_assignments()
+
+    assert len(res) == 1
+    assert res[0].endpoint == "e1"
+    assert "tun/m/assignments" in mock_session.request.call_args.args[1]
+
+
+def test_public_client_list_assignments(mock_session):
+    public_client = Client(Prod(), mock_session, use_public_api=True)
     resp = MagicMock()
     resp.ok = True
     resp.text = json.dumps(
@@ -332,8 +362,7 @@ def test_client_list_assignments(client, mock_session):
 
     mock_session.request.return_value = resp
 
-    # This should fail if list_assignments is not implemented
-    res = client.list_assignments()
+    res = public_client.list_assignments()
 
     assert len(res) == 1
     assert res[0].endpoint == "e1"

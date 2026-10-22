@@ -43,6 +43,7 @@ class Settings(BaseModel):
     enable_update_check: bool = True
     # Highest version seen on the update source; cached for the banner.
     latest_version: Optional[str] = None
+    use_public_api: bool = False
 
 
 _OWNER_ONLY_MODE = 0o600

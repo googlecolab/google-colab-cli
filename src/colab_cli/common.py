@@ -49,6 +49,7 @@ class State:
         self.config_path = None
         self.logtostderr = False
         self.auth_provider = AuthProvider.OAUTH2
+        self.use_public_api: Optional[bool] = None
         self._client = None
         self._store = None
         self._settings_store = None
@@ -81,7 +82,12 @@ class State:
             creds = get_credentials(
                 self.client_oauth_config, provider=self.auth_provider
             )
-            self._client = Client(Prod(), creds)
+            use_public = (
+                self.use_public_api
+                if self.use_public_api is not None
+                else self.settings_store.load().use_public_api
+            )
+            self._client = Client(Prod(), creds, use_public_api=use_public)
         return self._client
 
     def prune_session(self, name: str):
