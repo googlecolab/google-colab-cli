@@ -24,10 +24,13 @@ from colab_cli.client import (
     Assignment,
     Client,
     ColabRequestError,
+    ConnectionInfo,
     GetAssignmentResponse,
+    Operation,
     PostAssignmentResponse,
     Prod,
     Shape,
+    Status,
     TooManyAssignmentsError,
     Variant,
     resolve_assign_shape,
@@ -413,3 +416,22 @@ def test_client_assign_url_omits_shape_for_standard(client, mock_session):
 )
 def test_resolve_assign_shape(accelerator, high_mem, expected):
     assert resolve_assign_shape(accelerator, high_mem=high_mem) == expected
+
+
+def test_public_models_connection_info_and_operation():
+    info = ConnectionInfo(
+        expireTime="2026-09-24T19:00:00Z", url="https://u1", token="t1"
+    )
+    assert info.endpoint is None
+
+    op = Operation(
+        name="operations/op1",
+        done=True,
+        error=Status(
+            code=9, message="quota exceeded", details=[{"reason": "NO_RUNTIMES"}]
+        ),
+    )
+    assert op.name == "operations/op1"
+    assert op.done is True
+    assert op.error.code == 9
+    assert op.error.details[0]["reason"] == "NO_RUNTIMES"

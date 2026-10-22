@@ -162,7 +162,7 @@ class PublicShape(str, Enum):
 
 class ConnectionInfo(BaseModel):
     expire_time: str = Field(..., alias="expireTime")
-    endpoint: str
+    endpoint: Optional[str] = None
     url: str
     token: str
 
@@ -182,6 +182,20 @@ class Runtime(BaseModel):
 
 class ListRuntimesResponse(BaseModel):
     runtimes: Optional[List[Runtime]] = None
+
+
+class Status(BaseModel):
+    code: Optional[int] = None
+    message: Optional[str] = None
+    details: Optional[List[Dict]] = None
+
+
+class Operation(BaseModel):
+    name: Optional[str] = None
+    done: Optional[bool] = None
+    metadata: Optional[Dict] = None
+    error: Optional[Status] = None
+    response: Optional[Dict] = None
 
 
 class PostAssignmentResponse(BaseModel):
@@ -342,7 +356,8 @@ class Client:
             assignments.append(
                 ListedAssignment(
                     accelerator=mapped_accelerator,
-                    endpoint=r.connection_info.endpoint,
+                    endpoint=r.connection_info.endpoint
+                    or r.name.removeprefix("runtimes/"),
                     variant=mapped_variant,
                     machineShape=mapped_shape,
                     runtimeProxyInfo=proxy_info,
