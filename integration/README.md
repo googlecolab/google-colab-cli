@@ -16,6 +16,7 @@ End-to-end tests that run against a **live Colab backend** (unlike the mocked un
 | `repro_variable_persistence/` | Variables persist across `colab exec` calls in the same session. |
 | `repro_piped_console/` | Fast smoke test (~5s including session creation): `echo cmd \| colab console -s s` runs the command and exits within 30s. Regression test for the 2026-05-07 EOF-handler fix. |
 | `repro_bundled_oauth/` | Fast smoke test (~5s): verifies that the fallback OAuth configuration is loaded and starts the OAuth flow with the default client ID when local config is missing. |
+| `repro_legacy_token_migration/` | Fast smoke test (~5s, no VM): a pre-keyring `~/.config/colab-cli/token.json` is migrated into the keyring and deleted, deleted when the keyring already has a token, and kept (with a stderr warning) when the keyring is inaccessible. Uses a throwaway HOME and file-backed test keyring. |
 | `repro_ssh/` | Fast smoke test (~5s): `--help` advertises the flags and an unknown session exits. Slow soak test (~95s): Live e2e allocates a CPU VM, runs a real remote command over `colab ssh --proxy-mode` |
 | `repro_windows_ssh/` | Native Windows live CPU test: Windows OpenSSH launches the generated ProxyCommand, executes a remote marker command, and releases the recorded runtime. Requires cached OAuth2 credentials; exits 77 if prerequisites are missing. |
 

@@ -29,6 +29,7 @@ dependencies = [
     "google-auth-oauthlib>=1.3.0",
     "html2text>=2024.2.26",
     "jupyter-kernel-client==0.9.0",
+    "keyring>=25.7.0",
     "nbformat>=5.10.4",
     "packaging>=24.0",
     "prompt-toolkit>=3.0.52",

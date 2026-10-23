@@ -17,10 +17,12 @@ import json
 import logging
 from importlib import resources
 import os
+import threading
 import warnings
 from typing import Optional
 
 import google.auth
+import keyring
 import typer
 from google.auth.transport import requests
 from google.auth.transport.requests import Request
@@ -51,7 +53,58 @@ PUBLIC_SCOPES = [
 ]
 
 
-TOKEN_CONFIG_PATH = os.path.expanduser("~/.config/colab-cli/token.json")
+KEYRING_SERVICE_NAME = "google-colab-cli"
+KEYRING_USERNAME = "oauth_token"
+KEYRING_TIMEOUT_SECONDS = 30.0
+
+# Plaintext token location used before tokens moved to the keyring. Read once
+# to migrate existing users, then deleted after a successful keyring write.
+LEGACY_TOKEN_PATH = os.path.expanduser("~/.config/colab-cli/token.json")
+
+
+def _run_with_timeout(func, *args, timeout: float):
+    """Run a blocking callable in a daemon thread and raise TimeoutError if it hangs."""
+    result = None
+    error: Optional[BaseException] = None
+
+    def target() -> None:
+        nonlocal result, error
+        try:
+            result = func(*args)
+        except BaseException as exc:
+            error = exc
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+    if thread.is_alive():
+        # Python's threading.Thread has no API to terminate a thread blocked in
+        # an OS/D-Bus call; daemon=True ensures it won't block interpreter exit
+        # and is reaped by the OS when the CLI process finishes.
+        op_name = getattr(func, "__name__", None) or repr(func)
+        raise TimeoutError(f"Operation '{op_name}' timed out after {timeout:.1f}s")
+    if error is not None:
+        raise error
+    return result
+
+
+def _get_token_from_keyring() -> Optional[str]:
+    return _run_with_timeout(
+        keyring.get_password,
+        KEYRING_SERVICE_NAME,
+        KEYRING_USERNAME,
+        timeout=KEYRING_TIMEOUT_SECONDS,
+    )
+
+
+def _save_token_to_keyring(token_json: str) -> None:
+    _run_with_timeout(
+        keyring.set_password,
+        KEYRING_SERVICE_NAME,
+        KEYRING_USERNAME,
+        token_json,
+        timeout=KEYRING_TIMEOUT_SECONDS,
+    )
 
 # Remote copy-paste OAuth flow.
 #
@@ -118,17 +171,33 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
         )
 
     creds = None
+    needs_save = False
 
-    # Ensure config directory exists for the token file
-    os.makedirs(os.path.dirname(TOKEN_CONFIG_PATH), exist_ok=True)
+    try:
+        token_json = _get_token_from_keyring()
+        if token_json:
+            creds = Credentials.from_authorized_user_info(
+                json.loads(token_json), PUBLIC_SCOPES
+            )
+            _remove_legacy_token()
+    except Exception as e:
+        logger.warning(f"Failed to load token from keyring: {e}")
+        # Each command is a separate process, so without this the user would be
+        # re-prompted on every run with no visible reason.
+        typer.echo(
+            f"Warning: Could not read the OAuth token from the OS keyring ({e}).",
+            err=True,
+        )
 
-    if os.path.exists(TOKEN_CONFIG_PATH):
+    if not creds and os.path.exists(LEGACY_TOKEN_PATH):
         try:
             creds = Credentials.from_authorized_user_file(
-                TOKEN_CONFIG_PATH, PUBLIC_SCOPES
+                LEGACY_TOKEN_PATH, PUBLIC_SCOPES
             )
+            needs_save = True
         except Exception as e:
-            logger.warning(f"Failed to load token from {TOKEN_CONFIG_PATH}: {e}")
+            logger.warning(f"Failed to load legacy token from {LEGACY_TOKEN_PATH}: {e}")
+            _remove_legacy_token()
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -140,15 +209,35 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
 
         if not creds:
             creds = _run_remote_flow(client_config)
+        needs_save = True
 
-        # Save the credentials for the next run
+    if needs_save:
         try:
-            with open(TOKEN_CONFIG_PATH, "w") as token_file:
-                token_file.write(creds.to_json())
+            _save_token_to_keyring(creds.to_json())
         except Exception as e:
-            logger.error(f"Failed to save token to {TOKEN_CONFIG_PATH}: {e}")
+            logger.warning(f"Failed to save token to keyring: {e}")
+            # Each command is a separate process, so without this the user would be
+            # re-prompted on every run with no visible reason.
+            typer.echo(
+                f"Warning: Could not save the OAuth token to the OS keyring ({e}). "
+                "You will be asked to sign in again on the next command. "
+                "Unlock or configure your keyring, or use --auth=adc.",
+                err=True,
+            )
+        else:
+            _remove_legacy_token()
 
     return creds
+
+
+def _remove_legacy_token() -> None:
+    """Removes the legacy token file if it exists."""
+    if not os.path.exists(LEGACY_TOKEN_PATH):
+        return
+    try:
+        os.remove(LEGACY_TOKEN_PATH)
+    except OSError as e:
+        logger.warning(f"Failed to remove legacy token {LEGACY_TOKEN_PATH}: {e}")
 
 
 def _get_adc_credentials() -> Credentials:

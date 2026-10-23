@@ -28,8 +28,12 @@ TMP_DIR=$(mktemp -d)
 SESSION_FILE="$TMP_DIR/sessions.json"
 SESSION_NAME="test-piped-console"
 
+# OAuth2 is usable if a token is cached in the OS keyring.
+has_oauth2_token() {
+    timeout 10 uv run python -c "import sys, keyring; sys.exit(0 if keyring.get_password('google-colab-cli', 'oauth_token') else 1)" > /dev/null 2>&1
+}
 # Auth selection (OAuth2 if token cached, else ADC).
-if [ -f "$HOME/.config/colab-cli/token.json" ]; then
+if has_oauth2_token; then
     AUTH_FLAGS="--auth=oauth2"
 elif command -v gcloud > /dev/null && gcloud auth application-default print-access-token > /dev/null 2>&1; then
     ADC_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)
