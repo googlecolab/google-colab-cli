@@ -12,87 +12,96 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import MagicMock
+import pytest
+from mock_kernel import MockKernelClient, _idle, _reply, _stdout, connect_runtime
+
 from colab_cli.runtime import ColabRuntime
 
 
-def test_runtime_execute_code_streaming():
-    runtime = ColabRuntime("http://url", "token")
-    mock_client = MagicMock()
+@pytest.fixture
+def run(monkeypatch):
+    """Run execute_code against a MockKernelClient; returns (outputs, streamed, mock_kc)."""
 
-    # Mock the return value of execute_interactive (the raw reply)
-    mock_client.execute_interactive.return_value = {"content": {"status": "ok"}}
+    def _run(mock_kc, code="work()", timeout=30.0):
+        runtime = ColabRuntime("http://url", "token")
+        connect_runtime(runtime, mock_kc, monkeypatch)
+        streamed = []
+        outputs = runtime.execute_code(
+            code, output_hook=streamed.append, timeout=timeout
+        )
+        return outputs, streamed, mock_kc
 
-    # Inject our mock client
-    runtime._kernel_client = mock_client
-
-    streamed_outputs = []
-
-    def output_hook(o):
-        streamed_outputs.append(o)
-
-    code = "print(1); print(2)"
-
-    # We need to simulate the execution where execute_interactive is called
-    # and it calls our wrapped_output_hook.
-    # Since wrapped_output_hook is defined inside execute_code, we have to
-    # intercept the call to execute_interactive to get a reference to it.
-
-    def side_effect(code, output_hook=None, **kwargs):
-        # Simulate messages arriving
-        msg1 = {
-            "header": {"msg_type": "stream"},
-            "content": {"name": "stdout", "text": "1\n"},
-        }
-        msg2 = {
-            "header": {"msg_type": "stream"},
-            "content": {"name": "stdout", "text": "2\n"},
-        }
-        if output_hook:
-            output_hook(msg1)
-            output_hook(msg2)
-        return {"content": {"status": "ok"}}
-
-    mock_client.execute_interactive.side_effect = side_effect
-
-    outputs = runtime.execute_code(code, output_hook=output_hook)
-
-    assert len(outputs) == 2
-    assert outputs[0]["text"] == "1\n"
-    assert outputs[1]["text"] == "2\n"
-
-    # Verify streaming hook was called
-    assert len(streamed_outputs) == 2
-    assert streamed_outputs[0]["text"] == "1\n"
-    assert streamed_outputs[1]["text"] == "2\n"
+    return _run
 
 
-def test_runtime_execute_code_streaming_error_synthesis():
-    runtime = ColabRuntime("http://url", "token")
-    mock_client = MagicMock()
-
-    # Simulate an error reply but NO error output message
-    mock_client.execute_interactive.return_value = {
-        "content": {
-            "status": "error",
-            "ename": "RuntimeError",
-            "evalue": "something went wrong",
-            "traceback": ["tb line 1"],
-        }
-    }
-    runtime._kernel_client = mock_client
-
-    streamed_outputs = []
-    outputs = runtime.execute_code(
-        "fail()", output_hook=lambda o: streamed_outputs.append(o)
+def test_runtime_execute_code_streaming(run):
+    mock_kc = MockKernelClient(
+        [(0.1, _stdout("1\n")), (0.2, _stdout("2\n")), (0.3, _idle())]
     )
+    outputs, streamed, _ = run(mock_kc, code="print(1); print(2)")
 
-    # Final outputs should include synthesized error
+    assert [o["text"] for o in outputs] == ["1\n", "2\n"]
+    assert [o["text"] for o in streamed] == ["1\n", "2\n"]
+    assert mock_kc.code == "print(1); print(2)"
+
+
+def test_runtime_execute_code_streaming_error_synthesis(run):
+    reply = _reply(
+        "error", ename="RuntimeError", evalue="something went wrong", traceback=["tb"]
+    )
+    mock_kc = MockKernelClient([(0.1, _idle())], shell=[(0.1, reply)])
+    outputs, streamed, _ = run(mock_kc, code="fail()")
+
+    # The synthesized error is added after the run, so it is returned but not streamed.
     assert len(outputs) == 1
     assert outputs[0]["output_type"] == "error"
     assert outputs[0]["ename"] == "RuntimeError"
+    assert streamed == []
 
-    # Note: synthesized error is added AFTER execute_interactive returns,
-    # so it won't be in streamed_outputs unless we specifically add logic for it.
-    # Currently it's only in the returned list.
-    assert len(streamed_outputs) == 0
+
+def test_a_run_that_keeps_printing_is_not_cut_off(run):
+    """--timeout is an idle limit: a 10-minute run that prints every 20 s finishes."""
+    lines = [(t, _stdout(f"step {t}\n")) for t in range(20, 601, 20)]
+    mock_kc = MockKernelClient([*lines, (601, _idle())])
+    outputs, _, _ = run(mock_kc, timeout=30.0)
+
+    assert "".join(o["text"] for o in outputs).count("step") == 30
+
+
+def test_silence_longer_than_the_timeout_raises(run):
+    mock_kc = MockKernelClient([(5, _stdout("loading\n")), (100, _idle())])
+    with pytest.raises(TimeoutError, match="Timeout waiting for output"):
+        run(mock_kc, timeout=30.0)
+    assert (
+        35 <= mock_kc.now <= 36
+    )  # 30 s after the last message, not 30 s after the start
+
+
+def test_no_timeout_waits_through_any_silence(run):
+    mock_kc = MockKernelClient([(3600, _stdout("done\n")), (3600.5, _idle())])
+    outputs, _, _ = run(mock_kc, timeout=None)
+    assert outputs[0]["text"] == "done\n"
+
+
+def test_waiting_never_spins(run):
+    """Each wait blocks for up to a second, so a long run costs a few calls a second."""
+    lines = [(t, _stdout("tick\n")) for t in range(25, 301, 25)]
+    mock_kc = MockKernelClient([*lines, (301, _idle())])
+    run(mock_kc, timeout=30.0)
+    assert mock_kc.waits and all(w > 0 for w in mock_kc.waits)
+    assert len(mock_kc.waits) < 330  # about one wait per second over 300 s
+
+
+def test_messages_from_other_requests_do_not_count_as_output(run):
+    others = [(t, _stdout("other\n", parent="req-0")) for t in range(5, 100, 5)]
+    mock_kc = MockKernelClient([*others, (100, _idle())])
+    with pytest.raises(TimeoutError):
+        run(mock_kc, timeout=30.0)
+    assert 30 <= mock_kc.now <= 31
+
+
+def test_a_lost_connection_stops_the_wait(run):
+    mock_kc = MockKernelClient([(5, _stdout("x\n")), (100, _idle())])
+    mock_kc.connection_ready.clear()
+    with pytest.raises(RuntimeError, match="Connection was lost"):
+        run(mock_kc, timeout=None)

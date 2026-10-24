@@ -13,11 +13,16 @@
 # limitations under the License.
 
 import logging
+import queue
 import time
 from typing import Any, Callable, Dict, List, Optional
 
 import jupyter_kernel_client
 import requests
+
+
+# The longest single wait for a kernel message, so a lost connection is noticed.
+_WAIT_SLICE_SEC = 1.0
 
 
 class ColabRuntime:
@@ -234,9 +239,12 @@ class ColabRuntime:
                         if idx < len(outputs):
                             output_hook(outputs[idx])
 
-            reply = self.kernel_client.execute_interactive(
-                code, output_hook=wrapped_output_hook, **kwargs
-            )
+            if allow_stdin:
+                reply = self.kernel_client.execute_interactive(
+                    code, output_hook=wrapped_output_hook, **kwargs
+                )
+            else:
+                reply = self._execute_streaming(code, wrapped_output_hook, timeout)
             # execute_interactive returns the raw reply message
             reply_content = reply["content"] if reply else {"status": "error"}
         else:
@@ -260,6 +268,53 @@ class ColabRuntime:
                 )
 
         return outputs
+
+    def _execute_streaming(
+        self,
+        code: str,
+        output_hook: Callable[[Dict[str, Any]], None],
+        timeout: Optional[float],
+    ) -> Dict[str, Any]:
+        """Run ``code``, pass each output message to ``output_hook``, return the reply.
+
+        ``timeout`` is an idle limit: how long to wait, in seconds, for the next
+        message from this execution. A run that keeps printing can take as long
+        as it needs, and ``None`` waits without a limit. The deadline in
+        ``jupyter_kernel_client.execute_interactive`` covers the whole run
+        instead, and past it 0.9.0 polls without waiting, holding a CPU core
+        until the run ends.
+        """
+        client = self.kernel_client._manager.client
+        msg_id = client.execute(code, allow_stdin=False)
+        last_message = time.monotonic()
+
+        def next_message(get_msg):
+            nonlocal last_message
+            while True:
+                if not client.connection_ready.is_set():
+                    raise RuntimeError("Connection was lost.")
+                wait = _WAIT_SLICE_SEC
+                if timeout is not None:
+                    left = last_message + timeout - time.monotonic()
+                    if left <= 0:
+                        raise TimeoutError("Timeout waiting for output")
+                    wait = min(wait, left)
+                try:
+                    msg = get_msg(timeout=wait)
+                except queue.Empty:
+                    continue
+                if msg["parent_header"].get("msg_id") == msg_id:
+                    last_message = time.monotonic()
+                    return msg
+
+        while True:
+            msg = next_message(client.get_iopub_msg)
+            output_hook(msg)
+            if (
+                msg["header"]["msg_type"] == "status"
+                and msg["content"].get("execution_state") == "idle"
+            ):
+                return next_message(client.get_shell_msg)
 
     def stop(self, shutdown_kernel: bool = False):
         if self._kernel_client:

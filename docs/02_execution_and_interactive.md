@@ -5,6 +5,8 @@ log:
 2026-05-07: Fixed `print_kitty` (used by `colab exec --output-image` and any image-producing exec) to no-op when `sys.stdout.isatty()` is false. The Kitty Graphics Protocol escape sequence is meaningless when stdout is a file or pipe and was visually corrupting captured output (a multi-KB base64 PNG blob would land in log files, grep targets, or showboat captures). Image bytes are still saved to disk via `handle_image`'s file-write path; only the inline-render attempt is suppressed.
 
 2026-06-04: Bumped the default `--timeout` for `colab exec` from 10s to 30s (and the matching `colab run` default) so brief silent tasks are less likely to hit a premature `TimeoutError`. Explicit `--timeout` overrides are unaffected.
+
+2026-10-24: `--timeout` for `colab exec` (and `colab run`) is now an idle limit: execution fails only after that many seconds without output, so code that keeps printing is never cut off. `colab repl`, which passes no timeout, waits until each cell finishes. Neither busy-loops while waiting. See #183.
 ---
 
 # Design: Execution and Interactive Interaction (`repl`, `exec`, `console`)

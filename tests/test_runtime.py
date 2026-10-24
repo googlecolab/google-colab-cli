@@ -14,6 +14,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import jupyter_kernel_client
 
 from colab_cli.runtime import ColabRuntime
@@ -160,18 +162,22 @@ def test_colab_runtime_execute_code_with_timeout():
     assert kwargs.get("timeout") == 600
 
 
-def test_colab_runtime_execute_interactive_with_timeout():
+def test_colab_runtime_execute_interactive_with_timeout(monkeypatch):
     """timeout must also be plumbed through the execute_interactive branch
-    (used when an output_hook is supplied)."""
-    runtime = ColabRuntime("http://url", "token123")
-    mock_kc = MagicMock()
-    runtime._kernel_client = mock_kc
+    (used when an output_hook is supplied). There it is an idle limit: the
+    longest silence allowed between messages from the execution."""
+    from mock_kernel import MockKernelClient, _idle, _stdout, connect_runtime
 
-    mock_kc.execute_interactive.return_value = {"content": {"status": "ok"}}
+    runtime = ColabRuntime("http://url", "token123")
+    mock_kc = MockKernelClient([(599, _stdout("1\n")), (599.5, _idle())])
+    connect_runtime(runtime, mock_kc, monkeypatch)
     runtime.execute_code("print(1)", output_hook=lambda o: None, timeout=600)
 
-    _, kwargs = mock_kc.execute_interactive.call_args
-    assert kwargs.get("timeout") == 600
+    runtime = ColabRuntime("http://url", "token123")
+    mock_kc = MockKernelClient([(601, _stdout("1\n")), (601.5, _idle())])
+    connect_runtime(runtime, mock_kc, monkeypatch)
+    with pytest.raises(TimeoutError):
+        runtime.execute_code("print(1)", output_hook=lambda o: None, timeout=600)
 
 
 def test_colab_runtime_stop():
