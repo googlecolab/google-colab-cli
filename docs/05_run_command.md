@@ -5,6 +5,7 @@ log:
 2026-05-12: Initial design and implementation of `colab run <script.py> [args...]`. Combines `colab new` + `colab exec` + `colab stop` into a single fire-and-forget invocation so a Python file can use `#!/usr/bin/env -S colab run` as a shebang line and execute on a freshly-allocated Colab VM. Adds `--keep` (skip auto-stop), `--gpu` / `--tpu` (passthrough to session creation), `-s/--session` (name the ephemeral session), and propagates the script's exit status (non-zero on any uncaught exception in the kernel). The script's `sys.argv` is re-set inside the kernel to mirror native `python script.py arg1 arg2` semantics, and `__name__` is set to `"__main__"`.
 2026-05-12: Native CPython exit-code semantics for `sys.exit()` / `raise SystemExit(...)` from the script body. The Colab kernel reports a `SystemExit` as `output_type=='error'`, which under the previous logic would have (a) printed the IPython traceback (`An exception has occurred, use %tb...`) and (b) flagged the run as a failure regardless of the integer exit code. Now: `sys.exit()` / `sys.exit(0)` exit 0 silently; `sys.exit(N)` exits N; `sys.exit('msg')` exits 1 (matching CPython). The IPython "To exit: use 'exit', 'quit', or Ctrl-D." UserWarning is filtered via the prelude. Encoded after running `examples/gpu_hello.py` end-to-end and seeing the noisy `SystemExit: 0` traceback at the end of an otherwise-successful GPU run.
 2026-06-04: Bumped the default value of the `--timeout` flag from 10.0s to 30.0s so short-but-silent tasks aren't prematurely killed out of the box. Mirrors the same change for `colab exec`.
+2026-10-24: `--timeout` is now an idle limit: the run fails only after that many seconds without output, so a script that keeps printing can run as long as it needs, and `--timeout 0` means no limit. The CLI waits for kernel messages itself, in blocking slices of up to one second, instead of using `jupyter-kernel-client`'s `execute_interactive`. That deadline covered the whole run: 1.0.2 enforces it, failing runs after 30s even while they print, and 0.8.0/0.9.0 never enforce it, polling at ~100% CPU once it passes. As a result, on 0.8.0/0.9.0 a script that is silent for longer than `--timeout` now fails (and, without `--keep`, its session is stopped) where it used to complete. See #183.
 ---
 
 # Design: `colab run` — Shebang-Compatible One-Shot Execution
@@ -33,7 +34,7 @@ colab run [OPTIONS] SCRIPT [SCRIPT_ARGS]...
 | `--tpu` | str | None | Same set as `colab new --tpu` (v5e1, v6e1). |
 | `--high-mem` | bool | False | Same as `colab new --high-mem` — request high-RAM when supported. |
 | `--keep` | bool | False | Do **not** stop the session after the script finishes. |
-| `--timeout` | float | 30.0 | Timeout in seconds for code execution to prevent hanging on silent tasks. |
+| `--timeout` | float | 30.0 | Seconds to wait without output before failing, so a hung or silent task doesn't block forever. Raise it for long silent tasks; `0` means no limit. |
 
 ### Shebang usage
 With `--keep` and `--gpu` baked into the shebang line, an entire one-file workload becomes:
