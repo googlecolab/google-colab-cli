@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import logging
 import os
 import sys
@@ -23,7 +24,13 @@ import typer
 from colab_cli.auth import AuthProvider, get_credentials
 from colab_cli.client import Client, Prod, RuntimeProxyInfo
 from colab_cli.history import HistoryLogger
-from colab_cli.state import SessionState, StateStore, SettingsStore
+from colab_cli.state import (
+    SessionState,
+    StateStore,
+    SettingsStore,
+    make_private,
+    private_opener,
+)
 
 # Headroom so a token doesn't expire mid-command.
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
@@ -194,7 +201,12 @@ def setup_logging(log_to_stderr: bool):
 
     log_dir = os.path.expanduser("~/.config/colab-cli")
     os.makedirs(log_dir, exist_ok=True)
-    file_handler = logging.FileHandler(os.path.join(log_dir, "colab.log"))
+    log_path = os.path.join(log_dir, "colab.log")
+    # FileHandler takes no file mode, so create the file owner-only first.
+    with contextlib.suppress(OSError):
+        open(log_path, "a", opener=private_opener).close()
+    make_private(log_path)
+    file_handler = logging.FileHandler(log_path)
     file_handler.setFormatter(logging.Formatter(log_format))
     logger.addHandler(file_handler)
 
