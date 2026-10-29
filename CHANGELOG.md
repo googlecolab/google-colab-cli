@@ -21,6 +21,10 @@ below corresponds to a tag of the same name.
   `sessions.json`, `settings.json` and session history files readable only by
   their owner, and tighten copies that older versions left readable by others
   the next time the CLI uses them.
+- **security:** Stop writing access tokens, runtime proxy tokens, auth headers
+  and cookies to the debug log. Logs written by older versions may contain
+  credentials and can be deleted; if other users could read an old log, revoke
+  the CLI's access in your Google Account and sign in again.
 
 ## [0.7.1] - 2026-09-14
 

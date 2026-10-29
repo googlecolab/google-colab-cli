@@ -1,5 +1,6 @@
 ---
 log:
+2026-10-29: The debug log (`colab.log` and `--logtostderr`) masks access tokens, runtime proxy tokens, auth headers and cookies; `jupyter_kernel_client` logs at INFO so kernel stdin replies are not recorded.
 2026-10-29: `sessions.json`, `settings.json`, `colab.log` and session history files are created with mode 0600, and existing copies are tightened to 0600 the next time the CLI uses them (history files whenever the history logger starts).
 2026-10-21: Stored OAuth2 credentials in the OS native keyring via the `keyring` library instead of `~/.config/colab-cli/token.json`, falling back to `_run_remote_flow` if keyring is inaccessible. Keyring failures are reported on stderr, and an existing `token.json` is migrated into the keyring and then deleted (or deleted outright if the keyring already has a token).
 2026-10-14: Added configurable HTTP request timeouts and bounded allocation retries. Uncertain allocation POSTs are reconciled by GET using the same notebook hash before resubmission.
