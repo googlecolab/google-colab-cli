@@ -18,25 +18,31 @@ Why this file exists: the mocked suite in tests/test_ssh.py mocks the websocket
 at the boundary (`_connect_websocket`, `websocket.WebSocket.connect`, or
 `_bridge_proxy_mode`), so the one line that actually puts bytes on the wire --
 
-    ws.connect(url, header=[f"{_PUBKEY_HEADER}: {pubkey}"])   # ssh.py
+    ws.connect(url, header=header)   (in ssh.py)
 
 -- never runs under test. A wrong `_SSH_PATH` (e.g. the stale `/api/colab/ssh`)
 or a wrong `_PUBKEY_HEADER` would pass every mocked test while breaking every
 real connection. These tests close that gap: they stand up a real loopback
 WebSocket server, drive the client's real connect path (`_build_ws_url` +
 `_connect_websocket`, no mocks), and assert on the bytes the server actually
-received -- the request path, the runtime-proxy-token query param, and the
+received -- the request path, the runtime-proxy-token query param, the
+`X-Colab-Client-Agent` header, the two `colab-client-agent` query values, and the
 pubkey header name+value. The server contract mirrors the google3 backend
 (third_party/colab/sources/{server.ts,websocket_to_ssh.ts}): route
 `/colab/ssh`, header `x-colab-ssh-pubkey`, 400 `unsupported key type`, 429
 already-active-session.
 
-Fully offline (~0.15s); allocates no Colab runtime.
+Fully offline; allocates no Colab runtime.
 """
 
 import base64
 import hashlib
+import json
+import os
+import shlex
 import socket
+import subprocess
+import sys
 import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -237,7 +243,7 @@ def _session_for(port: int, token: str = TOKEN) -> SessionState:
 
 
 def _assert_wire_contract(
-    req: CapturedRequest, token: str, pubkey: str
+    req: CapturedRequest, token: str, pubkey: str, mode: str = "proxy"
 ) -> None:
     """Assert the captured upgrade request honors the SSH wire contract.
 
@@ -259,6 +265,13 @@ def _assert_wire_contract(
         f"header name on wire: {sent_name!r}"
     )
     assert sent_value == pubkey, f"pubkey not verbatim: {sent_value!r}"
+    assert req.target == (
+        f"/colab/ssh?colab-runtime-proxy-token={token}"
+        "&colab-client-agent=colab-cli"
+        f"&colab-client-agent=ssh-mode-{mode}"
+    ), f"wrong upgrade target: {req.target!r}"
+    agent = req.headers_lower.get("x-colab-client-agent")
+    assert agent == ("X-Colab-Client-Agent", "colab-cli"), f"agent header: {agent!r}"
 
 
 # --- the real-wire contract, success path ------------------------------------
@@ -303,6 +316,8 @@ def test_wire_contract_distinct_token_reaches_wire(ws_server_factory):
 
 # --- prove the contract catches the mutations the mocked suite misses ---------
 
+_AGENT = "COLAB_CLIENT_AGENT_HEADER"
+
 
 @pytest.mark.parametrize(
     ("attr", "value", "reached_wire"),
@@ -343,6 +358,33 @@ def test_mutation_reaches_wire_and_breaks_contract(
     assert reached_wire(req)  # the mutation really reached the wire
     with pytest.raises(AssertionError):
         _assert_wire_contract(req, TOKEN, PUBKEY)
+
+
+@pytest.mark.parametrize(
+    ("patches", "mode"),
+    [
+        ({_AGENT: {"key": "X-Colab-Client-Agnt", "value": "colab-cli"}}, "proxy"),
+        ({_AGENT: {"key": "X-Colab-Client-Agent", "value": "colab-cl"}}, "proxy"),
+        ({"_SSH_MODES": ("interactiv", "proxy")}, "interactive"),
+        ({"_SSH_MODES": ("interactive", "prox"), "_DEFAULT_SSH_MODE": "prox"}, "proxy"),
+    ],
+    ids=[
+        "wrong-agent-header-name",
+        "wrong-agent-value",
+        "misspelled-interactive-mode",
+        "misspelled-proxy-mode",
+    ],
+)
+def test_client_agent_mutation_breaks_contract(
+    ws_server_factory, monkeypatch, patches, mode
+):
+    for attr, value in patches.items():
+        monkeypatch.setattr(ssh, attr, value)
+    server = ws_server_factory(mode="handshake")
+    url = ssh._build_ws_url(_session_for(server.port), mode)
+    ssh._close_quietly(ssh._connect_websocket(url, PUBKEY))
+    with pytest.raises(AssertionError):
+        _assert_wire_contract(server.wait_for_request(), TOKEN, PUBKEY, mode)
 
 
 # --- real HTTP status mapping (no mocked exception) --------------------------
@@ -389,3 +431,67 @@ def test_real_status_mapping_via_loopback(
     # the rejection path.
     req = server.wait_for_request()
     _assert_wire_contract(req, TOKEN, PUBKEY)
+
+
+def _isolated_env(tmp_path, port: int) -> Dict[str, str]:
+    """A private HOME whose unexpired session and settings keep the CLI offline."""
+    home = tmp_path / "home"
+    config = home / ".config" / "colab-cli"
+    config.mkdir(parents=True)
+    session = _session_for(port).model_dump(mode="json")
+    session["token_expires_at"] = "2099-01-01T00:00:00+00:00"
+    (config / "sessions.json").write_text(json.dumps({session["name"]: session}))
+    (config / "settings.json").write_text(json.dumps({"enable_update_check": False}))
+    (home / ".ssh").mkdir()
+    (home / ".ssh" / "id_ed25519.pub").write_text(PUBKEY + "\n")
+    return {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+
+
+def _run_cli(argv: List[str], env: Dict[str, str]):
+    return subprocess.run(
+        argv,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+_CLI = [sys.executable, "-m", "colab_cli.cli"]
+
+
+def test_interactive_ssh_reinvocation_sends_interactive_mode(
+    ws_server_factory, tmp_path, mocker
+):
+    """Plain `colab ssh`: the ProxyCommand it hands to ssh tags the handshake."""
+    server = ws_server_factory(mode="handshake")
+    env = _isolated_env(tmp_path, server.port)
+    mocker.patch.object(ssh.sys, "platform", "linux")
+    call = mocker.patch.object(ssh.subprocess, "call", return_value=0)
+
+    ssh._run_interactive_ssh(_session_for(server.port), None)
+    ssh_argv = call.call_args.args[0]
+    proxy_command = next(
+        arg.split("=", 1)[1] for arg in ssh_argv if arg.startswith("ProxyCommand=")
+    )
+    result = _run_cli(shlex.split(proxy_command), env)
+
+    assert result.returncode == 0, result.stderr
+    _assert_wire_contract(server.wait_for_request(), TOKEN, PUBKEY, "interactive")
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [[], ["--colab-internal-mode", "interactive&colab-runtime-proxy-token=evil"]],
+    ids=["no-mode", "hostile-mode"],
+)
+def test_user_proxy_command_sends_proxy_mode(ws_server_factory, tmp_path, extra):
+    """A user-written ProxyCommand, or an unknown hidden mode, sends `proxy`."""
+    server = ws_server_factory(mode="handshake")
+    env = _isolated_env(tmp_path, server.port)
+
+    result = _run_cli([*_CLI, "ssh", "--proxy-mode", "-s", "wire-test", *extra], env)
+
+    assert result.returncode == 0, result.stderr
+    _assert_wire_contract(server.wait_for_request(), TOKEN, PUBKEY, "proxy")

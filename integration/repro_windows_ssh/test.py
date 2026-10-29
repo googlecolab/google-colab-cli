@@ -70,7 +70,7 @@ def main():
                 raise RuntimeError("Created session missing from local state")
             endpoint = session.endpoint
             print(f"Created endpoint: {endpoint}", flush=True)
-            proxy = _proxy_command(session, key) + " --rm"
+            proxy = _proxy_command(session, key, "proxy") + " --rm"
             args = _ssh_base_args(proxy, key)
             args.extend(
                 [

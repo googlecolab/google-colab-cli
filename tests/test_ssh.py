@@ -314,7 +314,7 @@ def test_proxy_command_round_trips_through_the_shell(name, identity, mocker):
     literal argument, never as a new word or a substitution.
     """
     mocker.patch.object(ssh_module.sys, "platform", "linux")
-    cmd = ssh_module._proxy_command(_make_session(name=name), identity)
+    cmd = ssh_module._proxy_command(_make_session(name=name), identity, "interactive")
     argv = shlex.split(cmd)
 
     assert argv[:7] == [
@@ -326,10 +326,11 @@ def test_proxy_command_round_trips_through_the_shell(name, identity, mocker):
         "-s",
         name,
     ]
+    mode_args = ["--colab-internal-mode", "interactive"]
     if identity:
-        assert argv[7:] == ["--identity", identity]
+        assert argv[7:] == ["--identity", identity, *mode_args]
     else:
-        assert len(argv) == 7
+        assert argv[7:] == mode_args
 
 
 # --- session resolution ------------------------------------------------------
@@ -487,3 +488,13 @@ def test_ssh_handshake_400_emits_actionable_message(
     assert result.exit_code == 1
     assert "unsupported key type" in result.stderr
     assert "ssh-keygen -t ed25519" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("argv", "code"), [(["--help"], 0), (["--ssh", "-s", "x"], 2), (["--high-men"], 2)]
+)
+def test_hidden_mode_option_stays_out_of_help_and_suggestions(argv, code):
+    result = runner.invoke(app, ["ssh", *argv])
+    assert result.exit_code == code
+    assert "ssh-mode" not in result.output
+    assert "--colab-internal-mode" not in result.output

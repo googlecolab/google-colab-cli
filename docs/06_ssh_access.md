@@ -1,5 +1,6 @@
 ---
 log:
+2026-10-29: Every `/colab/ssh` handshake now sends `X-Colab-Client-Agent: colab-cli` and the two `colab-client-agent` query values `colab-cli` and `ssh-mode-<mode>`. The mode is `interactive` for plain `colab ssh`, which passes it to its ProxyCommand re-invocation through a hidden `--colab-internal-mode` option, and `proxy` otherwise.
 2026-10-20: Fixed Windows SSH ProxyCommand quoting, local null-device selection, and cleanup signal registration. Added native Windows regression and live integration tests; verified the SSH suite on Windows, Linux, and macOS, plus live Windows remote execution and runtime cleanup.
 2026-09-25: Cleaned up keep-alive daemon references in session creation and teardown documentation.
 2026-08-09: Added `--high-mem` passthrough when `colab ssh` auto-creates a runtime (forwards to `colab new --high-mem`).
@@ -65,9 +66,11 @@ remote command, so to also land in `/content` add `RequestTTY yes` and
    and sends the resolved public key verbatim in the `X-Colab-Ssh-Pubkey` header
    (no transformation -- the bytes the user controls are exactly what the server
    receives). Only `ssh-ed25519` / `ecdsa-sha2-nistp{256,384,521}` keys are
-   accepted.
+   accepted. It also sends `X-Colab-Client-Agent: colab-cli` and appends
+   `&colab-client-agent=colab-cli&colab-client-agent=ssh-mode-<mode>`: `interactive`
+   for plain `colab ssh`, `proxy` for a user-written `ProxyCommand` or an IDE.
 3. **Interactive shell**: Spawns the system `ssh` binary with the CLI re-invoked
-   as its own `ProxyCommand` (`python -m colab_cli.cli ssh --proxy-mode`), so the
+   as its own `ProxyCommand` (`python -m colab_cli.cli ssh --proxy-mode --colab-internal-mode interactive`), so the
    WebSocket bridge and the interactive shell share one code path. It forces a
    PTY (`-t`) and runs `cd /content 2>/dev/null; exec $SHELL -l` so you land in
    `/content` (Colab's working dir) rather than root's home; a missing `/content`
@@ -118,10 +121,13 @@ remote command, so to also land in `/content` add `RequestTTY yes` and
 
 ### Wire-contract tests (`tests/test_ssh_wire_contract.py`)
 Stands up a loopback WebSocket server and drives the real connect path (no mock)
-to assert the request path, the `colab-runtime-proxy-token` query param, and the
-`X-Colab-Ssh-Pubkey` header reach the wire verbatim. Includes mutation tests that
-fail if `_SSH_PATH`/`_PUBKEY_HEADER` drift, plus real HTTP 400/429 mapping via a
-genuine `WebSocketBadStatusException`.
+to assert the request path, the `colab-runtime-proxy-token` query param, the
+`X-Colab-Ssh-Pubkey` header, the `X-Colab-Client-Agent` header and the two
+`colab-client-agent` query values reach the wire verbatim. Includes mutation tests
+that fail if `_SSH_PATH`/`_PUBKEY_HEADER`, the client-agent header or a mode value
+drift, real HTTP 400/429 mapping via a genuine `WebSocketBadStatusException`, and
+real CLI child processes for plain `colab ssh` (`interactive`) and a user
+`ProxyCommand` (`proxy`).
 
 ### Auto-create & proxy-mode tests (`tests/test_ssh_autocreate.py`)
 Bare `colab ssh` create vs reuse vs ambiguous; `--gpu/--tpu` passthrough; `--rm`
