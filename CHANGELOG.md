@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The package version is derived from the git tag via `hatch-vcs`; each release
 below corresponds to a tag of the same name.
 
+## [Unreleased]
+
+### Changed
+
+- **ssh:** Every `colab ssh` WebSocket now sends `X-Colab-Client-Agent: colab-cli` and the query values `colab-client-agent=colab-cli` and `colab-client-agent=ssh-mode-<mode>`, where the mode is `interactive` for plain `colab ssh` and `proxy` otherwise.
+
 ## [0.7.1] - 2026-09-14
 
 ### Fixed

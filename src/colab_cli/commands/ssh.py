@@ -46,6 +46,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 import uuid
 
+from colab_cli.client import COLAB_CLIENT_AGENT_HEADER
 from colab_cli.state import SessionState
 import typer
 from typing_extensions import Annotated
@@ -58,6 +59,8 @@ _PUBKEY_HEADER = "X-Colab-Ssh-Pubkey"
 _SSH_HOST = "root@colab-runtime"
 # Colab's standard working directory; land here instead of root's home.
 _DEFAULT_REMOTE_DIR = "/content"
+_DEFAULT_SSH_MODE = "proxy"
+_SSH_MODES = ("interactive", _DEFAULT_SSH_MODE)
 
 
 def _pubkey_from_identity(identity: str) -> str:
@@ -214,13 +217,17 @@ def _stop_session(name: str) -> None:
         typer.echo(f"[colab] --rm: failed to stop '{name}': {e}", err=True)
 
 
-def _build_ws_url(session: SessionState) -> str:
+def _build_ws_url(session: SessionState, mode: str = _DEFAULT_SSH_MODE) -> str:
     """Builds the WebSocket URL for the session's SSH endpoint."""
+    if mode not in _SSH_MODES:
+        mode = _DEFAULT_SSH_MODE
     parsed = urlparse(session.url)
     scheme = "wss" if parsed.scheme == "https" else "ws"
     return (
         f"{scheme}://{parsed.netloc}{_SSH_PATH}"
         f"?colab-runtime-proxy-token={session.token}"
+        f"&colab-client-agent={COLAB_CLIENT_AGENT_HEADER['value']}"
+        f"&colab-client-agent=ssh-mode-{mode}"
     )
 
 
@@ -309,8 +316,10 @@ def _connect_websocket(url: str, pubkey: str) -> websocket.WebSocket:
         printing an actionable message.
     """
     ws = websocket.WebSocket()
+    agent = COLAB_CLIENT_AGENT_HEADER
+    header = [f"{_PUBKEY_HEADER}: {pubkey}", f"{agent['key']}: {agent['value']}"]
     try:
-        ws.connect(url, header=[f"{_PUBKEY_HEADER}: {pubkey}"])
+        ws.connect(url, header=header)
         return ws
     except websocket.WebSocketBadStatusException as e:
         status = getattr(e, "status_code", None)
@@ -388,7 +397,7 @@ def _bridge_proxy_mode(ws: websocket.WebSocket) -> int:
     return 0
 
 
-def _proxy_command(session: SessionState, identity: Optional[str]) -> str:
+def _proxy_command(session: SessionState, identity: Optional[str], mode: str) -> str:
     """Builds the OpenSSH ProxyCommand that bridges this session's WebSocket.
 
     Re-invoked by the interactive shell in ``--proxy-mode``. The session
@@ -405,6 +414,7 @@ def _proxy_command(session: SessionState, identity: Optional[str]) -> str:
     ]
     if identity:
         self_cmd.extend(["--identity", identity])
+    self_cmd.extend(["--colab-internal-mode", mode])
     if sys.platform == "win32":
         return subprocess.list2cmdline(self_cmd)
     return shlex.join(self_cmd)
@@ -447,7 +457,9 @@ def _run_interactive_ssh(session: SessionState, identity: Optional[str]) -> int:
     Returns:
       The exit code of the ``ssh`` subprocess.
     """
-    ssh_args = _ssh_base_args(_proxy_command(session, identity), identity)
+    ssh_args = _ssh_base_args(
+        _proxy_command(session, identity, "interactive"), identity
+    )
     ssh_args.append("-t")
     ssh_args.append(_SSH_HOST)
     ssh_args.append(
@@ -555,7 +567,7 @@ def _install_rm_signal_handlers(do_rm: Callable[[], None]) -> None:
 
 
 def _run_proxy_bridge(
-    s: SessionState, identity: Optional[str], rm: bool
+    s: SessionState, identity: Optional[str], rm: bool, mode: str = _DEFAULT_SSH_MODE
 ) -> int:
     """Runs the ``--proxy-mode`` WebSocket-stdio bridge, honoring ``--rm``.
 
@@ -564,6 +576,7 @@ def _run_proxy_bridge(
       identity: Optional private key path for the pubkey header.
       rm: If True, stop the session when the bridge closes or a terminating
         signal arrives.
+      mode: The ssh mode to tag the WebSocket with.
 
     Returns:
       The bridge exit code.
@@ -583,7 +596,7 @@ def _run_proxy_bridge(
         _install_rm_signal_handlers(_do_rm)
 
     pubkey = _resolve_pubkey(identity)
-    ws = _connect_websocket(_build_ws_url(s), pubkey)
+    ws = _connect_websocket(_build_ws_url(s, mode), pubkey)
     try:
         return _bridge_proxy_mode(ws)
     finally:
@@ -688,6 +701,9 @@ def ssh(
             ),
         ),
     ] = False,
+    ssh_mode: Annotated[
+        str, typer.Option("--colab-internal-mode", hidden=True)
+    ] = _DEFAULT_SSH_MODE,
 ):
     """Connect to a Colab runtime via SSH.
 
@@ -700,7 +716,7 @@ def ssh(
     if proxy_mode:
         s, created = _select_proxy_session(session, gpu, tpu, high_mem=high_mem)
         _warn_accelerator_ignored(gpu, tpu, created, high_mem=high_mem)
-        raise typer.Exit(code=_run_proxy_bridge(s, identity, rm))
+        raise typer.Exit(code=_run_proxy_bridge(s, identity, rm, ssh_mode))
 
     s, created = _select_interactive_session(session, gpu, tpu, high_mem=high_mem)
     _warn_accelerator_ignored(gpu, tpu, created, high_mem=high_mem)

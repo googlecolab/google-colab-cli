@@ -62,7 +62,7 @@ def test_proxy_command_launches_with_literal_arguments(
         "import json, sys; print(json.dumps(sys.argv[1:]))", encoding="utf-8"
     )
     monkeypatch.setattr(ssh.sys, "executable", windows_python)
-    command = ssh._proxy_command(SimpleNamespace(name=name), identity)
+    command = ssh._proxy_command(SimpleNamespace(name=name), identity, "interactive")
     env = {**os.environ, "PYTHONPATH": str(tmp_path)}
     result = subprocess.run(
         command,
@@ -76,6 +76,7 @@ def test_proxy_command_launches_with_literal_arguments(
     expected = ["ssh", "--proxy-mode", "-s", name]
     if identity:
         expected.extend(["--identity", identity])
+    expected.extend(["--colab-internal-mode", "interactive"])
     assert json.loads(result.stdout) == expected
 
 
@@ -96,7 +97,9 @@ def test_windows_openssh_starts_proxy(tmp_path, windows_python, monkeypatch):
     argv_file = tmp_path / "argv.json"
     monkeypatch.setattr(ssh.sys, "executable", windows_python)
     command = ssh._proxy_command(
-        SimpleNamespace(name="session with spaces"), "C:\\SSH keys\\id_ed25519"
+        SimpleNamespace(name="session with spaces"),
+        "C:\\SSH keys\\id_ed25519",
+        "interactive",
     )
     env = {**os.environ, "PYTHONPATH": str(tmp_path), "COLAB_TEST_ARGV": str(argv_file)}
     # The stub exits before the handshake; only the actual ProxyCommand launch
@@ -126,6 +129,8 @@ def test_windows_openssh_starts_proxy(tmp_path, windows_python, monkeypatch):
         "session with spaces",
         "--identity",
         "C:\\SSH keys\\id_ed25519",
+        "--colab-internal-mode",
+        "interactive",
     ]
 
 
