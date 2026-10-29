@@ -405,8 +405,8 @@ def test_client_agent_mutation_breaks_contract(
         (
             429,
             "Too Many Requests",
-            b'{"error":"already-active-session","limit":3}',
-            "3 of 3 SSH sessions in use",
+            b'{"error":"already-active-session","limit":2}',
+            "2 of 2 SSH sessions in use",
         ),
     ],
 )

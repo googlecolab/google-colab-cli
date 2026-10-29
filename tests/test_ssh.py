@@ -190,13 +190,13 @@ _LIMIT_1_TEXT = (
     "this runtime. Close another `colab ssh` or IDE connection to it and "
     "retry. The limit depends on your Colab plan."
 )
-_LIMIT_3_TEXT = (
-    "SSH session limit reached (HTTP 429): 3 of 3 SSH sessions in use on "
+_LIMIT_2_TEXT = (
+    "SSH session limit reached (HTTP 429): 2 of 2 SSH sessions in use on "
     "this runtime. Close another `colab ssh` or IDE connection to it and "
     "retry. The limit depends on your Colab plan."
 )
-_LIMIT_5_TEXT = (
-    "SSH session limit reached (HTTP 429): 5 of 5 SSH sessions in use on "
+_LIMIT_4_TEXT = (
+    "SSH session limit reached (HTTP 429): 4 of 4 SSH sessions in use on "
     "this runtime. Close another `colab ssh` or IDE connection to it and "
     "retry. The limit depends on your Colab plan."
 )
@@ -206,10 +206,10 @@ _LIMIT_5_TEXT = (
     ("limit", "expected"),
     [
         (1, _LIMIT_1_TEXT),
-        (3, _LIMIT_3_TEXT),
-        (5, _LIMIT_5_TEXT),
+        (2, _LIMIT_2_TEXT),
+        (4, _LIMIT_4_TEXT),
     ],
-    ids=["limit-1", "limit-3", "limit-5"],
+    ids=["limit-1", "limit-2", "limit-4"],
 )
 def test_explain_handshake_failure_session_limit(limit, expected):
     body = b"%s%d}" % (_LIMIT_BODY_PREFIX, limit)
@@ -234,9 +234,9 @@ def test_explain_handshake_failure_session_limit(limit, expected):
         b"<html><body>Too Many Requests</body></html>",
         b"",
         _LIMIT_BODY_PREFIX + b"\xff\xfe}",
-        b'[{"error":"already-active-session","limit":3}]',
-        b'{"limit":3}',
-        b'{"error":"rate-limited","limit":3}',
+        b'[{"error":"already-active-session","limit":2}]',
+        b'{"limit":2}',
+        b'{"error":"rate-limited","limit":2}',
     ],
     ids=[
         "no-limit",
@@ -265,16 +265,16 @@ def test_explain_handshake_failure_429_without_usable_limit(body):
 
 def test_explain_handshake_failure_session_limit_past_200_char_snippet():
     pad = b"x" * 200
-    body = b'{"error":"already-active-session","pad":"%s","limit":3}' % pad
+    body = b'{"error":"already-active-session","pad":"%s","limit":2}' % pad
     assert body.index(b'"limit"') > 200
     out = ssh_module._explain_handshake_failure(429, body)
-    assert out == _LIMIT_3_TEXT
+    assert out == _LIMIT_2_TEXT
 
 
 def test_explain_handshake_failure_session_limit_invalid_utf8_elsewhere():
-    body = b'{"error":"already-active-session","pad":"\xff","limit":3}'
+    body = b'{"error":"already-active-session","pad":"\xff","limit":2}'
     out = ssh_module._explain_handshake_failure(429, body)
-    assert out == _LIMIT_3_TEXT
+    assert out == _LIMIT_2_TEXT
 
 
 def test_explain_handshake_failure_decodes_str_body():
