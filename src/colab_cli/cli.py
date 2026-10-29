@@ -97,6 +97,8 @@ def callback(
     #     pipelines.
     #   - `whoami`: developer-only debugging tool; banner would obscure the
     #     auth/scope info the user invoked it to see.
+    #   - `ssh` when stdout is not a terminal: piped `-- CMD` output and the
+    #     ProxyCommand's ssh byte stream must stay byte-exact.
     _AUTO_UPDATE_SUPPRESSED = {
         "update",
         "version",
@@ -110,7 +112,9 @@ def callback(
         "skill",
         "SKILL",
     }
-    if ctx.invoked_subcommand not in _AUTO_UPDATE_SUPPRESSED:
+    subcommand = ctx.invoked_subcommand
+    piped_ssh = subcommand == "ssh" and not execution.is_stdout_tty()
+    if subcommand not in _AUTO_UPDATE_SUPPRESSED and not piped_ssh:
         auto_update.run_background_check()
 
 
