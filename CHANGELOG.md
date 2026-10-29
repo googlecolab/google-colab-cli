@@ -14,6 +14,10 @@ below corresponds to a tag of the same name.
 
 - **ssh:** Every `colab ssh` WebSocket now sends `X-Colab-Client-Agent: colab-cli` and the query values `colab-client-agent=colab-cli` and `colab-client-agent=ssh-mode-<mode>`, where the mode is `interactive` for plain `colab ssh` and `proxy` otherwise.
 
+### Fixed
+
+- **ssh:** `colab --config FILE ssh` and `colab --auth adc ssh` now keep those options in the ProxyCommand that `colab ssh` starts, so it uses the same sessions file and auth provider instead of the defaults.
+
 ## [0.7.1] - 2026-09-14
 
 ### Fixed

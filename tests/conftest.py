@@ -16,6 +16,8 @@ import pytest
 import typer
 from unittest.mock import MagicMock
 
+from colab_cli.auth import AuthProvider
+
 
 @pytest.fixture(autouse=True)
 def mock_common_state(mocker):
@@ -26,6 +28,8 @@ def mock_common_state(mocker):
     mock_state.store = MagicMock()
     mock_state.client = MagicMock()
     mock_state.history = MagicMock()
+    mock_state.auth_provider = AuthProvider.OAUTH2
+    mock_state.config_path = None
 
     # Token refresh is covered in test_common.py; elsewhere just read the store.
     def get_session(name, ignore_missing_session=False):

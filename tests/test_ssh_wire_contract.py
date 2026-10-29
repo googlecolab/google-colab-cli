@@ -47,10 +47,12 @@ import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from colab_cli.cli import app
 from colab_cli.commands import ssh
 from colab_cli.state import SessionState
 import pytest
 import typer
+from typer.testing import CliRunner
 
 # A structurally-valid ed25519 public key. ed25519 is the only key type the
 # server accepts (RSA .pub tokens are `ssh-rsa`, rejected with 400 -- see
@@ -495,3 +497,32 @@ def test_user_proxy_command_sends_proxy_mode(ws_server_factory, tmp_path, extra)
 
     assert result.returncode == 0, result.stderr
     _assert_wire_contract(server.wait_for_request(), TOKEN, PUBKEY, "proxy")
+
+
+def test_proxy_command_child_reads_the_parent_config(
+    ws_server_factory, tmp_path, mocker, monkeypatch, mock_common_state
+):
+    """`colab --config ALT ssh -s S`: the child resolves S from ALT."""
+    server = ws_server_factory(mode="handshake")
+    env = _isolated_env(tmp_path, port=9)
+    alt = tmp_path / "alt.json"
+    session = _session_for(server.port).model_dump(mode="json")
+    session["token_expires_at"] = "2099-01-01T00:00:00+00:00"
+    alt.write_text(json.dumps({session["name"]: session}))
+    monkeypatch.setattr("colab_cli.cli.state", mock_common_state)
+    mock_common_state.store.get.return_value = _session_for(server.port)
+    mocker.patch("colab_cli.cli.auto_update.run_background_check")
+    mocker.patch.object(ssh.sys, "platform", "linux")
+    call = mocker.patch.object(ssh.subprocess, "call", return_value=0)
+
+    argv = ["--config", str(alt), "ssh", "-s", "wire-test"]
+    assert CliRunner().invoke(app, argv).exit_code == 0
+    proxy_command = next(
+        arg.split("=", 1)[1]
+        for arg in call.call_args.args[0]
+        if arg.startswith("ProxyCommand=")
+    )
+    result = _run_cli(shlex.split(proxy_command), env)
+
+    assert result.returncode == 0, result.stderr
+    _assert_wire_contract(server.wait_for_request(), TOKEN, PUBKEY, "interactive")

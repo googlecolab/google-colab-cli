@@ -46,6 +46,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 import uuid
 
+from colab_cli.auth import AuthProvider
 from colab_cli.client import COLAB_CLIENT_AGENT_HEADER
 from colab_cli.state import SessionState
 import typer
@@ -401,23 +402,24 @@ def _proxy_command(session: SessionState, identity: Optional[str], mode: str) ->
     """Builds the OpenSSH ProxyCommand that bridges this session's WebSocket.
 
     Re-invoked by the interactive shell in ``--proxy-mode``. The session
-    already exists by then, so only ``-s NAME`` (plus identity) is needed.
+    already exists by then, so it passes ``-s NAME`` and the identity, and
+    keeps a non-default global ``--auth`` or ``--config`` because the child is
+    a fresh CLI.
     """
-    self_cmd = [
-        sys.executable,
-        "-m",
-        "colab_cli.cli",
-        "ssh",
-        "--proxy-mode",
-        "-s",
-        session.name,
-    ]
+    from colab_cli.common import state
+
+    argv = [sys.executable, "-m", "colab_cli.cli"]
+    if state.auth_provider is not AuthProvider.OAUTH2:
+        argv += ["--auth", state.auth_provider.value]
+    if state.config_path:
+        argv += ["--config", os.path.abspath(state.config_path)]
+    argv += ["ssh", "--proxy-mode", "-s", session.name]
     if identity:
-        self_cmd.extend(["--identity", identity])
-    self_cmd.extend(["--colab-internal-mode", mode])
+        argv += ["--identity", identity]
+    argv += ["--colab-internal-mode", mode]
     if sys.platform == "win32":
-        return subprocess.list2cmdline(self_cmd)
-    return shlex.join(self_cmd)
+        return subprocess.list2cmdline(argv)
+    return shlex.join(argv)
 
 
 def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:

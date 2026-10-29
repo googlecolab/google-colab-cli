@@ -1,5 +1,6 @@
 ---
 log:
+2026-10-29: The ProxyCommand that `colab ssh` starts now keeps a non-default global `--auth` and `--config` (as an absolute path), so `colab --config ALT ssh -s S` bridges S from ALT instead of the default sessions file.
 2026-10-29: Every `/colab/ssh` handshake now sends `X-Colab-Client-Agent: colab-cli` and the two `colab-client-agent` query values `colab-cli` and `ssh-mode-<mode>`. The mode is `interactive` for plain `colab ssh`, which passes it to its ProxyCommand re-invocation through a hidden `--colab-internal-mode` option, and `proxy` otherwise.
 2026-10-20: Fixed Windows SSH ProxyCommand quoting, local null-device selection, and cleanup signal registration. Added native Windows regression and live integration tests; verified the SSH suite on Windows, Linux, and macOS, plus live Windows remote execution and runtime cleanup.
 2026-09-25: Cleaned up keep-alive daemon references in session creation and teardown documentation.
