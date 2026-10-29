@@ -45,6 +45,17 @@ class Settings(BaseModel):
     latest_version: Optional[str] = None
 
 
+def private_opener(path: str, flags: int) -> int:
+    """`open()` opener that creates new files readable only by the owner."""
+    return os.open(path, flags, 0o600)
+
+
+def make_private(path: str) -> None:
+    """Best-effort chmod of an existing file to owner-only (0600)."""
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o600)
+
+
 class _LockedFileStore:
     def __init__(self, path: str):
         self.path = path
@@ -58,6 +69,7 @@ class _LockedFileStore:
         # lock. We want them to actually serialize via the underlying file lock.
         self._rwlock = filelock.ReadWriteLock(self.lock_path, is_singleton=False)
         self._ensure_dir()
+        make_private(self.path)
 
     def _ensure_dir(self):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -81,7 +93,7 @@ class _LockedFileStore:
     @contextlib.contextmanager
     def _lock_exclusive(self) -> Iterator[IO]:
         with self._rwlock.write_lock():
-            with open(self.path, "a+") as f:
+            with open(self.path, "a+", opener=private_opener) as f:
                 yield f
 
 

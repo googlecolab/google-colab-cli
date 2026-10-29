@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -23,7 +25,13 @@ import typer
 from colab_cli.auth import AuthProvider, get_credentials
 from colab_cli.client import Client, Prod, RuntimeProxyInfo
 from colab_cli.history import HistoryLogger
-from colab_cli.state import SessionState, StateStore, SettingsStore
+from colab_cli.state import (
+    SessionState,
+    StateStore,
+    SettingsStore,
+    make_private,
+    private_opener,
+)
 
 # Headroom so a token doesn't expire mid-command.
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
@@ -182,6 +190,35 @@ class State:
 
 state = State()
 
+_SECRET_KEY = r"(?:[\w-]*token|code|code_verifier|client_secret)"
+# Each alternative has exactly one capturing group, the prefix to keep:
+# _RedactingFormatter keeps m.group(m.lastindex) and masks the rest.
+_SECRET_RE = re.compile(
+    rf"""
+    # Credential header in a dict, tuple, bytes or raw line; keeps the scheme.
+    (\b(?:authorization|cookie|set-cookie|x-colab-runtime-proxy-token
+        |x-goog-colab-token)(?:['"]?\s*:|['"]\s*,)\s*(?:b?['"])?
+        (?:(?:bearer|basic)\s+)?)[^'"\r\n]+
+    # Quoted token key in JSON or a dict repr, also bytes or escaped JSON.
+    |((?<![\w-])b?\\?['"]{_SECRET_KEY}\\?['"]\s*:\s*\\?['"])[^'"\\]+
+    # Token key in a URL query or form body, also percent-encoded.
+    |((?<![\w-]){_SECRET_KEY}(?:=|%(?:25)?3D))
+        (?:[^&\s'"#%]|%(?!(?:25)?26)[0-9a-f]{{2}})+
+    # Bearer or Basic credential anywhere in free text.
+    |(\b(?:bearer|basic)\s+)[\w.~+/=-]{{8,}}
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+class _RedactingFormatter(logging.Formatter):
+    """Formatter that masks tokens, auth headers and cookies in its output."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return _SECRET_RE.sub(
+            lambda m: m.group(m.lastindex) + "REDACTED", super().format(record)
+        )
+
 
 def setup_logging(log_to_stderr: bool):
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -191,14 +228,20 @@ def setup_logging(log_to_stderr: bool):
     requests_log = logging.getLogger("urllib3")
     requests_log.setLevel(logging.DEBUG)
     requests_log.propagate = True
+    logging.getLogger("jupyter_kernel_client").setLevel(logging.INFO)
 
     log_dir = os.path.expanduser("~/.config/colab-cli")
     os.makedirs(log_dir, exist_ok=True)
-    file_handler = logging.FileHandler(os.path.join(log_dir, "colab.log"))
-    file_handler.setFormatter(logging.Formatter(log_format))
+    log_path = os.path.join(log_dir, "colab.log")
+    # FileHandler takes no file mode, so create the file owner-only first.
+    with contextlib.suppress(OSError):
+        open(log_path, "a", opener=private_opener).close()
+    make_private(log_path)
+    file_handler = logging.FileHandler(log_path)
+    file_handler.setFormatter(_RedactingFormatter(log_format))
     logger.addHandler(file_handler)
 
     if log_to_stderr:
         stream_handler = logging.StreamHandler(sys.stderr)
-        stream_handler.setFormatter(logging.Formatter(log_format))
+        stream_handler.setFormatter(_RedactingFormatter(log_format))
         logger.addHandler(stream_handler)
