@@ -16,7 +16,9 @@ import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import click
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from colab_cli.cli import app
@@ -384,7 +386,7 @@ def _extract_command_names(help_output: str) -> list[str]:
     inside the `╭─ Commands ─...` rich box. Returns names in the order they
     appear.
     """
-    lines = help_output.splitlines()
+    lines = click.unstyle(help_output).splitlines()
     in_commands = False
     names = []
     for line in lines:
@@ -437,18 +439,37 @@ def test_cli_no_args():
     assert result.exit_code in [0, 2]
 
 
-def test_cli_console(mock_store, mock_common_state):
-    mock_session_state = MagicMock()
-    mock_session_state.name = "s1"
-    mock_session_state.token = "t1"
-    mock_session_state.url = "http://test.com"
-    mock_store.get.return_value = mock_session_state
+def test_cli_console_removed():
+    """`colab console` stays removed: unregistered, absent from --help, rejected."""
+    assert "console" not in typer.main.get_command(app).commands
 
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0, result.output
+    names = _extract_command_names(result.output)
+    assert names, result.output
+    assert "ssh" in names, result.output
+    assert "console" not in names, result.output
+
+    result = runner.invoke(app, ["console"])
+    assert result.exit_code == 2, result.output
+    assert "No such command" in result.output, result.output
+
+
+def test_cli_exec_stdin_forwards_shell_escape(mock_store, mock_common_state):
+    mock_session = MagicMock()
+    mock_session.name = "s1"
+    mock_session.kernel_id = None
+    mock_session.session_id = None
+    mock_store.get.return_value = mock_session
     mock_common_state.resolve_session.return_value = "s1"
-    with patch("colab_cli.commands.execution.connect_console") as mock_connect:
-        result = runner.invoke(app, ["console", "-s", "s1"])
-        assert result.exit_code == 0
-        mock_connect.assert_called_once_with(mock_session_state)
+
+    with patch("colab_cli.commands.execution.ColabRuntime") as mock_runtime_class:
+        execute_code = mock_runtime_class.return_value.execute_code
+        execute_code.return_value = []
+        result = runner.invoke(app, ["exec", "-s", "s1"], input="!echo hi")
+
+    assert result.exit_code == 0, result.output
+    assert execute_code.call_args.args[0] == "!echo hi"
 
 
 @patch("colab_cli.commands.files.ContentsClient")

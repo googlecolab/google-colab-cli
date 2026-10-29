@@ -1,5 +1,6 @@
 ---
 log:
+2026-10-29: Removed the `colab console` subcommand; the long-lived connections that skip mid-session token refresh are now `repl` and `ssh`.
 2026-10-21: Stored OAuth2 credentials in the OS native keyring via the `keyring` library instead of `~/.config/colab-cli/token.json`, falling back to `_run_remote_flow` if keyring is inaccessible. Keyring failures are reported on stderr, and an existing `token.json` is migrated into the keyring and then deleted (or deleted outright if the keyring already has a token).
 2026-10-14: Added configurable HTTP request timeouts and bounded allocation retries. Uncertain allocation POSTs are reconciled by GET using the same notebook hash before resubmission.
 2026-09-25: Runtime proxy tokens are now refreshed before expiry. `SessionState` persists `token_expires_at`, and `State.get_session` re-fetches the token via `GET /tun/m/assignments` when it's within 5 minutes of expiring.
@@ -112,7 +113,7 @@ end to end; mocked timeouts alone do not establish backend compatibility.
 VM liveness is automatically maintained by the Colab backend based on active kernel executions and interactions. The CLI runs no keep-alive daemon. A session persists until explicitly terminated via `colab stop` or until the backend reclaims it due to inactivity.
 
 ### 6. Runtime Proxy Token Refresh
-The runtime proxy token (`runtimeProxyInfo.token`) authenticates every request to the VM and expires after `tokenExpiresInSeconds` (1 hour). `SessionState.token_expires_at` stores the absolute expiry, computed when the token is received. Commands that talk to the VM load their session through `State.get_session(name)`, which, when the token is missing an expiry or is within 5 minutes of it, calls `GET /tun/m/assignments`, takes the fresh token/URL for the matching endpoint, and persists it. If the endpoint is no longer assigned, the session is pruned. `sync_sessions` also writes back the fresh tokens it already fetches. Long-lived connections (`repl`, `console`, `ssh`) only present the token on initial connect and aren't refreshed mid-session.
+The runtime proxy token (`runtimeProxyInfo.token`) authenticates every request to the VM and expires after `tokenExpiresInSeconds` (1 hour). `SessionState.token_expires_at` stores the absolute expiry, computed when the token is received. Commands that talk to the VM load their session through `State.get_session(name)`, which, when the token is missing an expiry or is within 5 minutes of it, calls `GET /tun/m/assignments`, takes the fresh token/URL for the matching endpoint, and persists it. If the endpoint is no longer assigned, the session is pruned. `sync_sessions` also writes back the fresh tokens it already fetches. Long-lived connections (`repl`, `ssh`) only present the token on initial connect and aren't refreshed mid-session.
 
 ## TODO / Future Work
 - **Backend Sync**: Implement a way to reconcile the local `sessions.json` with the output of `colab sessions`.
