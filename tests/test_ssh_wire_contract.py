@@ -402,6 +402,12 @@ def test_client_agent_mutation_breaks_contract(
             b'{"error":"already-active-session"}',
             "Already-active SSH",
         ),
+        (
+            429,
+            "Too Many Requests",
+            b'{"error":"already-active-session","limit":2}',
+            "2 of 2 SSH sessions in use",
+        ),
     ],
 )
 def test_real_status_mapping_via_loopback(

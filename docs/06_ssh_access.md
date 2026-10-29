@@ -1,5 +1,6 @@
 ---
 log:
+2026-10-29: HTTP 429 now shows the server's SSH session limit ("N of N SSH sessions in use") when the body carries one.
 2026-10-29: The ProxyCommand that `colab ssh` starts now keeps a non-default global `--auth` and `--config` (as an absolute path), so `colab --config ALT ssh -s S` bridges S from ALT instead of the default sessions file.
 2026-10-29: Every `/colab/ssh` handshake now sends `X-Colab-Client-Agent: colab-cli` and the two `colab-client-agent` query values `colab-cli` and `ssh-mode-<mode>`. The mode is `interactive` for plain `colab ssh`, which passes it to its ProxyCommand re-invocation through a hidden `--colab-internal-mode` option, and `proxy` otherwise.
 2026-10-20: Fixed Windows SSH ProxyCommand quoting, local null-device selection, and cleanup signal registration. Added native Windows regression and live integration tests; verified the SSH suite on Windows, Linux, and macOS, plus live Windows remote execution and runtime cleanup.
@@ -103,7 +104,7 @@ remote command, so to also land in `/content` add `RequestTTY yes` and
    | 401 | Token invalid/expired — try `colab new` |
    | 403 | Forbidden — token lacks permission for this action (feature-off returns 404, not 403) |
    | 404 | SSH not exposed on this runtime — SSH is baked in at creation, so run `colab new` |
-   | 429 | Another `colab ssh` is already connected — disconnect first |
+   | 429 | Session limit reached: "N of N SSH sessions in use", and the limit depends on the Colab plan; without a usable limit in the body, another `colab ssh` is connected: disconnect it first |
    | 502 | Runtime `sshd` unreachable — runtime may be unhealthy |
    | other / none | Raw status or a network-check hint |
 
@@ -126,9 +127,9 @@ to assert the request path, the `colab-runtime-proxy-token` query param, the
 `X-Colab-Ssh-Pubkey` header, the `X-Colab-Client-Agent` header and the two
 `colab-client-agent` query values reach the wire verbatim. Includes mutation tests
 that fail if `_SSH_PATH`/`_PUBKEY_HEADER`, the client-agent header or a mode value
-drift, real HTTP 400/429 mapping via a genuine `WebSocketBadStatusException`, and
-real CLI child processes for plain `colab ssh` (`interactive`) and a user
-`ProxyCommand` (`proxy`).
+drift, real HTTP 400/429 mapping (including a 429 body with a limit) via a genuine
+`WebSocketBadStatusException`, and real CLI child processes for plain `colab ssh`
+(`interactive`) and a user `ProxyCommand` (`proxy`).
 
 ### Auto-create & proxy-mode tests (`tests/test_ssh_autocreate.py`)
 Bare `colab ssh` create vs reuse vs ambiguous; `--gpu/--tpu` passthrough; `--rm`
