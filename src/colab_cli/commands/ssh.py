@@ -35,6 +35,7 @@ the ``X-Colab-Ssh-Pubkey`` header. RSA keys are rejected by the server, so
 """
 
 import contextlib
+import json
 import os
 from pathlib import Path
 import shlex
@@ -62,6 +63,7 @@ _SSH_HOST = "root@colab-runtime"
 _DEFAULT_REMOTE_DIR = "/content"
 _DEFAULT_SSH_MODE = "proxy"
 _SSH_MODES = ("interactive", _DEFAULT_SSH_MODE)
+_MAX_SSH_SESSIONS = 5
 
 
 def _pubkey_from_identity(identity: str) -> str:
@@ -232,13 +234,49 @@ def _build_ws_url(session: SessionState, mode: str = _DEFAULT_SSH_MODE) -> str:
     )
 
 
+def _session_limit(body: bytes) -> Optional[int]:
+    """Returns the session limit from a 429 body, or None if there is none.
+
+    Args:
+      body: The raw HTTP 429 response body.
+
+    Returns:
+      The limit when the body is the server's ``already-active-session``
+      error with an integer limit from 1 to ``_MAX_SSH_SESSIONS``; otherwise
+      None.
+    """
+    try:
+        data = json.loads(body.decode("utf-8", errors="replace"))
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("error") != "already-active-session":
+        return None
+    limit = data.get("limit")
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return None
+    if not 1 <= limit <= _MAX_SSH_SESSIONS:
+        return None
+    return limit
+
+
+def _session_limit_message(limit: int) -> str:
+    """Returns the 429 message for a server-reported session limit."""
+    return (
+        f"SSH session limit reached (HTTP 429): {limit} of {limit} SSH "
+        "sessions in use on this runtime. Close another `colab ssh` or IDE "
+        "connection to it and retry. The limit depends on your Colab plan."
+    )
+
+
 def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
     """Maps an upgrade-handshake status/body to an actionable message.
 
     Args:
       status: The HTTP status of the failed upgrade, or None if there was no
         HTTP status (e.g. a network error).
-      body: The raw response body, used to refine the 400 message.
+      body: The raw response body, used to refine the 400 and 429 messages.
 
     Returns:
       A human-readable, actionable error message.
@@ -281,6 +319,8 @@ def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
                 "so an older or non-SSH runtime will not have it - run "
                 "`colab new` for a fresh runtime with SSH."
             )
+        case 429 if (limit := _session_limit(body)) is not None:
+            message = _session_limit_message(limit)
         case 429:
             message = (
                 "Already-active SSH session (HTTP 429): another `colab ssh` "

@@ -13,6 +13,10 @@ below corresponds to a tag of the same name.
 ### Changed
 
 - **ssh:** Every `colab ssh` WebSocket now sends `X-Colab-Client-Agent: colab-cli` and the query values `colab-client-agent=colab-cli` and `colab-client-agent=ssh-mode-<mode>`, where the mode is `interactive` for plain `colab ssh` and `proxy` otherwise.
+- **ssh:** When the server rejects a connection with HTTP 429 and reports its
+  SSH session limit, `colab ssh` now says the limit is reached (N of N sessions
+  in use on the runtime) and that the limit depends on the Colab plan. A 429
+  without a usable limit keeps the previous message.
 
 ### Fixed
 

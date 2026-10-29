@@ -180,6 +180,103 @@ def test_explain_handshake_failure_mapping(status, body, must_contain):
     assert must_contain in out
 
 
+_FALLBACK_429 = (
+    "Already-active SSH session (HTTP 429): another `colab ssh` is "
+    "connected to this runtime. Disconnect it and retry."
+)
+_LIMIT_BODY_PREFIX = b'{"error":"already-active-session","limit":'
+_LIMIT_1_TEXT = (
+    "SSH session limit reached (HTTP 429): 1 of 1 SSH sessions in use on "
+    "this runtime. Close another `colab ssh` or IDE connection to it and "
+    "retry. The limit depends on your Colab plan."
+)
+_LIMIT_3_TEXT = (
+    "SSH session limit reached (HTTP 429): 3 of 3 SSH sessions in use on "
+    "this runtime. Close another `colab ssh` or IDE connection to it and "
+    "retry. The limit depends on your Colab plan."
+)
+_LIMIT_5_TEXT = (
+    "SSH session limit reached (HTTP 429): 5 of 5 SSH sessions in use on "
+    "this runtime. Close another `colab ssh` or IDE connection to it and "
+    "retry. The limit depends on your Colab plan."
+)
+
+
+@pytest.mark.parametrize(
+    ("limit", "expected"),
+    [
+        (1, _LIMIT_1_TEXT),
+        (3, _LIMIT_3_TEXT),
+        (5, _LIMIT_5_TEXT),
+    ],
+    ids=["limit-1", "limit-3", "limit-5"],
+)
+def test_explain_handshake_failure_session_limit(limit, expected):
+    body = b"%s%d}" % (_LIMIT_BODY_PREFIX, limit)
+    out = ssh_module._explain_handshake_failure(429, body)
+    assert out == expected
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"error":"already-active-session"}',
+        _LIMIT_BODY_PREFIX + b"true}",
+        _LIMIT_BODY_PREFIX + b"false}",
+        _LIMIT_BODY_PREFIX + b"3.0}",
+        _LIMIT_BODY_PREFIX + b'"3"}',
+        _LIMIT_BODY_PREFIX + b"null}",
+        _LIMIT_BODY_PREFIX + b"0}",
+        _LIMIT_BODY_PREFIX + b"-1}",
+        _LIMIT_BODY_PREFIX + b"6}",
+        _LIMIT_BODY_PREFIX + b"9" * 5000 + b"}",
+        b"[" * 200_000,
+        b"<html><body>Too Many Requests</body></html>",
+        b"",
+        _LIMIT_BODY_PREFIX + b"\xff\xfe}",
+        b'[{"error":"already-active-session","limit":3}]',
+        b'{"limit":3}',
+        b'{"error":"rate-limited","limit":3}',
+    ],
+    ids=[
+        "no-limit",
+        "bool-true",
+        "bool-false",
+        "float",
+        "str",
+        "null",
+        "zero",
+        "negative",
+        "six",
+        "5000-digit",
+        "deep-nesting",
+        "html",
+        "empty",
+        "non-utf8",
+        "list",
+        "no-error",
+        "wrong-error",
+    ],
+)
+def test_explain_handshake_failure_429_without_usable_limit(body):
+    out = ssh_module._explain_handshake_failure(429, body)
+    assert out == _FALLBACK_429
+
+
+def test_explain_handshake_failure_session_limit_past_200_char_snippet():
+    pad = b"x" * 200
+    body = b'{"error":"already-active-session","pad":"%s","limit":3}' % pad
+    assert body.index(b'"limit"') > 200
+    out = ssh_module._explain_handshake_failure(429, body)
+    assert out == _LIMIT_3_TEXT
+
+
+def test_explain_handshake_failure_session_limit_invalid_utf8_elsewhere():
+    body = b'{"error":"already-active-session","pad":"\xff","limit":3}'
+    out = ssh_module._explain_handshake_failure(429, body)
+    assert out == _LIMIT_3_TEXT
+
+
 def test_explain_handshake_failure_decodes_str_body():
     """A str resp_body is tolerated by the caller's normalization."""
     # _connect_websocket encodes str bodies before calling this; assert the
