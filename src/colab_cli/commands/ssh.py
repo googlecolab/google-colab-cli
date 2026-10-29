@@ -261,15 +261,6 @@ def _session_limit(body: bytes) -> Optional[int]:
     return limit
 
 
-def _session_limit_message(limit: int) -> str:
-    """Returns the 429 message for a server-reported session limit."""
-    return (
-        f"SSH session limit reached (HTTP 429): {limit} of {limit} SSH "
-        "sessions in use on this runtime. Close another `colab ssh` or IDE "
-        "connection to it and retry. The limit depends on your Colab plan."
-    )
-
-
 def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
     """Maps an upgrade-handshake status/body to an actionable message.
 
@@ -320,7 +311,12 @@ def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
                 "`colab new` for a fresh runtime with SSH."
             )
         case 429 if (limit := _session_limit(body)) is not None:
-            message = _session_limit_message(limit)
+            message = (
+                f"SSH session limit reached (HTTP 429): {limit} of {limit} "
+                "SSH sessions in use on this runtime. Close another "
+                "`colab ssh` or IDE connection to it and retry. The limit "
+                "depends on your Colab plan."
+            )
         case 429:
             message = (
                 "Already-active SSH session (HTTP 429): another `colab ssh` "
