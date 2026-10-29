@@ -17,26 +17,20 @@
 #
 # This test verifies that the CLI correctly falls back to using the bundled
 # oauth_config.json containing the default client ID when no local config is present.
-# It simulates a fresh user flow by temporarily hiding existing tokens/configs,
-# starting the OAuth flow, and asserting that the printed authorization URL
-# contains the correct Client ID.
+# It simulates a fresh user flow by temporarily hiding an existing config and
+# the keyring token, starting the OAuth flow, and asserting that the printed
+# authorization URL contains the correct Client ID.
 #
 
 set -e
 
-TOKEN_PATH="$HOME/.config/colab-cli/token.json"
 CONFIG_PATH="$HOME/.colab-cli-oauth-config.json"
 BACKUP_SUFFIX=".backup.$(date +%s)"
 
-TOKEN_BACKUP=""
 CONFIG_BACKUP=""
 
 cleanup() {
     echo "[*] Cleaning up backups..."
-    if [ -n "$TOKEN_BACKUP" ] && [ -f "$TOKEN_BACKUP" ]; then
-        mv "$TOKEN_BACKUP" "$TOKEN_PATH"
-        echo "[*] Restored token.json"
-    fi
     if [ -n "$CONFIG_BACKUP" ] && [ -f "$CONFIG_BACKUP" ]; then
         mv "$CONFIG_BACKUP" "$CONFIG_PATH"
         echo "[*] Restored .colab-cli-oauth-config.json"
@@ -44,13 +38,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# 1. Back up existing configuration files if they exist
-if [ -f "$TOKEN_PATH" ]; then
-    TOKEN_BACKUP="${TOKEN_PATH}${BACKUP_SUFFIX}"
-    mv "$TOKEN_PATH" "$TOKEN_BACKUP"
-    echo "[*] Temporarily backed up token.json to $TOKEN_BACKUP"
-fi
-
+# 1. Back up the existing client config if it exists
 if [ -f "$CONFIG_PATH" ]; then
     CONFIG_BACKUP="${CONFIG_PATH}${BACKUP_SUFFIX}"
     mv "$CONFIG_PATH" "$CONFIG_BACKUP"
@@ -63,7 +51,9 @@ echo "[*] Running 'colab --auth=oauth2 sessions' (expecting to trigger browser f
 # We redirect output to a file so we can inspect it.
 OUTPUT_LOG=$(mktemp)
 set +e
-PYTHONUNBUFFERED=1 timeout 5 uv run colab --auth=oauth2 sessions > "$OUTPUT_LOG" 2>&1
+# The null keyring backend hides any token cached in the host's OS keyring.
+PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
+    PYTHONUNBUFFERED=1 timeout 5 uv run colab --auth=oauth2 sessions > "$OUTPUT_LOG" 2>&1
 EXIT_CODE=$?
 set -e
 
@@ -76,7 +66,7 @@ echo "----------------------------------------------"
 EXPECTED_CLIENT_ID="764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com"
 
 # The command should have printed the authorization URL
-if ! grep -q "Please visit this URL to authorize this application" "$OUTPUT_LOG"; then
+if ! grep -q "To authorize colab-cli, visit this URL" "$OUTPUT_LOG"; then
     echo "[FAILURE] OAuth prompt message not found in output."
     rm -f "$OUTPUT_LOG"
     exit 1

@@ -1,5 +1,6 @@
 ---
 log:
+2026-10-21: Stored OAuth2 credentials in the OS native keyring via the `keyring` library instead of `~/.config/colab-cli/token.json`, falling back to `_run_remote_flow` if keyring is inaccessible. Keyring failures are reported on stderr, and an existing `token.json` is migrated into the keyring and then deleted (or deleted outright if the keyring already has a token).
 2026-10-14: Added configurable HTTP request timeouts and bounded allocation retries. Uncertain allocation POSTs are reconciled by GET using the same notebook hash before resubmission.
 2026-09-25: Runtime proxy tokens are now refreshed before expiry. `SessionState` persists `token_expires_at`, and `State.get_session` re-fetches the token via `GET /tun/m/assignments` when it's within 5 minutes of expiring.
 2026-09-25: Removed the keep-alive background daemon and related client/CLI ping functions. VM liveness is automatically maintained by the Colab backend based on kernel activity.
@@ -122,7 +123,7 @@ The runtime proxy token (`runtimeProxyInfo.token`) authenticates every request t
 - **Global Flags**:
     - `-c`, `--client-oauth-config`: Path to the client secrets JSON file (default: `~/.colab-cli-oauth-config.json`).
     - `--config`: Path to the session state JSON file (default: `~/.config/colab-cli/sessions.json`).
-- **Token Storage**: Credentials are persisted to `~/.config/colab-cli/token.json` after the initial flow.
+- **Token Storage**: Credentials are persisted to the OS native keyring via the `keyring` library (`service_name="google-colab-cli"`, `username="oauth_token"`) after the initial flow. If the keyring is inaccessible or locked, `_run_remote_flow` is invoked for the current run and a warning is printed to stderr. A legacy `~/.config/colab-cli/token.json` is migrated into the keyring on first use and deleted after a successful keyring write, or immediately if the keyring already holds a token.
 - Use `requests` for robust HTTP interactions and `pydantic` for schema validation.
 - Handle authentication headers (likely `Authorization: Bearer <token>` or cookies).
 
