@@ -22,12 +22,14 @@ vs --proxy-mode).
 """
 
 import io
+import os
 import shlex
 import subprocess
 import sys
 import threading
 from unittest.mock import MagicMock
 
+from colab_cli.auth import AuthProvider
 from colab_cli.cli import app
 from colab_cli.commands import ssh as ssh_module
 import pytest
@@ -498,3 +500,27 @@ def test_hidden_mode_option_stays_out_of_help_and_suggestions(argv, code):
     assert result.exit_code == code
     assert "ssh-mode" not in result.output
     assert "--colab-internal-mode" not in result.output
+
+
+@pytest.mark.parametrize(
+    ("auth", "config", "global_args"),
+    [
+        (AuthProvider.OAUTH2, "~/alt.json", ["--config"]),
+        (AuthProvider.ADC, "rel/s.json", ["--auth", "adc", "--config"]),
+    ],
+    ids=["tilde-config", "auth-and-config"],
+)
+def test_proxy_command_keeps_global_options(
+    mock_common_state, mocker, auth, config, global_args
+):
+    mocker.patch.object(ssh_module.sys, "platform", "linux")
+    mock_common_state.auth_provider = auth
+    mock_common_state.config_path = config
+    session = _make_session(name="s")
+    argv = shlex.split(ssh_module._proxy_command(session, None, "interactive"))
+    if config:
+        global_args = [*global_args, os.path.abspath(config)]
+    assert argv == [
+        *[sys.executable, "-m", "colab_cli.cli", *global_args, "ssh"],
+        *["--proxy-mode", "-s", "s", "--colab-internal-mode", "interactive"],
+    ]
