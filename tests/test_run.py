@@ -693,3 +693,27 @@ def test_run_with_timeout_flag(
     code_calls = mock_runtime.execute_code.call_args_list
     body_call = next(c for c in code_calls if "hello from script" in c.args[0])
     assert body_call.kwargs.get("timeout") == 3600.0
+
+
+def test_run_default_timeout_is_none(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    assign_response,
+    script_path,
+):
+    """Without --timeout, execute_code must receive timeout=None (no limit)."""
+    mock_client.assign.return_value = assign_response
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.setdefault("s", s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+
+    result = runner.invoke(app, ["run", str(script_path)])
+    assert result.exit_code == 0, result.output
+
+    codeCalls = mock_runtime.execute_code.call_args_list
+    bodyCall = next(c for c in codeCalls if "hello from script" in c.args[0])
+    assert bodyCall.kwargs.get("timeout") is None

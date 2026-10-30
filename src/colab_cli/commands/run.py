@@ -258,8 +258,8 @@ def run_command(
     ] = False,
     timeout: Annotated[
         Optional[float],
-        typer.Option("--timeout", help="Timeout in seconds for code execution"),
-    ] = 30.0,
+        typer.Option("--timeout", help="Timeout in seconds for code execution (no limit by default)"),
+    ] = None,
     env: Annotated[
         Optional[List[str]],
         typer.Option(
