@@ -13,13 +13,13 @@
 # limitations under the License.
 
 """
-`colab run <script.py> [args...]` — shebang-friendly one-shot execution.
+`colab run <script> [args...]` — shebang-friendly one-shot execution.
 
 Combines `colab new` + `colab exec` + `colab stop` into a single fire-and-forget
-invocation. The Python script's body runs in a freshly-allocated Colab kernel
-with `sys.argv` set as if it had been invoked via `python script.py [args...]`,
-and the VM is automatically released when the script finishes (unless `--keep`
-is passed).
+invocation.  For Python scripts the body runs with `sys.argv` set as if invoked
+via `python script.py [args...]`.  Jupyter notebooks (.ipynb) are parsed with
+nbformat and executed cell-by-cell with shared kernel state.  The VM is
+automatically released when execution finishes (unless `--keep` is passed).
 
 Designed to support shebangs:
 
@@ -35,6 +35,7 @@ import os
 import uuid
 from typing import List, Optional
 
+import nbformat
 import typer
 from typing_extensions import Annotated
 
@@ -46,7 +47,12 @@ from colab_cli.client import (
     Shape,
     TooManyAssignmentsError,
 )
-from colab_cli.commands.execution import _build_env_prelude, _parse_env_vars
+from colab_cli.commands.execution import (
+    TITLE_REGEX,
+    _build_env_prelude,
+    _parse_env_vars,
+    save_output,
+)
 from colab_cli.commands.session import resolve_runtime_options
 from colab_cli.runtime import ColabRuntime
 from colab_cli.state import SessionState
@@ -200,7 +206,7 @@ def run_command(
     script: Annotated[
         str,
         typer.Argument(
-            help="Path to a local Python file to execute on a fresh Colab VM."
+            help="Path to a local Python script or Jupyter notebook (.ipynb) to execute on a fresh Colab VM."
         ),
     ],
     script_args: Annotated[
@@ -271,14 +277,13 @@ def run_command(
         ),
     ] = None,
 ):
-    """Run a Python script on a fresh Colab VM, then release the VM
+    """Run a Python script or Jupyter notebook on a fresh Colab VM, then release the VM
 
-    Designed to be used as a shebang interpreter, e.g.
+    Designed to be used as a shebang interpreter for scripts, e.g.
 
         #!/usr/bin/env -S colab run --gpu T4
 
-    so a single executable .py file can rent a GPU, run, and clean up after
-    itself.
+    Notebooks (.ipynb) are parsed with nbformat and executed cell-by-cell.
     """
     from colab_cli.common import state
 
@@ -414,7 +419,14 @@ def run_command(
                 raise typer.Exit(1)
             raise
 
-        payload = _build_script_payload(script, script_args, env_vars)
+        isNotebook = script.lower().endswith(".ipynb")
+
+        if isNotebook and script_args:
+            typer.echo(
+                "[colab] Warning: extra arguments ignored for notebook execution.",
+                err=True,
+            )
+
         s.running = f"run({os.path.basename(script)})"
         s.last_execution = (
             script,
@@ -423,25 +435,92 @@ def run_command(
         )
         state.store.add(s)
 
-        try:
-            outputs = runtime.execute_code(
-                payload, output_hook=_make_run_output_hook(), timeout=timeout
+        if isNotebook:
+            with open(script, "r", encoding="utf-8") as f:
+                nb = nbformat.read(f, as_version=4)
+            codeCells = []
+            for cell in nb.cells:
+                if not hasattr(cell, "id") or not cell.id:
+                    cell.id = str(uuid.uuid4())
+                if cell.cell_type == "code":
+                    codeCells.append(cell)
+
+            for i, cell in enumerate(codeCells):
+                cellCode = _build_env_prelude(env_vars) + cell.source
+                titleMatch = TITLE_REGEX.search(cellCode)
+                label = (
+                    titleMatch.group(1).strip()
+                    if titleMatch
+                    else cell.id or ""
+                )
+                labelStr = f" - {label}" if label else ""
+                typer.echo(
+                    f"[colab] Executing cell {i + 1}/{len(codeCells)}"
+                    f"{labelStr}...",
+                    err=True,
+                )
+
+                s.last_execution = (
+                    script,
+                    label,
+                    datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                state.store.add(s)
+
+                try:
+                    outputs = runtime.execute_code(
+                        cellCode,
+                        output_hook=_make_run_output_hook(),
+                        timeout=timeout,
+                    )
+                except Exception:
+                    exit_code = 1
+                    cleanup_reason = "run_failed"
+                    raise
+                save_output(outputs, cell)
+                state.history.log_event(
+                    name,
+                    "execution",
+                    {
+                        "code": cellCode,
+                        "outputs": outputs,
+                        "cell_index": i,
+                        "cell_id": cell.id,
+                        "via": "run",
+                    },
+                )
+
+                exit_code = _exit_code_from_outputs(outputs)
+                if exit_code != 0:
+                    cleanup_reason = "run_failed"
+                    break
+
+            outputPath = os.path.splitext(script)[0] + "_output.ipynb"
+            typer.echo(
+                f"[colab] Saving notebook with outputs to '{outputPath}'...",
+                err=True,
             )
-        except Exception:
-            # Genuine transport-level failure. Cleanup still happens via the
-            # outer finally; surface non-zero exit so callers/CI notice.
-            exit_code = 1
-            cleanup_reason = "run_failed"
-            raise
+            with open(outputPath, "w", encoding="utf-8") as f:
+                nbformat.write(nb, f)
         else:
-            exit_code = _exit_code_from_outputs(outputs)
-            if exit_code != 0:
+            payload = _build_script_payload(script, script_args, env_vars)
+            try:
+                outputs = runtime.execute_code(
+                    payload, output_hook=_make_run_output_hook(), timeout=timeout
+                )
+            except Exception:
+                exit_code = 1
                 cleanup_reason = "run_failed"
-            state.history.log_event(
-                name,
-                "execution",
-                {"code": payload, "outputs": outputs, "via": "run"},
-            )
+                raise
+            else:
+                exit_code = _exit_code_from_outputs(outputs)
+                if exit_code != 0:
+                    cleanup_reason = "run_failed"
+                state.history.log_event(
+                    name,
+                    "execution",
+                    {"code": payload, "outputs": outputs, "via": "run"},
+                )
     finally:
         s.running = None
         state.store.add(s)
