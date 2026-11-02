@@ -17,6 +17,7 @@ import json
 import logging
 from importlib import resources
 import os
+import sys
 import threading
 import warnings
 from typing import Optional
@@ -88,7 +89,45 @@ def _run_with_timeout(func, *args, timeout: float):
     return result
 
 
+def _check_linux_keyring_locked() -> None:
+    """Warn if the active Linux SecretService keyring collection is locked."""
+    if sys.platform != "linux":
+        return
+    try:
+        from contextlib import closing
+        from keyring.backends import SecretService, chainer
+        import secretstorage
+
+        kr = keyring.get_keyring()
+        backends = kr.backends if isinstance(kr, chainer.ChainerBackend) else [kr]
+        ss_backend = next(
+            (b for b in backends if isinstance(b, SecretService.Keyring)),
+            None,
+        )
+        if ss_backend is None:
+            return
+
+        with closing(secretstorage.dbus_init()) as bus:
+            collection_path = getattr(ss_backend, "preferred_collection", None)
+            collection = (
+                secretstorage.Collection(bus, collection_path)
+                if collection_path
+                else secretstorage.Collection(bus)
+            )
+            if collection.is_locked():
+                label = collection.get_label() or collection.collection_path
+                msg = (
+                    f"Keyring '{label}' is locked; waiting on unlock prompt for "
+                    f"{KEYRING_TIMEOUT_SECONDS:g}s (use --auth=adc if keyring can't be unlocked)."
+                )
+                logger.warning(msg)
+                typer.echo(f"Warning: {msg}", err=True)
+    except Exception as e:
+        logger.debug(f"Could not check Linux keyring lock status: {e}")
+
+
 def _get_token_from_keyring() -> Optional[str]:
+    _check_linux_keyring_locked()
     return _run_with_timeout(
         keyring.get_password,
         KEYRING_SERVICE_NAME,
@@ -98,6 +137,7 @@ def _get_token_from_keyring() -> Optional[str]:
 
 
 def _save_token_to_keyring(token_json: str) -> None:
+    _check_linux_keyring_locked()
     _run_with_timeout(
         keyring.set_password,
         KEYRING_SERVICE_NAME,
@@ -105,6 +145,7 @@ def _save_token_to_keyring(token_json: str) -> None:
         token_json,
         timeout=KEYRING_TIMEOUT_SECONDS,
     )
+
 
 # Remote copy-paste OAuth flow.
 #
