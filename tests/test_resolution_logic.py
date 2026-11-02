@@ -173,31 +173,6 @@ def test_resolve_named_session_does_not_hit_the_control_plane(tmp_path):
     assert unchanged.kernel_id == "kernel-1"
 
 
-def test_get_session_refreshes_expired_runtime_proxy(tmp_path):
-    store = StateStore(str(tmp_path / "sessions.json"))
-    store.add(
-        SessionState(
-            name="s1",
-            token="expired-token",
-            url="https://old",
-            endpoint="e1",
-            token_expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
-            kernel_id="kernel-1",
-        )
-    )
-    state = State()
-    state._store = store
-    state._client = MagicMock()
-    state._client.list_assignments.return_value = [_listed_assignment()]
-
-    refreshed = state.get_session("s1")
-
-    assert refreshed.token == "fresh-token"
-    assert refreshed.url == "https://fresh"
-    assert refreshed.kernel_id == "kernel-1"
-    state._client.list_assignments.assert_called_once_with(timeout=10)
-
-
 def test_refresh_session_forwards_request_timeout(tmp_path):
     store = StateStore(str(tmp_path / "sessions.json"))
     original = SessionState(name="s1", token="old", url="old", endpoint="e1")

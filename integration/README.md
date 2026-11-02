@@ -43,3 +43,7 @@ uses no Bash or WSL, and preserves unrelated active sessions.
 1. Create `repro_<short_description>/`.
 2. Add a script (`.sh` or `.py`) that demonstrates or verifies the issue.
 3. Add a row to the table above noting whether it's fast (smoke) or slow (soak).
+
+### Console and token-refresh CPU regressions
+
+Run `repro_runtime_token_refresh`, `repro_console_reconnect`, and `repro_console_flow_control` sequentially with `uv run bash integration/repro_<name>/test.sh`. Each uses a unique session name and isolated session config, allocates without GPU/TPU flags, and releases its own endpoint while preserving existing assignments. OAuth detection checks the upstream keyring with a ten-second limit and also accepts a legacy token that has not yet migrated; otherwise the existing scoped ADC check applies. A locked keyring does not justify changing upstream credential storage.

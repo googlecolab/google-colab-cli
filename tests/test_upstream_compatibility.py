@@ -1,3 +1,17 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Behavioral regressions also runnable against the unmodified upstream tree."""
 
 from datetime import datetime, timedelta, timezone
@@ -15,13 +29,19 @@ from colab_cli.state import SessionState, StateStore
 
 
 def _assignment():
-    return ListedAssignment.model_validate({
-        "endpoint": "ep1", "variant": 0, "machineShape": 0, "accelerator": "NONE",
-        "runtimeProxyInfo": {
-            "token": "new-token", "tokenExpiresInSeconds": 3600,
-            "url": "https://new-runtime.example.test",
-        },
-    })
+    return ListedAssignment.model_validate(
+        {
+            "endpoint": "ep1",
+            "variant": 0,
+            "machineShape": 0,
+            "accelerator": "NONE",
+            "runtimeProxyInfo": {
+                "token": "new-token",
+                "tokenExpiresInSeconds": 3600,
+                "url": "https://new-runtime.example.test",
+            },
+        }
+    )
 
 
 @pytest.fixture
@@ -30,16 +50,22 @@ def isolated_state(tmp_path, monkeypatch):
     state._store = StateStore(str(tmp_path / "sessions.json"))
     state._client = MagicMock()
     state._history = MagicMock()
-    state.store.add(SessionState(
-        name="s1", endpoint="ep1", token="old-token",
-        url="https://old-runtime.example.test",
-        token_expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
-    ))
+    state.store.add(
+        SessionState(
+            name="s1",
+            endpoint="ep1",
+            token="old-token",
+            url="https://old-runtime.example.test",
+            token_expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+        )
+    )
     monkeypatch.setattr(common, "state", state)
     return state
 
 
-def test_upstream_proxy_auth_failure_refreshes_before_discarding_session(isolated_state):
+def test_upstream_proxy_auth_failure_refreshes_before_discarding_session(
+    isolated_state,
+):
     class ProxyAuthError(Exception):
         status_code = 401
 
@@ -63,7 +89,10 @@ def test_upstream_refresh_preserves_concurrent_same_name_replacement(isolated_st
     original.token_expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
     isolated_state.store.add(original)
     replacement = SessionState(
-        name="s1", endpoint="ep2", token="replacement", url="https://replacement",
+        name="s1",
+        endpoint="ep2",
+        token="replacement",
+        url="https://replacement",
     )
 
     def replace_during_lookup(**kwargs):
@@ -87,6 +116,9 @@ def test_upstream_terminal_output_acknowledges_flow_control():
     assert {"ack": True} in [json.loads(c.args[0]) for c in ws.send.call_args_list]
 
 
+@pytest.mark.skipif(
+    transport.termios is None, reason="requires POSIX terminal syscalls"
+)
 def test_upstream_abnormal_console_close_reconnects(isolated_state):
     calls = []
 
@@ -103,12 +135,17 @@ def test_upstream_abnormal_console_close_reconnects(isolated_state):
         return ws
 
     kwargs = {}
-    if "_max_reconnect_attempts" in inspect.signature(transport.connect_console).parameters:
+    if (
+        "_max_reconnect_attempts"
+        in inspect.signature(transport.connect_console).parameters
+    ):
         kwargs = {"retry_delays": (0,), "_max_reconnect_attempts": 1}
     with (
         patch.object(transport.sys, "stdin", MagicMock()),
         patch.object(transport.threading, "Thread"),
-        patch.object(transport.websocket, "WebSocketApp", side_effect=websocket_attempt),
+        patch.object(
+            transport.websocket, "WebSocketApp", side_effect=websocket_attempt
+        ),
         patch.object(transport.termios, "tcgetattr", return_value=["saved"]),
         patch.object(transport.termios, "tcsetattr"),
         patch.object(transport.tty, "setraw"),

@@ -376,7 +376,9 @@ def connect_console(
         except Exception:
             can_raw = False
     sigwinch = getattr(signal, "SIGWINCH", None)
-    old_sigwinch = signal.getsignal(sigwinch) if can_raw and sigwinch is not None else None
+    old_sigwinch = (
+        signal.getsignal(sigwinch) if can_raw and sigwinch is not None else None
+    )
     forwarder = _ConsoleInputForwarder(is_tty)
     current = session
     original_endpoint = session.endpoint

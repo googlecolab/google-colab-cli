@@ -21,7 +21,7 @@ from typing import Callable, Optional, TypeVar
 import typer
 
 from colab_cli.auth import AuthProvider, get_credentials
-from colab_cli.client import Client, Prod
+from colab_cli.client import Client, Prod, RuntimeProxyInfo
 from colab_cli.history import HistoryLogger
 from colab_cli.state import SessionState, StateStore, SettingsStore
 from colab_cli.utils import is_runtime_proxy_error
@@ -29,12 +29,18 @@ from colab_cli.utils import is_runtime_proxy_error
 
 T = TypeVar("T")
 
-# Headroom so a token does not expire mid-command.
+# Headroom so a token doesn't expire mid-command.
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
 
 # Bound every control-plane refresh so a blackholed backend cannot hang a
 # session command indefinitely.
 SESSION_REFRESH_TIMEOUT_SECONDS = 10
+
+
+def _apply_proxy_info(s: SessionState, info: RuntimeProxyInfo):
+    s.token = info.token
+    s.url = info.url
+    s.token_expires_at = info.expires_at()
 
 
 class State:
@@ -117,13 +123,13 @@ class State:
                 self._sessions[name] = current
             return current
 
-        rpi = assignment.runtime_proxy_info
+        _apply_proxy_info(s, assignment.runtime_proxy_info)
         refreshed = self.store.update_fields(
             name,
             s.endpoint,
-            token=rpi.token,
-            url=rpi.url,
-            token_expires_at=rpi.expires_at(),
+            token=s.token,
+            url=s.url,
+            token_expires_at=s.token_expires_at,
         )
         if refreshed is None:
             # A same-name replacement won the endpoint guard. Do not apply
@@ -262,11 +268,6 @@ class State:
         return self._sessions, assignments
 
     def resolve_session(self, session_name: Optional[str]) -> str:
-        # Picking a name is deliberately offline: commands that need VM
-        # credentials call get_session() (which refreshes a missing/near-expiry
-        # token) and the ones that do not (e.g. `colab url`) stay usable without
-        # control-plane access. Making this refresh would also let a stale
-        # assignments snapshot prune a binding that was just created.
         if session_name:
             return session_name
 

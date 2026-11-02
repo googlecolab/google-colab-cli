@@ -302,8 +302,11 @@ def test_client_assign_existing(client, mock_session):
     assert mock_session.request.call_count == 1
 
 
-def test_client_list_assignments_forwards_request_timeout(client, mock_session):
+def test_client_list_assignments_forwards_request_timeout(
+    client, mock_session, monkeypatch
+):
     """Interactive reconnects can bound a stalled control-plane lookup."""
+    monkeypatch.setenv("COLAB_CLI_REQUEST_TIMEOUT", "300")
     resp = MagicMock()
     resp.ok = True
     resp.text = ")]}'\n" + json.dumps({"assignments": []})

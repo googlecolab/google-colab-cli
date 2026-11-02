@@ -31,7 +31,12 @@ STOP_OUTPUT_FILE="$TMP_DIR/console-stop.out"
 SESSION_NAME="console-reconnect-$PPID-$$"
 TEST_ENDPOINT=""
 
-if [ -f "$HOME/.config/colab-cli/token.json" ]; then
+# Match upstream's keyring storage while allowing a not-yet-migrated token.
+has_oauth2_token() {
+    timeout 10 uv run python -c "import sys, keyring; sys.exit(0 if keyring.get_password('google-colab-cli', 'oauth_token') else 1)" >/dev/null 2>&1
+}
+
+if has_oauth2_token || [ -f "$HOME/.config/colab-cli/token.json" ]; then
     AUTH_PROVIDER="oauth2"
 elif command -v gcloud >/dev/null && gcloud auth application-default print-access-token >/dev/null 2>&1; then
     ADC_TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null)

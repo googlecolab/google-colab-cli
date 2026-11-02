@@ -19,6 +19,7 @@ import json
 import os
 import socket
 import sys
+
 try:
     import termios
 except ImportError:
