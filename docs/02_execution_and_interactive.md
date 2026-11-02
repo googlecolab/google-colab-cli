@@ -6,7 +6,7 @@ log:
 
 2026-06-04: Bumped the default `--timeout` for `colab exec` from 10s to 30s (and the matching `colab run` default) so brief silent tasks are less likely to hit a premature `TimeoutError`. Explicit `--timeout` overrides are unaffected.
 
-2026-10-24: `--timeout` for `colab exec` (and `colab run`) is now an idle limit: execution fails only after that many seconds without output, so code that keeps printing is never cut off, and `--timeout 0` means no limit. On 0.8.0/0.9.0 the old deadline was never enforced, so code that is silent for longer than `--timeout` now fails where it used to complete. `colab repl`, which passes no timeout, waits until each cell finishes, or until the kernel dies or restarts. None of them busy-loop while waiting. `colab install`, `colab auth`, and `colab drivemount` are unchanged. See #183.
+2026-10-24: `--timeout` for `colab exec` (and `colab run`) is now an idle limit: execution fails only after that many seconds without output, so code that keeps printing is never cut off, and `--timeout 0` means no limit. On 0.8.0/0.9.0 the old deadline was never enforced, so code that is silent for longer than `--timeout` now fails where it used to complete. `colab repl` and `colab install`, which pass no timeout, wait until execution finishes, or until the kernel dies or restarts. None of them busy-loop while waiting. `colab auth` and `colab drivemount` are unchanged. See #183.
 ---
 
 # Design: Execution and Interactive Interaction (`repl`, `exec`, `console`)

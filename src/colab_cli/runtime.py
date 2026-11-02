@@ -192,41 +192,55 @@ class ColabRuntime:
         output_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
         timeout: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
-        # ``timeout`` means one of two things, depending on the path:
-        # - Streaming without stdin (``output_hook`` set, ``allow_stdin``
-        #   False; used by run, exec and repl): ``_execute_streaming`` waits
-        #   for messages itself, and ``timeout`` is an idle limit. ``None``
-        #   or a value <= 0 means no limit.
-        # - Otherwise the call goes to ``jupyter_kernel_client``, where
-        #   ``timeout`` is a deadline for the whole call, defaulting to
-        #   ``REQUEST_TIMEOUT`` (10 s). 0.8.0 and 0.9.0 never enforce it and
-        #   poll without waiting once it passes; 1.0.2 raises
-        #   ``TimeoutError``. Callers that need a longer ceiling, such as
-        #   the interactive automations, pass ``timeout=`` explicitly.
-        kwargs = {"allow_stdin": allow_stdin}
-        if timeout is not None:
-            kwargs["timeout"] = timeout
+        if allow_stdin and output_hook is not None:
+            raise NotImplementedError(
+                "output_hook is not supported when allow_stdin is True"
+            )
 
-        # Wrap stdin_hook to log inputs
-        original_stdin_hook = stdin_hook
+        # ``timeout`` means one of two things, depending on ``allow_stdin``:
+        # - Without stdin (``allow_stdin`` False; used by run, exec, repl, and
+        #   install): ``_execute_streaming`` waits for messages itself, and
+        #   ``timeout`` is an idle limit. ``None`` or a value <= 0 means no
+        #   limit.
+        # - With stdin (``allow_stdin`` True; used by auth and drivemount):
+        #   the call goes to ``jupyter_kernel_client``, where ``timeout`` is a
+        #   deadline for the whole call, defaulting to ``REQUEST_TIMEOUT``
+        #   (10 s). Callers that need a longer ceiling pass ``timeout=``
+        #   explicitly.
+        if allow_stdin:
+            original_stdin_hook = stdin_hook
 
-        def wrapped_stdin_hook(prompt):
-            if self.history and self.session_name:
-                self.history.log_event(
-                    self.session_name, "stdin_request", {"prompt": prompt}
+            def wrapped_stdin_hook(prompt):
+                if self.history and self.session_name:
+                    self.history.log_event(
+                        self.session_name, "stdin_request", {"prompt": prompt}
+                    )
+
+                res = (
+                    original_stdin_hook(prompt)
+                    if original_stdin_hook
+                    else input(prompt)
                 )
 
-            res = original_stdin_hook(prompt) if original_stdin_hook else input(prompt)
+                if self.history and self.session_name:
+                    self.history.log_event(
+                        self.session_name, "input_reply", {"value": res}
+                    )
+                return res
 
-            if self.history and self.session_name:
-                self.history.log_event(self.session_name, "input_reply", {"value": res})
-            return res
+            kwargs: Dict[str, Any] = {
+                "allow_stdin": True,
+                "stdin_hook": wrapped_stdin_hook,
+            }
+            if timeout is not None:
+                kwargs["timeout"] = timeout
 
-        if allow_stdin:
-            kwargs["stdin_hook"] = wrapped_stdin_hook
-
-        if output_hook:
-            # With an output hook, we stream messages and manage buffering ourselves
+            reply = self.kernel_client.execute(code, **kwargs)
+            if not reply:
+                return []
+            outputs = reply.get("outputs", [])
+            reply_content = reply
+        else:
             outputs = []
 
             def wrapped_output_hook(msg):
@@ -237,25 +251,13 @@ class ColabRuntime:
                 # Update local outputs list using the default logic
                 new_indexes = default_output_hook(outputs, msg)
                 # If new outputs were added, call our streaming hook with the new data
-                if new_indexes:
+                if output_hook and new_indexes:
                     for idx in sorted(new_indexes):
                         if idx < len(outputs):
                             output_hook(outputs[idx])
 
-            if allow_stdin:
-                reply = self.kernel_client.execute_interactive(
-                    code, output_hook=wrapped_output_hook, **kwargs
-                )
-            else:
-                reply = self._execute_streaming(code, wrapped_output_hook, timeout)
-            # Both paths return the raw execute_reply message
+            reply = self._execute_streaming(code, wrapped_output_hook, timeout)
             reply_content = reply["content"] if reply else {"status": "error"}
-        else:
-            reply = self.kernel_client.execute(code, **kwargs)
-            if not reply:
-                return []
-            outputs = reply.get("outputs", [])
-            reply_content = reply
 
         # If there's an error status but no error in outputs, synthesize one
         if reply_content.get("status") == "error":
@@ -295,16 +297,15 @@ class ColabRuntime:
             timeout = None
         client = self.kernel_client._manager.client
         msg_id = client.execute(code, allow_stdin=False)
-        last_message = time.monotonic()
 
         def next_message(get_msg, waiting_for):
-            nonlocal last_message
+            deadline = (time.monotonic() + timeout) if timeout is not None else None
             while True:
                 if not client.connection_ready.is_set():
                     raise RuntimeError("Connection was lost.")
                 wait = _WAIT_SLICE_SEC
-                if timeout is not None:
-                    left = last_message + timeout - time.monotonic()
+                if deadline is not None:
+                    left = deadline - time.monotonic()
                     if left <= 0:
                         raise TimeoutError(
                             f"Timeout waiting for {waiting_for}: no message from "
@@ -322,7 +323,6 @@ class ColabRuntime:
                     # parent, and our execution can no longer finish.
                     raise RuntimeError(f"Kernel {state} before the code finished.")
                 if msg["parent_header"].get("msg_id") == msg_id:
-                    last_message = time.monotonic()
                     return msg
 
         while True:
