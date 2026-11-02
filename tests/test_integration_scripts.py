@@ -69,6 +69,13 @@ if [ "$1" = run ] && [ "$2" = colab ]; then
 fi
 
 if [ "$1" = run ] && [ "$2" = python ]; then
+    if [ "$3" = -c ]; then
+        printf 'keyring-probe\\n' >> "$FAKE_UV_LOG"
+        case "$FAKE_UV_MODE" in
+            keyring-*) exit 0 ;;
+            *) exit 1 ;;
+        esac
+    fi
     count_file="$FAKE_UV_PYTHON_COUNT"
     count=0
     if [ -f "$count_file" ]; then
@@ -76,7 +83,7 @@ if [ "$1" = run ] && [ "$2" = python ]; then
     fi
     count=$((count + 1))
     printf '%s' "$count" > "$count_file"
-    if [ "$FAKE_UV_MODE" = endpoint-fail ] && [ "$count" -eq 1 ]; then
+    if [[ "$FAKE_UV_MODE" = *endpoint-fail ]] && [ "$count" -eq 1 ]; then
         exit 8
     fi
     if [ "$#" -ge 5 ] && [ "$4" = oauth2 ]; then
@@ -101,7 +108,8 @@ def _run_script(
     fake_home = tmp_path / "home"
     token = fake_home / ".config/colab-cli/token.json"
     token.parent.mkdir(parents=True)
-    token.write_text("{}")
+    if not mode.startswith("keyring-"):
+        token.write_text("{}")
     env = os.environ.copy()
     env.update(
         {
@@ -142,3 +150,13 @@ def test_live_script_stops_before_allocating_when_assignment_snapshot_fails(
 
     assert result.returncode != 0
     assert "new" not in log
+
+
+@pytest.mark.parametrize("script", LIVE_SCRIPTS, ids=lambda path: path.parent.name)
+def test_live_script_accepts_keyring_without_legacy_token(script, tmp_path):
+    result, log = _run_script(script, tmp_path, "keyring-endpoint-fail")
+    assert result.returncode != 0
+    assert "keyring-probe" in log
+    assert "new" in log
+    assert "stop" in log
+    assert "unassign test-endpoint" in log
