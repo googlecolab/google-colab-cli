@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import json
 import logging
 import os
+import stat
 from unittest.mock import MagicMock
 
 import pytest
@@ -26,7 +28,11 @@ from colab_cli.common import setup_logging
 from colab_cli.history import HistoryLogger
 from colab_cli.state import SessionState, Settings, SettingsStore, StateStore
 
-LOGGERS = (None, "urllib3", "jupyter_kernel_client")
+LOGGER_NAMES = (None, "urllib3", "jupyter_kernel_client")
+LOG_FILE = ".config/colab-cli/colab.log"
+OWNER_ONLY = 0o600
+WORLD_READABLE = 0o644
+DEFAULT_UMASK = 0o022
 POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
 SESSION = SessionState(name="s", token="t", url="https://h", endpoint="e")
 
@@ -36,7 +42,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(logging.getLogger(), "handlers", [])
-    levels = {name: logging.getLogger(name).level for name in LOGGERS}
+    levels = {name: logging.getLogger(name).level for name in LOGGER_NAMES}
     yield tmp_path
     for handler in logging.getLogger().handlers:
         handler.close()
@@ -44,54 +50,62 @@ def home(tmp_path, monkeypatch):
         logging.getLogger(name).setLevel(level)
 
 
+def _add_session(home):
+    StateStore(f"{home}/sessions.json").add(SESSION)
+
+
 def _save_settings(home):
     SettingsStore(f"{home}/settings.json").save(Settings())
 
 
 _PRIVATE_FILES = {
-    ".config/colab-cli/colab.log": lambda h: setup_logging(False),
-    "sessions.json": lambda h: StateStore(f"{h}/sessions.json").add(SESSION),
+    LOG_FILE: lambda home: setup_logging(False),
+    "sessions.json": _add_session,
     "settings.json": _save_settings,
-    "s.jsonl": lambda h: HistoryLogger(str(h)).log_event("s", "x", {}),
+    "s.jsonl": lambda home: HistoryLogger(str(home)).log_event("s", "x", {}),
 }
 
 
 @POSIX_ONLY
-@pytest.mark.parametrize("existing", [False, True], ids=["fresh", "was-0644"])
+@pytest.mark.parametrize(
+    "has_existing_file",
+    [False, True],
+    ids=["fresh", "was-0644"],
+)
 @pytest.mark.parametrize("relative", list(_PRIVATE_FILES))
-def test_files_are_private_to_the_user(home, relative, existing):
+def test_files_are_private_to_the_user(home, relative, has_existing_file):
     path = home / relative
-    umask = os.umask(0o022)
+    umask = os.umask(DEFAULT_UMASK)
     try:
-        if existing:
+        if has_existing_file:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch(0o644)
+            path.touch(WORLD_READABLE)
         _PRIVATE_FILES[relative](home)
     finally:
         os.umask(umask)
-    assert path.stat().st_mode & 0o777 == 0o600
+    assert stat.S_IMODE(path.stat().st_mode) == OWNER_ONLY
 
 
 @POSIX_ONLY
 def test_existing_log_is_kept_and_made_private(home):
-    path = home / ".config/colab-cli/colab.log"
+    path = home / LOG_FILE
     path.parent.mkdir(parents=True)
     path.write_text("earlier line\n")
-    path.chmod(0o644)
+    path.chmod(WORLD_READABLE)
     setup_logging(False)
     logging.getLogger("colab_cli").info("later line")
     assert path.read_text().startswith("earlier line\n")
     assert "later line" in path.read_text()
-    assert path.stat().st_mode & 0o777 == 0o600
+    assert stat.S_IMODE(path.stat().st_mode) == OWNER_ONLY
 
 
 @POSIX_ONLY
 def test_history_files_are_made_private_when_only_read(home):
     path = home / "old.jsonl"
     path.write_text('{"event_type": "x"}\n')
-    path.chmod(0o644)
+    path.chmod(WORLD_READABLE)
     assert HistoryLogger(str(home)).get_history("old")
-    assert path.stat().st_mode & 0o777 == 0o600
+    assert stat.S_IMODE(path.stat().st_mode) == OWNER_ONLY
 
 
 @pytest.mark.parametrize("relative", list(_PRIVATE_FILES))
@@ -106,20 +120,22 @@ QUERY = f"/api/contents/x?authuser=0&colab-runtime-proxy-token={SECRET}"
 BODY = json.dumps({"endpoint": "e1", "runtimeProxyInfo": {"token": SECRET}})
 AUTH = {"Authorization": f"Bearer {SECRET}", "Accept": "text/html"}
 PROXY_HEADERS = {"X-Colab-Runtime-Proxy-Token": SECRET, "X-Colab-Tunnel": "G"}
+RAW_PROXY_TOKEN = f"X-Colab-Runtime-Proxy-Token: {SECRET}"
 RAW_AUTH = f"Authorization: Bearer {SECRET}"
 RAW_BASIC = f"Sending Basic {SECRET}"
 BYTES_HEADERS = {b"Authorization": f"Bearer {SECRET}".encode(), b"Accept": b"*"}
 KERNEL_WS = f"wss://h/api/kernels/k/channels?session_id=x&token={SECRET}"
 SSH_WS = _build_ws_url(SESSION.model_copy(update={"token": SECRET}))
 ERROR = requests.ConnectionError(f"Max retries exceeded: {QUERY}")
+LOOK_ALIKES = ("xcode=1", '"code": 200', "basic auth", "Bearer 1234567")
 LOG = logging.getLogger("colab_cli.test")
-JKC = logging.getLogger("jupyter_kernel_client")
+KERNEL_CLIENT_LOG = logging.getLogger("jupyter_kernel_client")
 
 
 @pytest.fixture
 def read_log(home):
     setup_logging(False)
-    return lambda: (home / ".config/colab-cli/colab.log").read_text()
+    return lambda: (home / LOG_FILE).read_text()
 
 
 def _issue_request(body="", headers=None):
@@ -138,22 +154,37 @@ def _urllib3_get():
 
 
 def _kernel_stdin_reply():
-    JKC.debug("input_reply %s", SECRET)
-    JKC.info("ready")
+    KERNEL_CLIENT_LOG.debug("input_reply %s", SECRET)
+    KERNEL_CLIENT_LOG.info("ready")
 
 
+_LOGGED_TEXT = {
+    "authorization-raw": (RAW_AUTH, "Authorization: Bearer"),
+    "basic-credential": (RAW_BASIC, "Sending Basic "),
+    "bytes-header": (BYTES_HEADERS, "b'Bearer "),
+    "proxy-token-header": (PROXY_HEADERS, "Tunnel"),
+    "proxy-token-raw": (RAW_PROXY_TOKEN, "Proxy-Token: "),
+    "query-wss-ssh": (SSH_WS, "wss://h/colab/ssh?"),
+    "query-wss-kernel": (KERNEL_WS, "session_id=x&"),
+    "cookie-header": ({"Cookie": f"SID={SECRET}", "Accept": "*/*"}, "'Accept'"),
+    "set-cookie-header": (f"Set-Cookie: sid={SECRET}", "Set-Cookie: "),
+    "goog-token-header": (f"X-Goog-Colab-Token: {SECRET}", "Colab-Token: "),
+    "auth-tuple": ([("Authorization", f"Token {SECRET}")], "('Authorization'"),
+    "bytes-key": ({b"token": SECRET, b"kind": "k"}, "b'kind'"),
+    "escaped-json-key": (json.dumps(BODY), '\\"endpoint\\": \\"e1\\"'),
+    "percent-escaped-value": (f"code=4%2F{SECRET}&state=ok", "&state=ok"),
+    "bearer-text": (f"Retrying with Bearer {SECRET}", "with Bearer "),
+}
 _CASES = {
     "json-body": (lambda: _issue_request(BODY), '"endpoint": "e1"'),
     "authorization-header": (lambda: _issue_request("", AUTH), "'Accept'"),
-    "authorization-raw": (lambda: LOG.debug(RAW_AUTH), "Authorization: Bearer"),
-    "basic-credential": (lambda: LOG.debug(RAW_BASIC), "Sending Basic "),
-    "bytes-header": (lambda: LOG.debug(BYTES_HEADERS), "b'Bearer "),
-    "proxy-token-header": (lambda: LOG.debug(PROXY_HEADERS), "Tunnel"),
     "query-http": (_urllib3_get, '"GET /api/contents/x?authuser=0&colab-'),
-    "query-wss-ssh": (lambda: LOG.debug(SSH_WS), "wss://h/colab/ssh?"),
-    "query-wss-kernel": (lambda: LOG.debug(KERNEL_WS), "session_id=x&"),
     "exception": (lambda: LOG.error("x", exc_info=ERROR), "Max retries"),
     "kernel-stdin": (_kernel_stdin_reply, "ready"),
+    **{
+        name: (functools.partial(LOG.debug, text), neighbour)
+        for name, (text, neighbour) in _LOGGED_TEXT.items()
+    },
 }
 
 
@@ -182,3 +213,9 @@ def test_request_lines_survive_redaction(read_log):
     assert "Request: GET https://colab.research.google.com/tun/m/" in log
     assert "Response: 200 OK" in log
     assert '-token=REDACTED HTTP/1.1" 200 2' in log
+
+
+def test_look_alikes_survive_redaction(read_log):
+    line = ", ".join(LOOK_ALIKES)
+    LOG.debug(line)
+    assert line in read_log()

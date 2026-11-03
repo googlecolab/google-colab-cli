@@ -190,7 +190,7 @@ class State:
 
 state = State()
 
-_SECRET_KEY = r"(?:[\w-]*token|code|code_verifier|client_secret)"
+_SECRET_FIELD_PATTERN = r"(?:[\w-]*token|code|code_verifier|client_secret)"
 # Each alternative has exactly one capturing group, the prefix to keep:
 # _RedactingFormatter keeps m.group(m.lastindex) and masks the rest.
 _SECRET_RE = re.compile(
@@ -200,9 +200,9 @@ _SECRET_RE = re.compile(
         |x-goog-colab-token)(?:['"]?\s*:|['"]\s*,)\s*(?:b?['"])?
         (?:(?:bearer|basic)\s+)?)[^'"\r\n]+
     # Quoted token key in JSON or a dict repr, also bytes or escaped JSON.
-    |((?<![\w-])b?\\?['"]{_SECRET_KEY}\\?['"]\s*:\s*\\?['"])[^'"\\]+
+    |((?<![\w-])b?\\?['"]{_SECRET_FIELD_PATTERN}\\?['"]\s*:\s*\\?['"])[^'"\\]+
     # Token key in a URL query or form body, also percent-encoded.
-    |((?<![\w-]){_SECRET_KEY}(?:=|%(?:25)?3D))
+    |((?<![\w-]){_SECRET_FIELD_PATTERN}(?:=|%(?:25)?3D))
         (?:[^&\s'"#%]|%(?!(?:25)?26)[0-9a-f]{{2}})+
     # Bearer or Basic credential anywhere in free text.
     |(\b(?:bearer|basic)\s+)[\w.~+/=-]{{8,}}
@@ -228,12 +228,13 @@ def setup_logging(log_to_stderr: bool):
     requests_log = logging.getLogger("urllib3")
     requests_log.setLevel(logging.DEBUG)
     requests_log.propagate = True
+    # Its DEBUG output includes stdin replies to the kernel, such as passwords.
     logging.getLogger("jupyter_kernel_client").setLevel(logging.INFO)
 
     log_dir = os.path.expanduser("~/.config/colab-cli")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, "colab.log")
-    # FileHandler takes no file mode, so create the file owner-only first.
+    # FileHandler can't set permissions, so create the file owner-only first.
     with contextlib.suppress(OSError):
         open(log_path, "a", opener=private_opener).close()
     make_private(log_path)

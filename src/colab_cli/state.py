@@ -45,15 +45,21 @@ class Settings(BaseModel):
     latest_version: Optional[str] = None
 
 
+_OWNER_ONLY_MODE = 0o600
+
+
 def private_opener(path: str, flags: int) -> int:
-    """`open()` opener that creates new files readable only by the owner."""
-    return os.open(path, flags, 0o600)
+    """Opens `path` for `open(opener=...)` and returns its file descriptor.
+
+    New files are created readable only by the owner.
+    """
+    return os.open(path, flags, _OWNER_ONLY_MODE)
 
 
 def make_private(path: str) -> None:
-    """Best-effort chmod of an existing file to owner-only (0600)."""
+    """Restricts an existing file to owner-only access, ignoring errors."""
     with contextlib.suppress(OSError):
-        os.chmod(path, 0o600)
+        os.chmod(path, _OWNER_ONLY_MODE)
 
 
 class _LockedFileStore:
