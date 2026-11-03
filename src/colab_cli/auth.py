@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import enum
 import json
 import logging
@@ -51,6 +52,13 @@ PUBLIC_SCOPES = [
     "https://www.googleapis.com/auth/colaboratory",
     "https://www.googleapis.com/auth/drive.file",
 ]
+
+# Scopes the CLI cannot work without. ``userinfo.email`` is required by the
+# session backend at colab.research.google.com; the Cloud and Drive scopes are
+# only needed by specific VM-side commands, so a user may decline them.
+REQUIRED_SCOPES = {
+    "https://www.googleapis.com/auth/userinfo.email",
+}
 
 
 KEYRING_SERVICE_NAME = "google-colab-cli"
@@ -126,6 +134,78 @@ def _save_token_to_keyring(token_json: str) -> None:
 REMOTE_REDIRECT_URI = "https://sdk.cloud.google.com/applicationdefaultauthcode.html"
 
 
+@contextlib.contextmanager
+def _relax_scope_change_check():
+    """Let oauthlib accept a partial grant during the code exchange.
+
+    When the user approves only some of the requested scopes, oauthlib raises a
+    bare ``Warning`` from ``fetch_token`` even though the exchange succeeded.
+    Relaxing its check lets us keep the token and validate the scopes we
+    actually need. Any previous value is restored afterwards.
+    """
+    key = "OAUTHLIB_RELAX_TOKEN_SCOPE"
+    previous = os.environ.get(key)
+    os.environ[key] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+
+
+def _limit_to_granted_scopes(creds: Credentials) -> Credentials:
+    """Return credentials scoped to the subset the user actually granted.
+
+    ``google_auth_oauthlib`` builds credentials with the *requested* scopes,
+    while ``granted_scopes`` carries the subset approved on the consent screen.
+    Persisting the requested set makes every refresh fail with
+    ``invalid_scope``, so store the granted set instead.
+    """
+    granted = creds.granted_scopes
+    if isinstance(granted, str):
+        granted = granted.split()
+    if not granted or not isinstance(granted, (list, tuple, set)):
+        # Some token responses omit the scope; keep whatever we have.
+        return creds
+    granted = list(granted)
+
+    missing = sorted(REQUIRED_SCOPES.difference(granted))
+    if missing:
+        raise RuntimeError(
+            "OAuth consent did not grant the scopes required by the Colab CLI: "
+            + ", ".join(missing)
+            + ". Re-run the command and approve them."
+        )
+
+    return Credentials(
+        token=creds.token,
+        refresh_token=creds.refresh_token,
+        id_token=creds.id_token,
+        token_uri=creds.token_uri,
+        client_id=creds.client_id,
+        client_secret=creds.client_secret,
+        scopes=granted,
+        expiry=creds.expiry,
+        granted_scopes=granted,
+    )
+
+
+def _refresh_without_scopes(creds: Credentials) -> Credentials:
+    """Refresh a token whose stored scopes no longer match its grant.
+
+    Tokens written before granted scopes were persisted list every requested
+    scope, which Google rejects with ``invalid_scope``. Omitting the scope
+    parameter tells Google to reuse the token's original grant.
+    """
+    info = json.loads(creds.to_json())
+    info.pop("scopes", None)
+    retried = Credentials.from_authorized_user_info(info)
+    retried.refresh(Request())
+    return retried
+
+
 def _run_remote_flow(client_config: dict) -> Credentials:
     """Run the remote copy-paste OAuth2 flow.
 
@@ -143,8 +223,9 @@ def _run_remote_flow(client_config: dict) -> Credentials:
     typer.echo("After approving, Google will display an authorization code.", err=True)
     code = input("Enter the authorization code: ").strip()
 
-    flow.fetch_token(code=code)
-    return flow.credentials
+    with _relax_scope_change_check():
+        flow.fetch_token(code=code)
+    return _limit_to_granted_scopes(flow.credentials)
 
 
 def _get_google_auth_credentials(config_path: str) -> Credentials:
@@ -176,9 +257,7 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
     try:
         token_json = _get_token_from_keyring()
         if token_json:
-            creds = Credentials.from_authorized_user_info(
-                json.loads(token_json), PUBLIC_SCOPES
-            )
+            creds = Credentials.from_authorized_user_info(json.loads(token_json))
             _remove_legacy_token()
     except Exception as e:
         logger.warning(f"Failed to load token from keyring: {e}")
@@ -191,9 +270,7 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
 
     if not creds and os.path.exists(LEGACY_TOKEN_PATH):
         try:
-            creds = Credentials.from_authorized_user_file(
-                LEGACY_TOKEN_PATH, PUBLIC_SCOPES
-            )
+            creds = Credentials.from_authorized_user_file(LEGACY_TOKEN_PATH)
             needs_save = True
         except Exception as e:
             logger.warning(f"Failed to load legacy token from {LEGACY_TOKEN_PATH}: {e}")
@@ -205,7 +282,17 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
                 creds.refresh(Request())
             except Exception as e:
                 logger.warning(f"Failed to refresh token: {e}")
-                creds = None
+                if "invalid_scope" in str(e):
+                    try:
+                        creds = _refresh_without_scopes(creds)
+                        logger.info("Refreshed token without a scope parameter.")
+                    except Exception as retry_error:
+                        logger.warning(
+                            f"Failed to refresh token without scopes: {retry_error}"
+                        )
+                        creds = None
+                else:
+                    creds = None
 
         if not creds:
             creds = _run_remote_flow(client_config)

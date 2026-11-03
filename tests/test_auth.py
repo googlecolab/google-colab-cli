@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+import os
 from unittest.mock import MagicMock, mock_open, patch
 
 from keyring.errors import KeyringError
@@ -24,9 +26,18 @@ from colab_cli.auth import (
     PUBLIC_SCOPES,
     REMOTE_REDIRECT_URI,
     AuthProvider,
+    _limit_to_granted_scopes,
     _run_with_timeout,
     get_credentials,
 )
+
+# A realistic partial grant: the user declined cloud-platform and drive.file.
+GRANTED_SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/colaboratory",
+]
 
 
 @pytest.fixture
@@ -79,7 +90,7 @@ def test_get_credentials_valid_token(mock_deps):
         KEYRING_SERVICE_NAME, KEYRING_USERNAME
     )
     mock_deps["creds_cls"].from_authorized_user_info.assert_called_once_with(
-        {"token": "valid"}, PUBLIC_SCOPES
+        {"token": "valid"}
     )
     mock_deps["keyring"].set_password.assert_not_called()
     mock_deps["session"].assert_called_once_with(mock_creds)
@@ -139,6 +150,203 @@ def test_get_credentials_no_token(mock_deps, mocker):
     mock_deps["keyring"].set_password.assert_called_once_with(
         KEYRING_SERVICE_NAME, KEYRING_USERNAME, '{"token":"new"}'
     )
+
+
+def _run_partial_grant_flow(mock_deps, mocker, granted_scopes):
+    """Run get_credentials with no cached token and a mocked partial grant."""
+    mock_deps["exists"].side_effect = lambda path: path == "dummy_config.json"
+    mock_deps["keyring"].get_password.return_value = None
+
+    mock_flow = MagicMock()
+    granted_creds = MagicMock()
+    granted_creds.granted_scopes = granted_scopes
+    mock_flow.authorization_url.return_value = ("https://auth.example/url", "state")
+    mock_flow.credentials = granted_creds
+    mock_deps["flow_cls"].from_client_config.return_value = mock_flow
+
+    mocker.patch("colab_cli.auth.input", create=True, return_value="pasted-code")
+
+    m_open = mock_open(read_data='{"web":{"client_id":"id"}}')
+    with patch("builtins.open", m_open):
+        res = get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
+
+    return mock_flow, granted_creds, res
+
+
+def test_limit_to_granted_scopes_persists_only_granted():
+    """Credentials saved after a partial grant carry the granted scopes."""
+    from google.oauth2.credentials import Credentials as RealCredentials
+
+    creds = RealCredentials(
+        token="access",
+        refresh_token="refresh",
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id="client",
+        client_secret="secret",
+        scopes=PUBLIC_SCOPES,
+        granted_scopes=GRANTED_SCOPES,
+    )
+
+    limited = _limit_to_granted_scopes(creds)
+
+    assert limited is not creds
+    assert limited.scopes == GRANTED_SCOPES
+    assert json.loads(limited.to_json())["scopes"] == GRANTED_SCOPES
+    # Everything needed to keep using and refreshing the token survives.
+    assert limited.token == "access"
+    assert limited.refresh_token == "refresh"
+    assert limited.client_id == "client"
+
+
+def test_limit_to_granted_scopes_rejects_missing_required_scope():
+    """A grant without userinfo.email cannot talk to the session backend."""
+    from google.oauth2.credentials import Credentials as RealCredentials
+
+    creds = RealCredentials(
+        token="access",
+        refresh_token="refresh",
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id="client",
+        client_secret="secret",
+        scopes=PUBLIC_SCOPES,
+        granted_scopes=["openid"],
+    )
+
+    with pytest.raises(RuntimeError, match="userinfo.email"):
+        _limit_to_granted_scopes(creds)
+
+
+def test_remote_flow_persists_granted_scopes(mock_deps, mocker):
+    """A successful partial-consent login is saved with only the granted scopes."""
+    restricted = MagicMock()
+    restricted.to_json.return_value = json.dumps(
+        {"token": "new", "scopes": GRANTED_SCOPES}
+    )
+    mock_deps["creds_cls"].return_value = restricted
+
+    mock_flow, _, res = _run_partial_grant_flow(mock_deps, mocker, GRANTED_SCOPES)
+
+    mock_flow.fetch_token.assert_called_once_with(code="pasted-code")
+    _, kwargs = mock_deps["creds_cls"].call_args
+    assert kwargs["scopes"] == GRANTED_SCOPES
+    assert kwargs["granted_scopes"] == GRANTED_SCOPES
+    mock_deps["keyring"].set_password.assert_called_once_with(
+        KEYRING_SERVICE_NAME, KEYRING_USERNAME, restricted.to_json.return_value
+    )
+    mock_deps["session"].assert_called_once_with(restricted)
+    assert res == mock_deps["session"].return_value
+
+
+def test_remote_flow_relaxes_scope_change_warning(mock_deps, mocker):
+    """oauthlib's bare Warning on a partial grant must not discard the login."""
+    seen = []
+    mock_flow = MagicMock()
+    mock_flow.authorization_url.return_value = ("https://auth.example/url", "state")
+    mock_flow.fetch_token.side_effect = lambda code: seen.append(
+        os.environ.get("OAUTHLIB_RELAX_TOKEN_SCOPE")
+    )
+    mock_flow.credentials.granted_scopes = []
+    mock_deps["flow_cls"].from_client_config.return_value = mock_flow
+    mock_deps["exists"].side_effect = lambda path: path == "dummy_config.json"
+    mocker.patch("colab_cli.auth.input", create=True, return_value="pasted-code")
+    # A pre-existing value must be restored, not dropped.
+    mocker.patch.dict(os.environ, {"OAUTHLIB_RELAX_TOKEN_SCOPE": "keep"})
+
+    with patch("builtins.open", mock_open(read_data='{"web":{"client_id":"id"}}')):
+        get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
+
+    assert seen == ["1"]
+    assert os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] == "keep"
+
+
+def test_remote_flow_restores_scope_env_after_exchange_error(mock_deps, mocker):
+    """The relaxed-scope setting is scoped to fetch_token even when it fails."""
+    mock_flow = MagicMock()
+    mock_flow.authorization_url.return_value = ("https://auth.example/url", "state")
+    mock_flow.fetch_token.side_effect = RuntimeError("exchange failed")
+    mock_deps["flow_cls"].from_client_config.return_value = mock_flow
+    mock_deps["exists"].side_effect = lambda path: path == "dummy_config.json"
+    mocker.patch("colab_cli.auth.input", create=True, return_value="pasted-code")
+    mocker.patch.dict(os.environ, {"OAUTHLIB_RELAX_TOKEN_SCOPE": "keep"})
+
+    with patch("builtins.open", mock_open(read_data='{"web":{"client_id":"id"}}')):
+        with pytest.raises(RuntimeError, match="exchange failed"):
+            get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
+
+    assert os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] == "keep"
+
+
+def test_refresh_invalid_scope_retries_without_scope(mock_deps):
+    """Tokens saved with the requested scopes are repaired on first refresh."""
+    stale = MagicMock()
+    stale.valid = False
+    stale.expired = True
+    stale.refresh_token = "refresh"
+    stale.to_json.return_value = json.dumps(
+        {
+            "token": "old",
+            "refresh_token": "refresh",
+            "client_id": "client",
+            "client_secret": "secret",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "scopes": PUBLIC_SCOPES,
+        }
+    )
+    stale.refresh.side_effect = Exception("invalid_scope: Bad Request")
+
+    retried = MagicMock()
+    retried.to_json.return_value = '{"token":"retried"}'
+    mock_deps["creds_cls"].from_authorized_user_info.side_effect = [stale, retried]
+    mock_deps["exists"].side_effect = lambda path: path == "dummy_config.json"
+    mock_deps["keyring"].get_password.return_value = '{"token": "expired"}'
+
+    with patch("builtins.open", mock_open(read_data='{"web":{"client_id":"id"}}')):
+        res = get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
+
+    assert mock_deps["creds_cls"].from_authorized_user_info.call_count == 2
+    retry_info = (
+        mock_deps["creds_cls"].from_authorized_user_info.call_args_list[1].args[0]
+    )
+    assert "scopes" not in retry_info
+    assert retry_info["token"] == "old"
+    stale.refresh.assert_called_once()
+    retried.refresh.assert_called_once()
+    mock_deps["keyring"].set_password.assert_called_once_with(
+        KEYRING_SERVICE_NAME, KEYRING_USERNAME, '{"token":"retried"}'
+    )
+    mock_deps["session"].assert_called_once_with(retried)
+    assert res == mock_deps["session"].return_value
+
+
+def test_refresh_invalid_scope_retry_failure_falls_back_to_remote_flow(
+    mock_deps, mocker
+):
+    """If refreshing without scopes also fails, re-consent as before."""
+    stale = MagicMock()
+    stale.valid = False
+    stale.expired = True
+    stale.refresh_token = "refresh"
+    stale.to_json.return_value = json.dumps(
+        {"token": "old", "refresh_token": "refresh", "scopes": PUBLIC_SCOPES}
+    )
+    stale.refresh.side_effect = Exception("invalid_scope: Bad Request")
+
+    retried = MagicMock()
+    retried.refresh.side_effect = Exception("still invalid")
+    mock_deps["creds_cls"].from_authorized_user_info.side_effect = [stale, retried]
+    mock_deps["exists"].side_effect = lambda path: path == "dummy_config.json"
+    mock_deps["keyring"].get_password.return_value = '{"token": "expired"}'
+
+    mock_flow = MagicMock()
+    mock_flow.authorization_url.return_value = ("https://auth.example/url", "state")
+    mock_flow.credentials.granted_scopes = []
+    mock_deps["flow_cls"].from_client_config.return_value = mock_flow
+    mocker.patch("colab_cli.auth.input", create=True, return_value="pasted-code")
+
+    with patch("builtins.open", mock_open(read_data='{"web":{"client_id":"id"}}')):
+        get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
+
+    mock_flow.fetch_token.assert_called_once_with(code="pasted-code")
 
 
 def test_get_credentials_keyring_inaccessible(mock_deps, mocker):
@@ -322,7 +530,7 @@ def test_legacy_token_file_migrated_to_keyring(mock_deps, mocker):
         res = get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
 
     mock_deps["creds_cls"].from_authorized_user_file.assert_called_once_with(
-        LEGACY_TOKEN_PATH, PUBLIC_SCOPES
+        LEGACY_TOKEN_PATH
     )
     mock_deps["flow_cls"].from_client_config.assert_not_called()
     mock_deps["keyring"].set_password.assert_called_once_with(
