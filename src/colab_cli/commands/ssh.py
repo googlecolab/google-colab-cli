@@ -22,6 +22,8 @@ Modes:
 * ``colab ssh -s SESSION``         same, targeting SESSION explicitly.
 * ``colab ssh --proxy-mode -s S``  act as an OpenSSH ProxyCommand-compatible
                                    WebSocket-stdio bridge for ``~/.ssh/config``.
+* ``colab ssh [-s S] -- CMD``      run CMD in ``/content`` on an existing
+                                   session and exit with its status.
 
 Every ``colab ssh`` flag also works in ``--proxy-mode``: with ``-s NAME`` the
 session is created if it does not exist (so a config host works on first
@@ -35,6 +37,7 @@ the ``X-Colab-Ssh-Pubkey`` header. RSA keys are rejected by the server, so
 """
 
 import contextlib
+import json
 import os
 from pathlib import Path
 import shlex
@@ -48,6 +51,7 @@ import uuid
 
 from colab_cli.auth import AuthProvider
 from colab_cli.client import COLAB_CLIENT_AGENT_HEADER
+from colab_cli.commands import execution
 from colab_cli.state import SessionState
 import typer
 from typing_extensions import Annotated
@@ -61,7 +65,9 @@ _SSH_HOST = "root@colab-runtime"
 # Colab's standard working directory; land here instead of root's home.
 _DEFAULT_REMOTE_DIR = "/content"
 _DEFAULT_SSH_MODE = "proxy"
-_SSH_MODES = ("interactive", _DEFAULT_SSH_MODE)
+_CMD_SSH_MODE = "cmd"
+_SSH_MODES = ("interactive", _DEFAULT_SSH_MODE, _CMD_SSH_MODE)
+_MAX_SSH_SESSIONS = 5
 
 
 def _pubkey_from_identity(identity: str) -> str:
@@ -232,13 +238,40 @@ def _build_ws_url(session: SessionState, mode: str = _DEFAULT_SSH_MODE) -> str:
     )
 
 
+def _session_limit(body: bytes) -> Optional[int]:
+    """Returns the session limit from a 429 body, or None if there is none.
+
+    Args:
+      body: The raw HTTP 429 response body.
+
+    Returns:
+      The limit when the body is the server's ``already-active-session``
+      error with an integer limit from 1 to ``_MAX_SSH_SESSIONS``; otherwise
+      None.
+    """
+    try:
+        data = json.loads(body.decode("utf-8", errors="replace"))
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("error") != "already-active-session":
+        return None
+    limit = data.get("limit")
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return None
+    if not 1 <= limit <= _MAX_SSH_SESSIONS:
+        return None
+    return limit
+
+
 def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
     """Maps an upgrade-handshake status/body to an actionable message.
 
     Args:
       status: The HTTP status of the failed upgrade, or None if there was no
         HTTP status (e.g. a network error).
-      body: The raw response body, used to refine the 400 message.
+      body: The raw response body, used to refine the 400 and 429 messages.
 
     Returns:
       A human-readable, actionable error message.
@@ -280,6 +313,13 @@ def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
                 "the /colab/ssh endpoint. SSH is enabled at runtime creation, "
                 "so an older or non-SSH runtime will not have it - run "
                 "`colab new` for a fresh runtime with SSH."
+            )
+        case 429 if (limit := _session_limit(body)) is not None:
+            message = (
+                f"SSH session limit reached (HTTP 429): {limit} of {limit} "
+                "SSH sessions in use on this runtime. Close another "
+                "`colab ssh` or IDE connection to it and retry. The limit "
+                "depends on your Colab plan."
             )
         case 429:
             message = (
@@ -467,6 +507,32 @@ def _run_interactive_ssh(session: SessionState, identity: Optional[str]) -> int:
     ssh_args.append(
         f"cd {_DEFAULT_REMOTE_DIR} 2>/dev/null; exec ${{SHELL:-/bin/bash}} -l"
     )
+    return subprocess.call(ssh_args)
+
+
+def _run_remote_command(
+    session: SessionState, identity: Optional[str], cmd: list[str]
+) -> int:
+    """Runs CMD in ``/content`` over ``ssh`` and returns ssh's exit code.
+
+    One argument is a shell command line, as with OpenSSH; several are an exact
+    argv. ``-t`` only when stdin and stdout are terminals, else ``-T``.
+
+    Args:
+      session: The session to connect to.
+      identity: Optional private key path forwarded to ``ssh``.
+      cmd: The command and its arguments.
+
+    Returns:
+      The exit code of the ``ssh`` subprocess.
+    """
+    proxy = _proxy_command(session, identity, _CMD_SSH_MODE)
+    ssh_args = _ssh_base_args(proxy, identity)
+    tty = execution.is_stdin_tty() and execution.is_stdout_tty()
+    ssh_args.append("-t" if tty else "-T")
+    ssh_args.append(_SSH_HOST)
+    line = cmd[0] if len(cmd) == 1 else shlex.join(cmd)
+    ssh_args.append(f"cd {_DEFAULT_REMOTE_DIR} 2>/dev/null; {line}")
     return subprocess.call(ssh_args)
 
 
@@ -706,6 +772,13 @@ def ssh(
     ssh_mode: Annotated[
         str, typer.Option("--colab-internal-mode", hidden=True)
     ] = _DEFAULT_SSH_MODE,
+    cmd: Annotated[
+        Optional[list[str]],
+        typer.Argument(
+            metavar="[-- CMD [ARGS]...]",
+            help="Command to run on an existing session instead of a shell.",
+        ),
+    ] = None,
 ):
     """Connect to a Colab runtime via SSH.
 
@@ -714,7 +787,23 @@ def ssh(
     --proxy-mode it is a ProxyCommand-compatible WebSocket-stdio bridge; every
     flag above still applies (``-s NAME`` creates the session if missing,
     ``--gpu/--tpu`` set its accelerator, ``--rm`` stops it on disconnect).
+    With ``-- CMD`` it runs CMD in ``/content`` on an existing session and
+    exits with its status, using a PTY only when stdin and stdout are terminals.
     """
+    if proxy_mode and cmd:
+        typer.echo("[colab] --proxy-mode takes no command.", err=True)
+        raise typer.Exit(code=2)
+    if cmd:
+        with contextlib.redirect_stdout(sys.stderr):
+            s = _resolve_session(session)
+        _warn_accelerator_ignored(gpu, tpu, False, high_mem=high_mem)
+        if rm:
+            typer.echo("[colab] --rm ignored with -- CMD.", err=True)
+        raise typer.Exit(code=_run_remote_command(s, identity, cmd))
+    if proxy_mode and ssh_mode == _CMD_SSH_MODE:
+        with contextlib.redirect_stdout(sys.stderr):
+            s = _resolve_session(session)
+        raise typer.Exit(code=_run_proxy_bridge(s, identity, rm, ssh_mode))
     if proxy_mode:
         s, created = _select_proxy_session(session, gpu, tpu, high_mem=high_mem)
         _warn_accelerator_ignored(gpu, tpu, created, high_mem=high_mem)
@@ -726,4 +815,5 @@ def ssh(
 
 
 def register(app: typer.Typer):
-    app.command()(ssh)
+    # Options after the first CMD word belong to CMD, not to `colab ssh`.
+    app.command(context_settings={"allow_interspersed_args": False})(ssh)

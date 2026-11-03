@@ -34,8 +34,14 @@ TITLE_REGEX = re.compile(r"^\s*#\s*@title\s+(.*)", re.MULTILINE)
 ENV_KEY_REGEX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def is_stdin_tty():
-    return sys.stdin.isatty()
+def is_stdin_tty() -> bool:
+    """True if stdin is a terminal."""
+    return sys.stdin is not None and sys.stdin.isatty()
+
+
+def is_stdout_tty() -> bool:
+    """True if stdout is a terminal."""
+    return sys.stdout is not None and sys.stdout.isatty()
 
 
 def _parse_env_vars(env: Optional[List[str]]) -> dict[str, str]:
@@ -149,7 +155,10 @@ def exec_command(
     ] = None,
     timeout: Annotated[
         Optional[float],
-        typer.Option("--timeout", help="Timeout in seconds for code execution"),
+        typer.Option(
+            "--timeout",
+            help="Seconds to wait without output before failing (0 for no limit)",
+        ),
     ] = 30.0,
     env: Annotated[
         Optional[List[str]],

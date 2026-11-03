@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to check if the active Linux `SecretService` keyring collection is locked via `secretstorage` before reading or writing OAuth tokens, logging and printing an immediate warning with the collection label, timeout, and `--auth=adc` hint while still attempting the keyring operation.
 2026-10-29: The debug log (`colab.log` and `--logtostderr`) masks access tokens, runtime proxy tokens, OAuth codes, client secrets, auth headers and cookies, including in percent-encoded URLs; `jupyter_kernel_client` logs at INFO so kernel stdin replies are not recorded.
 2026-10-29: `sessions.json`, `settings.json`, `colab.log` and session history files are created with mode 0600, and existing copies are tightened to 0600 the next time the CLI uses them (history files whenever the history logger starts).
 2026-10-21: Stored OAuth2 credentials in the OS native keyring via the `keyring` library instead of `~/.config/colab-cli/token.json`, falling back to `_run_remote_flow` if keyring is inaccessible. Keyring failures are reported on stderr, and an existing `token.json` is migrated into the keyring and then deleted (or deleted outright if the keyring already has a token).
