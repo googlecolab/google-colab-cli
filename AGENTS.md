@@ -87,6 +87,8 @@ The package version is derived from the git tag via `hatch-vcs` (see `pyproject.
 
 26. **Prefer verified upstream fixes**: Before rebasing local fixes onto upstream, check each reported problem against the actual upstream implementation and regression tests. Adopt upstream implementations for already-fixed behavior, remove redundant local code, and retain only the smallest additions whose necessity is demonstrated by a failing upstream regression. Encoded 2026-11-02 after the user requested checking whether upstream had already fixed our issues before preserving local implementations.
 
+27. **Use the requested Git identity**: Set this repository's local Git author and committer identity to `dream <dreamoftime0@gmail.com>`. Verify both fields before committing or pushing; never use `HZHXDLKJGFYXGS_63699` or the `jingshi.zhao` email for this work. Encoded 2026-11-03 after the user corrected the commit identity.
+
 ## Agent Execution Limitations (What I Can vs Cannot Run)
 As an AI agent operating via non-interactive shell tools (`run_shell_command`), there are strict limits on what I can test autonomously without human intervention:
 - **I CAN Run:**
