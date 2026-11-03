@@ -118,6 +118,11 @@ def test_chmod_failure_is_not_fatal(home, monkeypatch, relative):
 SECRET = "sentinel-0123456789abcdef"
 QUERY = f"/api/contents/x?authuser=0&colab-runtime-proxy-token={SECRET}"
 BODY = json.dumps({"endpoint": "e1", "runtimeProxyInfo": {"token": SECRET}})
+ESCAPED_JSON = json.dumps(json.dumps({"token": SECRET, "next": "e1"}))
+ESCAPED_VALUE = f'{{"token": "abc\\u003d{SECRET}", "next": "e1"}}'
+ESCAPED_INNER = json.dumps(f'{{"code": "4\\/{SECRET}", "next": "e1"}}')
+ESCAPED_BACKSLASH = json.dumps({"token": "ab\\" + SECRET, "next": "e1"})
+BYTES_VALUE = {b"token": SECRET.encode(), b"kind": b"k"}
 AUTH = {"Authorization": f"Bearer {SECRET}", "Accept": "text/html"}
 PROXY_HEADERS = {"X-Colab-Runtime-Proxy-Token": SECRET, "X-Colab-Tunnel": "G"}
 RAW_PROXY_TOKEN = f"X-Colab-Runtime-Proxy-Token: {SECRET}"
@@ -127,7 +132,17 @@ BYTES_HEADERS = {b"Authorization": f"Bearer {SECRET}".encode(), b"Accept": b"*"}
 KERNEL_WS = f"wss://h/api/kernels/k/channels?session_id=x&token={SECRET}"
 SSH_WS = _build_ws_url(SESSION.model_copy(update={"token": SECRET}))
 ERROR = requests.ConnectionError(f"Max retries exceeded: {QUERY}")
-LOOK_ALIKES = ("xcode=1", '"code": 200', "basic auth", "Bearer 1234567")
+LOOK_ALIKES = (
+    "xcode=1",
+    '"code": 200',
+    "basic auth",
+    "Bearer 1234567",
+    "%26xcode%3D1",
+    "%26barcode%3D1",
+    "%3Fcode_challenge%3Dabc",
+    "\\u0026xcode\\u003d1",
+    "\\u003dbarcode\\u003d1",
+)
 LOG = logging.getLogger("colab_cli.test")
 KERNEL_CLIENT_LOG = logging.getLogger("jupyter_kernel_client")
 
@@ -171,9 +186,28 @@ _LOGGED_TEXT = {
     "goog-token-header": (f"X-Goog-Colab-Token: {SECRET}", "Colab-Token: "),
     "auth-tuple": ([("Authorization", f"Token {SECRET}")], "('Authorization'"),
     "bytes-key": ({b"token": SECRET, b"kind": "k"}, "b'kind'"),
-    "escaped-json-key": (json.dumps(BODY), '\\"endpoint\\": \\"e1\\"'),
+    "bytes-value": (BYTES_VALUE, "b'kind': b'k'"),
+    "escaped-json-key": (ESCAPED_JSON, '\\"next\\": \\"e1\\"'),
+    "escaped-json-inner-escape": (ESCAPED_INNER, '\\"next\\": \\"e1\\"'),
     "percent-escaped-value": (f"code=4%2F{SECRET}&state=ok", "&state=ok"),
     "bearer-text": (f"Retrying with Bearer {SECRET}", "with Bearer "),
+    "encoded-amp": (f"next=%2Fcb%3Fstate%3D1%26code%3D{SECRET}", "%26code%3D"),
+    "encoded-query": (f"cb%3Fcode_verifier%3D{SECRET}", "%3Fcode_verifier%3D"),
+    "encoded-form": (f"a%3D1%26client_secret%3D{SECRET}%26b%3D2", "%26b%3D2"),
+    "encoded-lowercase": (f"cb%3fcode%3d{SECRET}", "%3fcode%3d"),
+    "encoded-semicolon": (f"a%3D1%3Bcode%3D{SECRET}", "%3Bcode%3D"),
+    "encoded-hash": (f"cb%23code%3D{SECRET}", "%23code%3D"),
+    "encoded-equals-in-value": (f"next%3Dcode%253D{SECRET}", "%3Dcode%253D"),
+    "json-escaped-amp": (f"state=1\\u0026code={SECRET}", "\\u0026code="),
+    "json-equals": (f"a\\u003d1\\u0026code\\u003d{SECRET}", "code\\u003d"),
+    "json-token": (f"cb?access_token\\u003d{SECRET}", "access_token\\u003d"),
+    "json-after-equals": (f"next\\u003dcode\\u003d{SECRET}", "next\\u003dcode"),
+    "json-after-query": (f"cb\\u003fcode\\u003d{SECRET}", "cb\\u003fcode"),
+    "json-escaped-value": (ESCAPED_VALUE, '"next": "e1"'),
+    "json-escaped-slash": (f'{{"code": "4\\/{SECRET}"}}', '"code": "'),
+    "json-escaped-backslash": (ESCAPED_BACKSLASH, '"next": "e1"'),
+    "double-amp": (f"x%253D1%2526code%253D{SECRET}", "%2526code%253D"),
+    "double-query": (f"%253Fcode%253D{SECRET}%2526y%253D2", "%2526y%253D2"),
 }
 _CASES = {
     "json-body": (lambda: _issue_request(BODY), '"endpoint": "e1"'),

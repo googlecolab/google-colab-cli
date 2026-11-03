@@ -193,17 +193,23 @@ state = State()
 _SECRET_FIELD_PATTERN = r"(?:[\w-]*token|code|code_verifier|client_secret)"
 # Each alternative has exactly one capturing group, the prefix to keep:
 # _RedactingFormatter keeps m.group(m.lastindex) and masks the rest.
+# Grouped value repeats are possessive (++) so long values use constant memory.
 _SECRET_RE = re.compile(
     rf"""
     # Credential header in a dict, tuple, bytes or raw line; keeps the scheme.
     (\b(?:authorization|cookie|set-cookie|x-colab-runtime-proxy-token
         |x-goog-colab-token)(?:['"]?\s*:|['"]\s*,)\s*(?:b?['"])?
         (?:(?:bearer|basic)\s+)?)[^'"\r\n]+
-    # Quoted token key in JSON or a dict repr, also bytes or escaped JSON.
-    |((?<![\w-])b?\\?['"]{_SECRET_FIELD_PATTERN}\\?['"]\s*:\s*\\?['"])[^'"\\]+
-    # Token key in a URL query or form body, also percent-encoded.
-    |((?<![\w-]){_SECRET_FIELD_PATTERN}(?:=|%(?:25)?3D))
-        (?:[^&\s'"#%]|%(?!(?:25)?26)[0-9a-f]{{2}})+
+    # Quoted token key in JSON or a dict repr, also bytes or escaped JSON; the
+    # value runs through JSON escapes like \/ up to a quote, escaped or not.
+    |((?<![\w-])b?\\?['"]{_SECRET_FIELD_PATTERN}\\?['"]\s*:\s*b?\\?['"])
+        (?:[^'"\\]|\\[^'"])++
+    # Token key in a URL query or form body, also percent- or JSON-escaped
+    # (%3D, %253D, \u003d), at a word start or after %XX, %25XX or \uXXXX.
+    |((?:(?<![\w-])|(?<=%[0-9a-f]{{2}})|(?<=%25[0-9a-f]{{2}})
+        |(?<=\\u[0-9a-f]{{4}}))
+        {_SECRET_FIELD_PATTERN}(?:=|%(?:25)?3D|\\u003d))
+        (?:[^&\s'"#%]|%(?!(?:25)?26)[0-9a-f]{{2}})++
     # Bearer or Basic credential anywhere in free text.
     |(\b(?:bearer|basic)\s+)[\w.~+/=-]{{8,}}
     """,
