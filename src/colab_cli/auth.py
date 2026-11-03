@@ -99,16 +99,15 @@ def _check_linux_keyring_locked() -> None:
         import secretstorage
 
         kr = keyring.get_keyring()
-        backends = kr.backends if isinstance(kr, chainer.ChainerBackend) else [kr]
-        ss_backend = next(
-            (b for b in backends if isinstance(b, SecretService.Keyring)),
-            None,
-        )
-        if ss_backend is None:
+        if isinstance(kr, chainer.ChainerBackend):
+            primary = kr.backends[0] if kr.backends else None
+        else:
+            primary = kr
+        if not isinstance(primary, SecretService.Keyring):
             return
 
         with closing(secretstorage.dbus_init()) as bus:
-            collection_path = getattr(ss_backend, "preferred_collection", None)
+            collection_path = getattr(primary, "preferred_collection", None)
             collection = (
                 secretstorage.Collection(bus, collection_path)
                 if collection_path
@@ -127,24 +126,19 @@ def _check_linux_keyring_locked() -> None:
 
 
 def _get_token_from_keyring() -> Optional[str]:
-    _check_linux_keyring_locked()
-    return _run_with_timeout(
-        keyring.get_password,
-        KEYRING_SERVICE_NAME,
-        KEYRING_USERNAME,
-        timeout=KEYRING_TIMEOUT_SECONDS,
-    )
+    def get_password() -> Optional[str]:
+        _check_linux_keyring_locked()
+        return keyring.get_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME)
+
+    return _run_with_timeout(get_password, timeout=KEYRING_TIMEOUT_SECONDS)
 
 
 def _save_token_to_keyring(token_json: str) -> None:
-    _check_linux_keyring_locked()
-    _run_with_timeout(
-        keyring.set_password,
-        KEYRING_SERVICE_NAME,
-        KEYRING_USERNAME,
-        token_json,
-        timeout=KEYRING_TIMEOUT_SECONDS,
-    )
+    def set_password() -> None:
+        _check_linux_keyring_locked()
+        keyring.set_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME, token_json)
+
+    _run_with_timeout(set_password, timeout=KEYRING_TIMEOUT_SECONDS)
 
 
 # Remote copy-paste OAuth flow.

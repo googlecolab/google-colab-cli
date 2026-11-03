@@ -589,3 +589,71 @@ def test_check_linux_keyring_locked_ignores_errors_and_other_platforms(
 
     _check_linux_keyring_locked()
     assert capsys.readouterr().err == ""
+
+
+def test_check_linux_keyring_locked_chainer_only_checks_first_backend(
+    mock_deps, mocker, capsys
+):
+    """Only warn for ChainerBackend when SecretService is the highest-priority backend."""
+    from keyring.backends import SecretService, chainer
+
+    mocker.patch("colab_cli.auth.sys.platform", "linux")
+    m_ss = MagicMock()
+    m_collection = MagicMock()
+    m_collection.is_locked.return_value = True
+    m_collection.get_label.return_value = "Default keyring"
+    m_collection.collection_path = "/org/freedesktop/secrets/aliases/default"
+    m_ss.Collection.return_value = m_collection
+    mocker.patch.dict("sys.modules", {"secretstorage": m_ss})
+
+    # Case 1: Higher-priority backend (e.g. KWallet) is first, SecretService is second.
+    mocker.patch.object(
+        chainer.ChainerBackend,
+        "backends",
+        [MagicMock(), SecretService.Keyring()],
+    )
+    mock_deps["keyring"].get_keyring.return_value = chainer.ChainerBackend()
+
+    _check_linux_keyring_locked()
+    assert capsys.readouterr().err == ""
+    m_ss.dbus_init.assert_not_called()
+
+    # Case 2: SecretService is the highest-priority (first) backend in ChainerBackend.
+    mocker.patch.object(
+        chainer.ChainerBackend,
+        "backends",
+        [SecretService.Keyring(), MagicMock()],
+    )
+    _check_linux_keyring_locked()
+    assert "Keyring 'Default keyring' is locked" in capsys.readouterr().err
+    m_ss.dbus_init.assert_called_once()
+
+
+def test_linux_keyring_lock_check_runs_under_timeout(mock_deps, mocker, capsys):
+    """A wedged D-Bus call inside _check_linux_keyring_locked is bounded by the timeout."""
+    import threading
+    from keyring.backends import SecretService
+
+    mocker.patch("colab_cli.auth.sys.platform", "linux")
+    mocker.patch("colab_cli.auth.KEYRING_TIMEOUT_SECONDS", 0.05)
+    mock_deps["exists"].side_effect = lambda path: path == "dummy_config.json"
+    mock_deps["keyring"].get_keyring.return_value = SecretService.Keyring()
+
+    hang_event = threading.Event()
+    m_ss = MagicMock()
+    m_ss.dbus_init.side_effect = lambda: hang_event.wait(1.0)
+    mocker.patch.dict("sys.modules", {"secretstorage": m_ss})
+
+    mock_flow, mock_creds_new = _setup_remote_flow(mock_deps, mocker)
+
+    try:
+        with patch("builtins.open", mock_open(read_data='{"web":{"client_id":"id"}}')):
+            res = get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
+    finally:
+        hang_event.set()
+
+    err = capsys.readouterr().err
+    assert "Operation 'get_password' timed out" in err
+    assert "Operation 'set_password' timed out" in err
+    mock_flow.fetch_token.assert_called_once_with(code="pasted-code")
+    assert res == mock_deps["session"].return_value
