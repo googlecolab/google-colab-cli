@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-03: Partial OAuth consent (`--auth=oauth2`) no longer discards a successful login or breaks token refresh. `_run_remote_flow` now performs the code exchange with `OAUTHLIB_RELAX_TOKEN_SCOPE` set (restoring the previous value afterwards), validates that `userinfo.email` was granted, and persists only the scopes the user actually approved instead of the full `PUBLIC_SCOPES` request. Stored tokens are loaded with their persisted scopes, so refreshes no longer send scopes outside the grant and fail with `invalid_scope`. Tokens written by older versions are repaired on first refresh by retrying without a `scope` parameter; a grant missing `userinfo.email` now fails immediately with the missing scope named. Added unit tests in `tests/test_auth.py` covering partial-grant persistence, the relaxed exchange, environment restoration, required-scope validation, and both refresh-retry outcomes.
 2026-10-21: Migrated OAuth2 token persistence in `auth.py` from `~/.config/colab-cli/token.json` to the OS native password storage via the `keyring` library (`KEYRING_SERVICE_NAME = "google-colab-cli"`, `KEYRING_USERNAME = "oauth_token"`). When the keyring is empty, locked, or inaccessible, `_run_remote_flow` is invoked; keyring read/write failures print a warning to stderr without failing the command. An existing `~/.config/colab-cli/token.json` (`LEGACY_TOKEN_PATH`) is used when the keyring has no token, copied into the keyring, and deleted only after the keyring write succeeds; it is also deleted when the keyring already holds a token.
 2026-09-25: Cleaned up references to keep-alive background daemon and pre-flight pings. VM liveness is automatically maintained by the Colab backend based on active kernel activity.
 2026-08-10: Added `colab usage` for account-level compute-unit rate/balance via `GET /tun/m/ccu-info` on the session backend (same bearer token as `colab new`).
@@ -73,10 +74,14 @@ sufficient for this host.
 
 How each provider supplies the scope:
 
--   **`oauth2`**: `PUBLIC_SCOPES` already includes `colaboratory`, so the
-    InstalledAppFlow consent screen lists it. Existing cached tokens in the
-    keyring that were minted before a scope change must be cleared to trigger a
-    fresh consent flow.
+-   **`oauth2`**: `PUBLIC_SCOPES` lists every scope the CLI may use, but the
+    consent screen is granular: users may approve only a subset. The flow
+    relaxes oauthlib's "scope changed" check during the code exchange, saves the
+    *granted* scopes rather than the requested set, and fails with a clear error
+    if `userinfo.email` was declined. Tokens are loaded with their persisted
+    scopes so refreshes stay within the grant. Tokens written before this change
+    may record the requested set; their first refresh retries without a `scope`
+    parameter and re-saves the repaired token.
 -   **`adc`**: `google.auth.default(scopes=PUBLIC_SCOPES)` is called, and for
     credential subclasses that support `with_scopes` (service accounts,
     GCE/GKE metadata, impersonated) we re-apply via `creds.with_scopes(...)`.
