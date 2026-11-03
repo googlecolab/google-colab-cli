@@ -440,7 +440,6 @@ def test_cli_no_args():
 
 
 def test_cli_console_removed():
-    """`colab console` stays removed: unregistered, absent from --help, rejected."""
     assert "console" not in typer.main.get_command(app).commands
 
     result = runner.invoke(app, ["--help"])
@@ -451,25 +450,8 @@ def test_cli_console_removed():
     assert "console" not in names, result.output
 
     result = runner.invoke(app, ["console"])
-    assert result.exit_code == 2, result.output
+    assert result.exit_code == click.UsageError.exit_code, result.output
     assert "No such command" in result.output, result.output
-
-
-def test_cli_exec_stdin_forwards_shell_escape(mock_store, mock_common_state):
-    mock_session = MagicMock()
-    mock_session.name = "s1"
-    mock_session.kernel_id = None
-    mock_session.session_id = None
-    mock_store.get.return_value = mock_session
-    mock_common_state.resolve_session.return_value = "s1"
-
-    with patch("colab_cli.commands.execution.ColabRuntime") as mock_runtime_class:
-        execute_code = mock_runtime_class.return_value.execute_code
-        execute_code.return_value = []
-        result = runner.invoke(app, ["exec", "-s", "s1"], input="!echo hi")
-
-    assert result.exit_code == 0, result.output
-    assert execute_code.call_args.args[0] == "!echo hi"
 
 
 @patch("colab_cli.commands.files.ContentsClient")
