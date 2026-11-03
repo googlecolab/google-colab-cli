@@ -17,7 +17,7 @@ Designed to support seamless developer productivity, headless automation, and AI
 ## Key Features
 
 * **Instant VM Provisioning:** Spin up CPU, GPU (T4, L4, G4, H100, A100), or TPU (v5e1, v6e1) runtimes in seconds.
-* **Robust Code Execution:** Run local Python scripts, Jupyter Notebooks (`.ipynb`), or piped `stdin` code; launch interactive REPLs or raw TTY console shells.
+* **Robust Code Execution:** Run local Python scripts, Jupyter Notebooks (`.ipynb`), or piped `stdin` code; launch interactive REPLs or SSH shells (`colab ssh`).
 * **Ephemeral Job Runner (`colab run`):** Provision a fresh VM, execute a local script with forwarded arguments, retrieve output files, and automatically tear down the runtime in a single command.
 * **Activity-Based Liveness:** Sessions stay alive as long as the kernel is active, with the Colab backend automatically maintaining liveness.
 * **Seamless Workspace Automation:** Mount Google Drive, authenticate Google Cloud Platform (GCP) credentials, and install dependencies with high-performance `uv` package management.
@@ -81,8 +81,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab run [--gpu GPU] [--tpu TPU] [--high-mem] [--keep] SCRIPT [ARGS...]` | Run a local script on a fresh VM, forwarding arguments, then release it |
 | `colab exec [-s NAME] [-f FILE] [--output-image PATH]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook |
 | `colab repl [-s NAME] [--output-image PATH]` | Start an interactive Python REPL on the VM (exits cleanly on piped EOF) |
-| `colab console [-s NAME]` | Connect to a raw interactive TTY shell (tmux) on the remote VM |
-| `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem]` | Open an SSH shell to the runtime over WebSocket, or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
+| `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem] [-- CMD ...]` | Open an SSH shell to the runtime over WebSocket, run a one-shot remote command (`-- CMD`), or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
 
 ### File Operations
 | Command | Description |
@@ -144,7 +143,7 @@ colab stop -s analysis
 ## Usage Notes
 
 * **Machine shape:** Use `--high-mem` with `colab new`, `colab run`, or `colab ssh` (when auto-creating a runtime) to request a high-RAM machine shape. Requires Colab Pro or Pro+ entitlement for supported accelerators (CPU, T4, A100, etc.). L4 and TPU runtimes ignore this flag because they only offer one shape. Machine shape is shown in `colab sessions` and `colab status`.
-* **TTY Requirements:** The interactive commands `repl` and `console` require a local TTY. When running inside automated scripts or pipelines, make sure to pipe stdin (e.g., `echo "print(1)" | colab repl`) to trigger non-interactive execution modes.
+* **TTY Requirements:** `colab repl` and interactive `colab ssh` expect a local TTY. When running inside automated scripts or pipelines, pipe stdin to `colab repl` (e.g., `echo "print(1)" | colab repl`) to trigger its non-interactive mode, or run one-shot shell commands with `colab ssh -s NAME -- CMD` (e.g., `colab ssh -s NAME -- ls /content`); pass untrusted values as separate arguments (after `--` where the program accepts it), since a single argument is a remote shell line. `colab ssh` needs a local `ssh` client and key, so where it can't work (no client or key, a tool not on the minimal ssh environment's `PATH`, or the runtime's concurrent SSH connections in use), pipe the commands to `colab exec` with IPython's `!` prefix (e.g., `echo '!ls /content' | colab exec`); each `!` line is its own shell and IPython expands `{expr}` and `$name` in it, so start a multi-line script with `%%bash` and keep untrusted text out of `!` lines.
 * **Transparent Code Execution:** When calling `colab exec -f file.py`, the CLI reads the file locally and transmits its content to the remote kernel. You do not need to manually upload files before execution.
 * **Storage & State Paths:** Session tokens and metadata are stored at `~/.config/colab-cli/sessions.json`. Global CLI settings are located at `~/.config/colab-cli/settings.json`. These can be customized or isolated via the global `--config` flag.
 
