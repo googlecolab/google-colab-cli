@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to inspect the active Linux `SecretService` collection via `secretstorage` before `get_password`/`set_password`, warning immediately when the keyring is locked so users know why the CLI is waiting on an unlock prompt (and suggesting `--auth=adc`).
 2026-10-21: Migrated OAuth2 token persistence in `auth.py` from `~/.config/colab-cli/token.json` to the OS native password storage via the `keyring` library (`KEYRING_SERVICE_NAME = "google-colab-cli"`, `KEYRING_USERNAME = "oauth_token"`). When the keyring is empty, locked, or inaccessible, `_run_remote_flow` is invoked; keyring read/write failures print a warning to stderr without failing the command. An existing `~/.config/colab-cli/token.json` (`LEGACY_TOKEN_PATH`) is used when the keyring has no token, copied into the keyring, and deleted only after the keyring write succeeds; it is also deleted when the keyring already holds a token.
 2026-09-25: Cleaned up references to keep-alive background daemon and pre-flight pings. VM liveness is automatically maintained by the Colab backend based on active kernel activity.
 2026-08-10: Added `colab usage` for account-level compute-unit rate/balance via `GET /tun/m/ccu-info` on the session backend (same bearer token as `colab new`).
@@ -36,7 +37,10 @@ backend, selected via the global `--auth=<provider>` flag:
     prompt. The refresh token is cached in the OS native keyring via the
     `keyring` library (`service_name="google-colab-cli"`, `username="oauth_token"`),
     falling back to running `_run_remote_flow` if the keyring is not accessible
-    or locked. Keyring read/write failures are printed to stderr, since a
+    or locked. On Linux, `_check_linux_keyring_locked` inspects the active
+    `SecretService` collection via `secretstorage` before reading or writing
+    and prints an immediate warning if the collection is locked while waiting
+    on the unlock prompt. Keyring read/write failures are printed to stderr, since a
     failed write means the user is prompted again on every command. A token
     left at the pre-keyring path `~/.config/colab-cli/token.json` is migrated
     into the keyring on first use and the file is deleted once the keyring
