@@ -693,3 +693,250 @@ def test_run_with_timeout_flag(
     code_calls = mock_runtime.execute_code.call_args_list
     body_call = next(c for c in code_calls if "hello from script" in c.args[0])
     assert body_call.kwargs.get("timeout") == 3600.0
+
+
+# ---------------------------------------------------------------------------
+# .ipynb notebook support
+# ---------------------------------------------------------------------------
+
+
+def _make_notebook(path, cells):
+    """Write a minimal v4 notebook to *path* with the given cell dicts."""
+    import json
+
+    nb = {
+        "cells": cells,
+        "metadata": {},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+    path.write_text(json.dumps(nb))
+    return path
+
+
+@pytest.fixture
+def notebook_path(tmp_path):
+    return _make_notebook(
+        tmp_path / "test.ipynb",
+        [
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "id": "c1",
+                "metadata": {},
+                "outputs": [],
+                "source": "print('cell one')",
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "id": "c2",
+                "metadata": {},
+                "outputs": [],
+                "source": "x = 21\nprint(x * 2)",
+            },
+        ],
+    )
+
+
+def test_run_notebook_basic_flow(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    assign_response,
+    notebook_path,
+):
+    """colab run notebook.ipynb: assign, execute each code cell, save output, unassign."""
+    mock_client.assign.return_value = assign_response
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.update(s=s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+
+    result = runner.invoke(app, ["run", str(notebook_path)])
+
+    assert result.exit_code == 0, result.output
+    mock_client.assign.assert_called_once()
+
+    codeCalls = [c.args[0] for c in mock_runtime.execute_code.call_args_list]
+    assert any("cell one" in c for c in codeCalls)
+    assert any("x = 21" in c for c in codeCalls)
+    # setup + 2 code cells = 3 execute_code calls
+    assert len(codeCalls) == 3
+
+    mock_client.unassign.assert_called_once_with("ep-123")
+
+    # Output notebook written
+    outputPath = notebook_path.parent / "test_output.ipynb"
+    assert outputPath.exists()
+
+    # Progress messages shown
+    assert "Executing cell 1/2" in result.output
+    assert "Executing cell 2/2" in result.output
+
+
+def test_run_notebook_skips_markdown(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    assign_response,
+    tmp_path,
+):
+    """Markdown cells must be skipped — only code cells get executed."""
+    nbPath = _make_notebook(
+        tmp_path / "mixed.ipynb",
+        [
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "id": "c1",
+                "metadata": {},
+                "outputs": [],
+                "source": "print('first')",
+            },
+            {
+                "cell_type": "markdown",
+                "id": "md1",
+                "metadata": {},
+                "source": "# A heading",
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "id": "c2",
+                "metadata": {},
+                "outputs": [],
+                "source": "print('second')",
+            },
+        ],
+    )
+    mock_client.assign.return_value = assign_response
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.update(s=s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+
+    result = runner.invoke(app, ["run", str(nbPath)])
+
+    assert result.exit_code == 0, result.output
+    codeCalls = [c.args[0] for c in mock_runtime.execute_code.call_args_list]
+    # setup + 2 code cells = 3 (markdown skipped)
+    assert len(codeCalls) == 3
+    assert not any("heading" in c.lower() for c in codeCalls)
+
+
+def test_run_notebook_stops_on_error(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    assign_response,
+    tmp_path,
+):
+    """An error in one cell should stop execution — remaining cells are skipped."""
+    nbPath = _make_notebook(
+        tmp_path / "err.ipynb",
+        [
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "id": "c1",
+                "metadata": {},
+                "outputs": [],
+                "source": "print('ok')",
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "id": "c2",
+                "metadata": {},
+                "outputs": [],
+                "source": "raise ValueError('boom')",
+            },
+            {
+                "cell_type": "code",
+                "execution_count": None,
+                "id": "c3",
+                "metadata": {},
+                "outputs": [],
+                "source": "print('should not run')",
+            },
+        ],
+    )
+    mock_client.assign.return_value = assign_response
+    mock_runtime = mock_runtime_class.return_value
+
+    callCount = [0]
+
+    def executeSideEffect(code, **kwargs):
+        callCount[0] += 1
+        if "raise ValueError" in code:
+            return [{"output_type": "error", "ename": "ValueError", "evalue": "boom", "traceback": []}]
+        return []
+
+    mock_runtime.execute_code.side_effect = executeSideEffect
+
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.update(s=s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+
+    result = runner.invoke(app, ["run", str(nbPath)])
+
+    assert result.exit_code == 1
+    # setup + cell 1 (ok) + cell 2 (error) = 3 calls; cell 3 never runs
+    assert callCount[0] == 3
+    codeCalls = [c.args[0] for c in mock_runtime.execute_code.call_args_list]
+    assert not any("should not run" in c for c in codeCalls)
+
+
+def test_run_notebook_with_keep(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    assign_response,
+    notebook_path,
+):
+    """--keep must prevent unassign, same as for scripts."""
+    mock_client.assign.return_value = assign_response
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.update(s=s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+
+    result = runner.invoke(app, ["run", "--keep", str(notebook_path)])
+
+    assert result.exit_code == 0, result.output
+    mock_client.assign.assert_called_once()
+    mock_client.unassign.assert_not_called()
+
+
+def test_run_notebook_env_vars(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    assign_response,
+    notebook_path,
+):
+    """--env KEY=VALUE must prepend the env prelude to each cell."""
+    mock_client.assign.return_value = assign_response
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.update(s=s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+
+    result = runner.invoke(
+        app, ["run", "--env", "FOO=bar", str(notebook_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    codeCalls = [c.args[0] for c in mock_runtime.execute_code.call_args_list]
+    cellCalls = [c for c in codeCalls if "cell one" in c or "x = 21" in c]
+    for cellCode in cellCalls:
+        assert "os.environ['FOO'] = 'bar'" in cellCode
