@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import base64
+import json
 from urllib.parse import quote
 
 import requests
@@ -82,8 +83,9 @@ class ContentsClient:
 
         if fmt == "base64":
             content_bytes = base64.b64decode(content)
+        elif fmt == "json":
+            content_bytes = json.dumps(content, indent=1).encode("utf-8")
         else:
-            # Assume text if it's not base64 explicitly encoded
             content_bytes = str(content).encode("utf-8")
 
         with open(local_path, "wb") as f:

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import base64
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -121,6 +122,33 @@ def test_download_file(mock_request, client, tmp_path):
     )
 
     assert local_file.read_bytes() == content_bytes
+
+
+@patch("colab_cli.contents.requests.request")
+def test_download_json_format_writes_valid_json(mock_request, client, tmp_path):
+    """Notebooks returned with format=json must be saved as valid JSON, not Python repr."""
+    notebook_content = {
+        "cells": [{"cell_type": "code", "source": ["print('hello')"]}],
+        "metadata": {},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+    mock_resp = MagicMock(spec=Response)
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "name": "notebook.ipynb",
+        "type": "notebook",
+        "format": "json",
+        "content": notebook_content,
+    }
+    mock_request.return_value = mock_resp
+
+    local_file = tmp_path / "notebook.ipynb"
+    client.download("content/notebook.ipynb", str(local_file))
+
+    raw = local_file.read_text("utf-8")
+    parsed = json.loads(raw)
+    assert parsed == notebook_content
 
 
 @patch("colab_cli.contents.requests.request")
