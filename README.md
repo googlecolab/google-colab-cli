@@ -108,7 +108,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 ### Global Options
 * `--auth {oauth2,adc}` — Authentication strategy for the Colab API (default: `adc`).
 * `-c, --client-oauth-config PATH` — Path to public OAuth client credentials configuration (default: `~/.colab-cli-oauth-config.json`).
-* `--config PATH` — Path to local session metadata storage (default: `~/.config/colab-cli/sessions.json`).
+* `--config PATH` — Path to local session metadata storage (default: `~/.config/colab-cli/sessions.json`). Sessions attached to a runtime the CLI did not create, and their tokens, are kept beside it in `<stem>.attached.json`.
 * `--logtostderr` — Direct debug logging output to stderr.
 
 ---
@@ -146,7 +146,7 @@ colab stop -s analysis
 * **Machine shape:** Use `--high-mem` with `colab new`, `colab run`, or `colab ssh` (when auto-creating a runtime) to request a high-RAM machine shape. Requires Colab Pro or Pro+ entitlement for supported accelerators (CPU, T4, A100, etc.). L4 and TPU runtimes ignore this flag because they only offer one shape. Machine shape is shown in `colab sessions` and `colab status`.
 * **TTY Requirements:** The interactive commands `repl` and `console` require a local TTY. When running inside automated scripts or pipelines, make sure to pipe stdin (e.g., `echo "print(1)" | colab repl`) to trigger non-interactive execution modes.
 * **Transparent Code Execution:** When calling `colab exec -f file.py`, the CLI reads the file locally and transmits its content to the remote kernel. You do not need to manually upload files before execution.
-* **Storage & State Paths:** Session tokens and metadata are stored at `~/.config/colab-cli/sessions.json`. Global CLI settings are located at `~/.config/colab-cli/settings.json`. These can be customized or isolated via the global `--config` flag.
+* **Storage & State Paths:** Session tokens and metadata are stored at `~/.config/colab-cli/sessions.json`; sessions attached to a runtime the CLI did not create, and their tokens, are kept beside it in `sessions.attached.json` (`<stem>.attached.json` for `--config <stem>.json`). Global CLI settings are located at `~/.config/colab-cli/settings.json`. These can be customized or isolated via the global `--config` flag.
 
 ### Ephemeral Accelerator Jobs
 

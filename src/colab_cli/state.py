@@ -35,6 +35,7 @@ class SessionState(BaseModel):
     session_id: Optional[str] = None
     last_execution: Optional[Tuple[str, Optional[str], str]] = None
     running: Optional[str] = None
+    attached: bool = False
 
 
 class Settings(BaseModel):
@@ -128,19 +129,30 @@ class SettingsStore(_LockedFileStore):
 
 
 class StateStore(_LockedFileStore):
+    """Session records: CLI-created ones in `path`, attached ones beside it.
+
+    Attached records live in their own file so that older CLI versions, which
+    read only `path`, never see them and so never unassign their runtimes.
+    """
+
     def __init__(self, path: Optional[str] = None):
         if not path:
             path = os.path.expanduser("~/.config/colab-cli/sessions.json")
         super().__init__(path)
+        self._attached = _LockedFileStore(
+            os.path.splitext(path)[0] + ".attached.json",
+        )
+        make_private(self._attached.lock_path)
 
-    def _load_raw(self, f) -> Dict[str, SessionState]:
+    def _load_raw(self, f, attached: bool) -> Dict[str, SessionState]:
         try:
             f.seek(0)
             content = f.read()
             if not content or content.isspace():
                 return {}
             data = json.loads(content)
-            return {k: SessionState(**v) for k, v in data.items()}
+            origin = {"attached": attached}
+            return {k: SessionState(**{**v, **origin}) for k, v in data.items()}
         except Exception:
             return {}
 
@@ -150,28 +162,36 @@ class StateStore(_LockedFileStore):
         )
         self._write_data(f, content)
 
-    def add(self, state: SessionState):
-        with self._lock_exclusive() as f:
-            sessions = self._load_raw(f)
-            sessions[state.name] = state
-            self._save_raw(f, sessions)
-
-    def get(self, name: str) -> Optional[SessionState]:
-        with self._lock_shared() as f:
+    def _read(self, store: _LockedFileStore) -> Dict[str, SessionState]:
+        with store._lock_shared() as f:
             if f is None:
-                return None
-            sessions = self._load_raw(f)
-            return sessions.get(name)
+                return {}
+            return self._load_raw(f, store is self._attached)
 
-    def remove(self, name: str):
-        with self._lock_exclusive() as f:
-            sessions = self._load_raw(f)
+    def _remove_from(self, store: _LockedFileStore, name: str) -> None:
+        if not os.path.exists(store.path):
+            return
+        with store._lock_exclusive() as f:
+            sessions = self._load_raw(f, store is self._attached)
             if name in sessions:
                 del sessions[name]
                 self._save_raw(f, sessions)
 
+    def add(self, state: SessionState):
+        store = self._attached if state.attached else self
+        with store._lock_exclusive() as f:
+            sessions = self._load_raw(f, state.attached)
+            sessions[state.name] = state
+            self._save_raw(f, sessions)
+
+    def get(self, name: str) -> Optional[SessionState]:
+        own, attached_records = self._read(self), self._read(self._attached)
+        return own.get(name) or attached_records.get(name)
+
+    def remove(self, name: str):
+        self._remove_from(self, name)
+        self._remove_from(self._attached, name)
+
     def list(self) -> Dict[str, SessionState]:
-        with self._lock_shared() as f:
-            if f is None:
-                return {}
-            return self._load_raw(f)
+        own, attached_records = self._read(self), self._read(self._attached)
+        return {**attached_records, **own}

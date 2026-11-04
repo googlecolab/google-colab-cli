@@ -59,7 +59,11 @@ def callback(
         Optional[str],
         typer.Option(
             "--config",
-            help="Path to session state file (~/.config/colab-cli/sessions.json)",
+            help=(
+                "Path to session state file"
+                " (~/.config/colab-cli/sessions.json); attached sessions and"
+                " their tokens are kept beside it in <stem>.attached.json"
+            ),
         ),
     ] = None,
     logtostderr: Annotated[

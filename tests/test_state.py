@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import multiprocessing
 import os
 import pytest
+import stat
 import tempfile
 import threading
 from datetime import datetime, timezone
@@ -344,3 +346,143 @@ def test_state_store_multiprocess_concurrency(temp_config):
     assert p1.exitcode == 0
     assert p2.exitcode == 0
     assert len(StateStore(temp_config).list()) == 80
+
+
+OWNER_ONLY = 0o600
+
+
+def _session_state(name, attached=False):
+    return SessionState(
+        name=name, token="t", url="u", endpoint=f"{name}-ep", attached=attached
+    )
+
+
+def _record(name, **fields):
+    return dict(name=name, token="t", url="u", endpoint=f"{name}-ep", **fields)
+
+
+@pytest.mark.parametrize(
+    "config, sessions_file, attached_file",
+    [
+        (
+            None,
+            ".config/colab-cli/sessions.json",
+            ".config/colab-cli/sessions.attached.json",
+        ),
+        ("custom.json", "custom.json", "custom.attached.json"),
+    ],
+    ids=["default", "config-file"],
+)
+def test_attached_record_goes_to_its_own_file(
+    tmp_path, monkeypatch, config, sessions_file, attached_file
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".config/colab-cli").mkdir(parents=True)
+    store = StateStore(str(tmp_path / config) if config else None)
+
+    store.add(_session_state("att", attached=True))
+
+    assert not (tmp_path / sessions_file).exists()
+    assert (tmp_path / attached_file).exists()
+    assert store.get("att").attached is True
+
+
+def test_store_reads_and_lists_both_files(tmp_path):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+    store.add(_session_state("cli"))
+    store.add(_session_state("att", attached=True))
+
+    assert '"cli"' in path.read_text()
+    assert '"att"' not in path.read_text()
+    attached_text = (tmp_path / "sessions.attached.json").read_text()
+    assert '"att"' in attached_text
+    assert '"cli"' not in attached_text
+    reloaded = StateStore(str(path))
+    assert reloaded.get("cli").attached is False
+    assert reloaded.get("att").attached is True
+    assert sorted(reloaded.list()) == ["att", "cli"]
+
+
+def test_remove_deletes_the_record_from_either_file(tmp_path):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+    store.add(_session_state("cli"))
+    store.add(_session_state("att", attached=True))
+    reloaded = StateStore(str(path))
+
+    reloaded.remove("att")
+    reloaded.remove("cli")
+
+    assert StateStore(str(path)).list() == {}
+
+
+def test_attached_add_leaves_sessions_file_byte_identical(tmp_path):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+    store.add(_session_state("cli"))
+    before = path.read_bytes()
+
+    store.add(_session_state("att", attached=True))
+
+    assert path.read_bytes() == before
+
+
+def test_attached_remove_leaves_sessions_file_byte_identical(tmp_path):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+    store.add(_session_state("cli"))
+    store.add(_session_state("att", attached=True))
+    before = path.read_bytes()
+
+    store.remove("att")
+
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "stored_flag", [{}, {"attached": False}], ids=["no-flag", "flag-false"]
+)
+def test_refreshed_attached_record_stays_attached(tmp_path, stored_flag):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+    store.add(_session_state("cli"))
+    before = path.read_bytes()
+    attached_file = tmp_path / "sessions.attached.json"
+    attached_file.write_text(json.dumps({"att": _record("att", **stored_flag)}))
+
+    store.add(store.get("att"))
+
+    assert path.read_bytes() == before
+    assert sorted(store.list()) == ["att", "cli"]
+    assert store.get("att").attached is True
+
+
+def test_refreshed_cli_record_stays_out_of_attached_file(tmp_path):
+    path = tmp_path / "sessions.json"
+    path.write_text(json.dumps({"cli": _record("cli", attached=True)}))
+    store = StateStore(str(path))
+
+    store.add(store.get("cli"))
+
+    assert not (tmp_path / "sessions.attached.json").exists()
+    assert store.get("cli").attached is False
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["fresh", "was-0644"])
+def test_attached_file_and_lock_are_private(tmp_path, existing):
+    attached = tmp_path / "sessions.attached.json"
+    lock = tmp_path / "sessions.attached.json.lock"
+    old_umask = os.umask(0o022)
+    try:
+        if existing:
+            for p in (attached, lock):
+                p.touch()
+                os.chmod(p, 0o644)
+        store = StateStore(str(tmp_path / "sessions.json"))
+        store.add(_session_state("att", attached=True))
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(attached.stat().st_mode) == OWNER_ONLY
+    assert stat.S_IMODE(lock.stat().st_mode) == OWNER_ONLY
