@@ -166,6 +166,7 @@ def new(
             err=True,
         )
 
+    state.refuse_attached_name(name)
     typer.echo(f"[colab] Creating session '{name}'...")
     try:
         res = state.client.assign(

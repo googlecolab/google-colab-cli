@@ -519,6 +519,32 @@ def test_client_refuses_to_unassign_attached_endpoint(two_file_state, mocker):
     assert two_file_state.client.session.requests == []
 
 
+@pytest.mark.parametrize("name", ["att", "dup"])
+@pytest.mark.parametrize("command", ["new", "run"])
+def test_new_and_run_refuse_an_attached_name(
+    two_file_state, tmp_path, monkeypatch, command, name
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "job.py").write_text("print(1)\n")
+    script = ["job.py"] if command == "run" else []
+
+    result = runner.invoke(app, [command, "-s", name, *script])
+
+    assert result.exit_code == 1
+    assert f"colab stop -s {name}" in result.output
+    assert two_file_state.client.session.requests == []
+
+
+@pytest.mark.parametrize("name", ["cli", "fresh"], ids=["cli-owned", "unknown"])
+def test_refuse_attached_name_allows_cli_and_unknown_names(
+    two_file_state, capsys, name
+):
+    two_file_state.refuse_attached_name(name)
+
+    assert capsys.readouterr().err == ""
+    assert two_file_state.client.session.requests == []
+
+
 @pytest.mark.parametrize(
     "args, session, unassigned, kept",
     [

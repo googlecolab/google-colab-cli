@@ -88,6 +88,26 @@ class State:
             )
         return self._client
 
+    def refuse_attached_name(self, name: str) -> None:
+        """Exits if `name` is an attached session.
+
+        Args:
+          name: The session name a command is about to create.
+
+        Raises:
+          typer.Exit: If `name` is an attached session (exit code 1).
+          DuplicateSessionError: If `name` is in both store files.
+        """
+        record = self.store.get(name)
+        if record is not None and record.attached:
+            typer.echo(
+                f"[colab] Error: Session '{name}' uses a runtime the CLI did"
+                f" not create. Forget it with 'colab stop -s {name}' or pick"
+                " another name.",
+                err=True,
+            )
+            raise typer.Exit(1)
+
     def prune_session(self, name: str):
         """Removes a session from local state."""
         self.store.remove(name)

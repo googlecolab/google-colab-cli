@@ -306,6 +306,7 @@ def run_command(
         raise typer.Exit(2)
 
     name = session or f"run-{uuid.uuid4().hex[:6]}"
+    state.refuse_attached_name(name)
     variant, accelerator, shape = resolve_runtime_options(
         gpu, tpu, high_mem=high_mem
     )
