@@ -128,6 +128,17 @@ class SettingsStore(_LockedFileStore):
             self._write_data(f, settings.model_dump_json(indent=2))
 
 
+class DuplicateSessionError(Exception):
+    """A session name is in both the sessions file and the attached file."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            f"Session '{name}' is recorded both as a CLI session and as an "
+            f"attached session. Run 'colab stop -s {name}' to forget the "
+            "attached record."
+        )
+
+
 class StateStore(_LockedFileStore):
     """Session records: CLI-created ones in `path`, attached ones beside it.
 
@@ -178,6 +189,11 @@ class StateStore(_LockedFileStore):
                 self._save_raw(f, sessions)
 
     def add(self, state: SessionState):
+        """Writes `state` to the file its `attached` flag names.
+
+        A new record defaults to a CLI session, so writers of attached sessions
+        set the flag.
+        """
         store = self._attached if state.attached else self
         with store._lock_exclusive() as f:
             sessions = self._load_raw(f, state.attached)
@@ -185,13 +201,32 @@ class StateStore(_LockedFileStore):
             self._save_raw(f, sessions)
 
     def get(self, name: str) -> Optional[SessionState]:
+        """Returns the record named `name` from either file, or None.
+
+        Raises:
+          DuplicateSessionError: If `name` is in both files.
+        """
         own, attached_records = self._read(self), self._read(self._attached)
+        if name in own and name in attached_records:
+            raise DuplicateSessionError(name)
         return own.get(name) or attached_records.get(name)
 
     def remove(self, name: str):
         self._remove_from(self, name)
         self._remove_from(self._attached, name)
 
+    def remove_attached(self, name: str) -> None:
+        """Forgets only the attached record for `name`."""
+        self._remove_from(self._attached, name)
+
     def list(self) -> Dict[str, SessionState]:
+        """Returns the records of both files by name.
+
+        Raises:
+          DuplicateSessionError: If a name is in both files.
+        """
         own, attached_records = self._read(self), self._read(self._attached)
-        return {**attached_records, **own}
+        duplicates = own.keys() & attached_records.keys()
+        if duplicates:
+            raise DuplicateSessionError(min(duplicates))
+        return {**own, **attached_records}

@@ -108,7 +108,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 ### Global Options
 * `--auth {oauth2,adc}` — Authentication strategy for the Colab API (default: `adc`).
 * `-c, --client-oauth-config PATH` — Path to public OAuth client credentials configuration (default: `~/.colab-cli-oauth-config.json`).
-* `--config PATH` — Path to local session metadata storage (default: `~/.config/colab-cli/sessions.json`). Sessions attached to a runtime the CLI did not create, and their tokens, are kept beside it in `<stem>.attached.json`.
+* `--config PATH` — Path to local session metadata storage (default: `~/.config/colab-cli/sessions.json`). Sessions attached to a runtime the CLI did not create, and their tokens, are kept beside it in `<stem>.attached.json`, where `<stem>` is the path without its extension (`sessions.attached.json` by default).
 * `--logtostderr` — Direct debug logging output to stderr.
 
 ---

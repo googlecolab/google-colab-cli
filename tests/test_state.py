@@ -23,7 +23,13 @@ from datetime import datetime, timezone
 
 import filelock
 
-from colab_cli.state import StateStore, SessionState, SettingsStore, Settings
+from colab_cli.state import (
+    DuplicateSessionError,
+    StateStore,
+    SessionState,
+    SettingsStore,
+    Settings,
+)
 
 
 @pytest.fixture
@@ -440,6 +446,20 @@ def test_attached_remove_leaves_sessions_file_byte_identical(tmp_path):
     assert path.read_bytes() == before
 
 
+def test_remove_attached_keeps_the_cli_record(tmp_path):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+    store.add(_session_state("dup"))
+    store.add(_session_state("dup", attached=True))
+    before = path.read_bytes()
+
+    store.remove_attached("dup")
+
+    assert '"dup"' not in (tmp_path / "sessions.attached.json").read_text()
+    assert store.get("dup").attached is False
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize(
     "stored_flag", [{}, {"attached": False}], ids=["no-flag", "flag-false"]
 )
@@ -486,3 +506,30 @@ def test_attached_file_and_lock_are_private(tmp_path, existing):
 
     assert stat.S_IMODE(attached.stat().st_mode) == OWNER_ONLY
     assert stat.S_IMODE(lock.stat().st_mode) == OWNER_ONLY
+
+
+@pytest.mark.parametrize(
+    "read",
+    [lambda store: store.get("dup"), lambda store: store.list()],
+    ids=["get", "list"],
+)
+def test_name_in_both_files_raises_with_recovery_command(tmp_path, read):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    store.add(_session_state("dup"))
+    store.add(_session_state("dup", attached=True))
+
+    with pytest.raises(DuplicateSessionError) as exc:
+        read(store)
+
+    assert "colab stop -s dup" in str(exc.value)
+
+
+def test_get_of_another_name_ignores_the_duplicate(tmp_path):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    store.add(_session_state("dup"))
+    store.add(_session_state("dup", attached=True))
+    store.add(_session_state("other"))
+
+    other = store.get("other")
+
+    assert other.endpoint == "other-ep"

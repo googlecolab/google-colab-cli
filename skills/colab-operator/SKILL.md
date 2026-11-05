@@ -79,8 +79,8 @@ by running `uv tool install google-colab-cli` or `pip install google-colab-cli`.
 
 ## Safety
 - **Always `colab stop -s <name>` when done** — idle VMs burn compute units. `colab run` (without `--keep`) self-cleans even if the script errors.
-- Local state lives in `~/.config/colab-cli/sessions.json` (settings in `settings.json`, history in `history/*.jsonl`). Don't edit by hand.
-- **Isolate parallel/agent runs** with the global `--config <path>` flag to point session state at a scratch file (e.g. `colab --config /tmp/agent.json new -s job`).
+- Local state lives in `~/.config/colab-cli/sessions.json`, plus `sessions.attached.json` beside it for sessions attached to a runtime the CLI did not create, with their tokens (settings in `settings.json`, history in `history/*.jsonl`). Don't edit by hand.
+- **Isolate parallel/agent runs** with the global `--config <path>` flag to point session state at a scratch file (e.g. `colab --config /tmp/agent.json new -s job`). Attached sessions then go to `<stem>.attached.json` (here `/tmp/agent.attached.json`), which holds tokens: delete it together with the scratch file.
 
 ## Recovery
 - "Session not found" / 404 / 401 on exec: the backend pruned the VM. `colab exec`/`repl` detect this and clean up local state automatically — run `colab sessions` and re-create with `colab new`.
