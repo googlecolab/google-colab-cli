@@ -52,7 +52,7 @@ import uuid
 from colab_cli.auth import AuthProvider
 from colab_cli.client import COLAB_CLIENT_AGENT_HEADER
 from colab_cli.commands import execution
-from colab_cli.state import SessionState
+from colab_cli.state import DuplicateSessionError, SessionState
 import typer
 from typing_extensions import Annotated
 import websocket
@@ -213,11 +213,17 @@ def _auto_create_session(
 
 
 def _stop_session(name: str) -> None:
-    """Best-effort ``colab stop`` for a session (used by ``--rm``)."""
+    """Best-effort ``colab stop`` for ``--rm``; refuses a duplicated name."""
     from colab_cli.commands import session as session_cmd
+    from colab_cli.common import state
 
     try:
+        # Unlike `colab stop`, --rm never forgets the attached copy of a name
+        # that is in both store files: this get raises DuplicateSessionError.
+        state.store.get(name)
         session_cmd.stop(session=name)
+    except DuplicateSessionError as e:
+        typer.echo(f"[colab] --rm: {e}", err=True)
     except typer.Exit:
         raise
     except Exception as e:  # Cleanup must not mask the shell's own exit.

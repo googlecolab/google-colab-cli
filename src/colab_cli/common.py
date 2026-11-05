@@ -81,7 +81,11 @@ class State:
             creds = get_credentials(
                 self.client_oauth_config, provider=self.auth_provider
             )
-            self._client = Client(Prod(), creds)
+            self._client = Client(
+                Prod(),
+                creds,
+                is_attached=lambda ep: ep in self.store.attached_endpoints(),
+            )
         return self._client
 
     def prune_session(self, name: str):

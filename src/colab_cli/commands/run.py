@@ -473,7 +473,7 @@ def run_command(
 
 def _teardown(name: str, s: SessionState, *, reason: str) -> None:
     """Best-effort full session teardown: ask the remote kernel to shut down,
-    unassign the VM, and remove local state.
+    unassign the VM, and remove its local record once the VM is released.
 
     Mirrors `commands.session.stop` but with a richer history event reason and
     swallowing all errors (we don't want a teardown failure to mask the user's
@@ -485,7 +485,7 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
     try:
         # The script may have outlived the proxy token.
         fresh = state.get_session(name, ignore_missing_session=True)
-        if fresh:
+        if fresh and not fresh.attached:
             rt = ColabRuntime(fresh.url, fresh.token, kernel_id=fresh.kernel_id)
             rt.stop(shutdown_kernel=True)
     except Exception:
@@ -494,10 +494,15 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
     try:
         state.client.unassign(s.endpoint)
     except Exception:
-        pass
+        typer.echo(
+            f"[colab] Could not release runtime '{s.endpoint}'; run"
+            f" 'colab stop -s {name}' to retry.",
+            err=True,
+        )
+        return
 
     try:
-        state.store.remove(name)
+        state.store.remove_cli(name)
     except Exception:
         pass
 

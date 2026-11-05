@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-05: The CLI never unassigns a runtime this store records as attached: `colab stop` and `colab ssh --rm` forget an attached-only record without stopping it, `--rm` refuses a name in both files, `Client.unassign` refuses attached endpoints, and `run` cleanup removes only its own CLI record once its runtime is released.
 2026-11-04: `StateStore` keeps attached sessions in their own owner-only file beside the sessions file; a name in both files fails with an error that names `colab stop -s NAME`, which forgets the attached record without unassigning. A sessions path that names an attached file, or whose attached path links to another kind of file, is refused (hard links and copies are not detected).
 2026-11-04: `--gpu` and `--tpu` now reject unknown values instead of silently selecting `A100` (GPU) or `v6e1` (TPU). `resolve_runtime_options()` uses the new `GPU_ACCELERATORS` / `TPU_ACCELERATORS` maps and raises a `typer.BadParameter` that names the flag and the supported list; `--help` is generated from the same maps so it cannot drift. Validation runs before any assignment request, in both `colab new` and `colab run`.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to check if the active Linux `SecretService` keyring collection is locked via `secretstorage` before reading or writing OAuth tokens, logging and printing an immediate warning with the collection label, timeout, and `--auth=adc` hint while still attempting the keyring operation.
@@ -107,6 +108,7 @@ end to end; mocked timeouts alone do not establish backend compatibility.
 - **Future**: Real-time VM resource usage (CPU/RAM/GPU) via a kernel diagnostic snippet is still TODO. For account-level compute-unit balance and usage rate, use `colab usage`.
 
 ### 3. Stop Session (`colab stop`)
+- **Attached sessions**: `colab stop` on an attached record only forgets it (no kernel shutdown, no unassign) and says the runtime keeps running. `Client.unassign` refuses an endpoint the store holds as attached, `colab ssh --rm` reports a name in both files instead of forgetting the attached copy, and `run` cleanup removes only its own CLI record, once its runtime is released (otherwise it keeps the record and names `colab stop -s NAME`).
 - **API**: `POST https://colab.sandbox.google.com/tun/m/unassign/<endpoint>` (based on `tpu-v5e1-unassign.har`).
 - **Flow**:
     1.  Perform a `GET` request to the unassign URL to obtain a fresh XSRF token.

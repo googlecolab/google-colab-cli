@@ -21,7 +21,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -184,12 +184,23 @@ class TooManyAssignmentsError(Exception):
     pass
 
 
+class AttachedRuntimeError(Exception):
+    """Unassign was refused for a runtime the CLI did not create."""
+
+
 class Client:
-    def __init__(self, env: ColabEnvironment, session, logger=None):
+    def __init__(
+        self,
+        env: ColabEnvironment,
+        session,
+        logger=None,
+        is_attached: Optional[Callable[[str], bool]] = None,
+    ):
         self.colab_domain = env.domain
         self.colab_api_domain = env.api
         self.session = session
         self.logger = logger or logging.getLogger(__name__)
+        self._is_attached = is_attached or (lambda endpoint: False)
 
     def _strip_xssi_prefix(self, v: str) -> str:
         if not v.startswith(XSSI_PREFIX):
@@ -264,6 +275,15 @@ class Client:
         return assignments.assignments
 
     def unassign(self, endpoint: str):
+        """Releases the runtime at `endpoint`.
+
+        Raises:
+          AttachedRuntimeError: If the store holds `endpoint` as attached.
+        """
+        if self._is_attached(endpoint):
+            raise AttachedRuntimeError(
+                f"Refusing to unassign '{endpoint}': the CLI did not create it."
+            )
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/unassign/{endpoint}")
         resp = self._issue_request(url, schema=GetUnassignRequest)
         headers = {COLAB_XSRF_TOKEN_HEADER["key"]: resp.token}
