@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 import filelock
 
 from colab_cli.state import (
+    AttachedStorePathError,
     DuplicateSessionError,
     StateStore,
     SessionState,
@@ -533,3 +534,61 @@ def test_get_of_another_name_ignores_the_duplicate(tmp_path):
     other = store.get("other")
 
     assert other.endpoint == "other-ep"
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["sessions.attached.json", "Sessions.ATTACHED.json", "link.json"],
+    ids=["attached-file", "other-case", "symlink"],
+)
+def test_store_refuses_an_attached_file_as_sessions_file(tmp_path, name):
+    attached = tmp_path / "sessions.attached.json"
+    attached.write_text(json.dumps({"att": _record("att", attached=True)}))
+    before = attached.read_bytes()
+    path = tmp_path / name
+    if name == "link.json":
+        path.symlink_to(attached)
+
+    with pytest.raises(AttachedStorePathError):
+        StateStore(str(path))
+
+    assert attached.read_bytes() == before
+
+
+def test_store_refuses_an_attached_path_linked_to_another_file(tmp_path):
+    sessions = tmp_path / "sessions.json"
+    sessions.write_text(json.dumps({"cli": _record("cli")}))
+    before = sessions.read_bytes()
+    (tmp_path / "agent.attached.json").symlink_to(sessions)
+
+    with pytest.raises(AttachedStorePathError):
+        StateStore(str(tmp_path / "agent.json"))
+
+    assert sessions.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "config, link, target",
+    [
+        ("sessions.json", "sessions.json", "real-sessions.json"),
+        ("agent.json", "agent.attached.json", "other.attached.json"),
+    ],
+    ids=["sessions-file", "attached-file"],
+)
+def test_store_accepts_links_to_files_of_the_same_kind(tmp_path, config, link, target):
+    (tmp_path / target).write_text("{}")
+    (tmp_path / link).symlink_to(tmp_path / target)
+    store = StateStore(str(tmp_path / config))
+
+    store.add(_session_state("att", attached=True))
+
+    assert store.get("att").attached is True
+
+
+def test_store_refuses_a_dangling_attached_link(tmp_path):
+    (tmp_path / "a.attached.json").symlink_to(tmp_path / "nowhere.json")
+
+    with pytest.raises(AttachedStorePathError):
+        StateStore(str(tmp_path / "a.json"))
+
+    assert [p.name for p in tmp_path.iterdir()] == ["a.attached.json"]

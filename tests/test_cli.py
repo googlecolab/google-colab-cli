@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -366,17 +367,23 @@ class _RecordingSession:
 
 
 @pytest.fixture
-def dup_state(tmp_path, monkeypatch, mocker):
+def real_state(tmp_path, monkeypatch, mocker):
     monkeypatch.setenv("HOME", str(tmp_path))
     mocker.patch("colab_cli.cli.auto_update.run_background_check")
     st = State()
-    st._store = StateStore(str(tmp_path / "sessions.json"))
     st._client = Client(Prod(), _RecordingSession())
     st._history = MagicMock()
-    st.store.add(_dup_session(attached=False))
-    st.store.add(_dup_session(attached=True))
     mocker.patch("colab_cli.common.state", st)
+    mocker.patch("colab_cli.cli.state", st)
     return st
+
+
+@pytest.fixture
+def dup_state(real_state, tmp_path):
+    real_state._store = StateStore(str(tmp_path / "sessions.json"))
+    real_state.store.add(_dup_session(attached=False))
+    real_state.store.add(_dup_session(attached=True))
+    return real_state
 
 
 @pytest.mark.parametrize(
@@ -404,6 +411,45 @@ def test_stop_recovers_duplicate_without_unassigning(dup_state, tmp_path):
     assert list(remaining) == ["dup"]
     assert remaining["dup"].attached is False
     assert (tmp_path / "sessions.json").read_bytes() == sessions_before
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["status"], ["new", "-s", "job"], ["run", "job.py"]],
+    ids=["status", "new", "run"],
+)
+def test_config_naming_an_attached_file_is_refused(
+    real_state, tmp_path, monkeypatch, args
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "job.py").write_text("print(1)\n")
+    attached = tmp_path / "sessions.attached.json"
+    attached.write_text(json.dumps({"dup": _dup_session(True).model_dump()}))
+    before = attached.read_bytes()
+
+    result = runner.invoke(app, ["--config", str(attached), *args])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "[colab] Error: Cannot use" in result.output
+    assert real_state.client.session.requests == []
+    assert attached.read_bytes() == before
+
+
+def test_config_with_linked_attached_path_is_refused(real_state, tmp_path):
+    sessions = tmp_path / "sessions.json"
+    sessions.write_text(json.dumps({"dup": _dup_session(False).model_dump()}))
+    before = sessions.read_bytes()
+    (tmp_path / "agent.attached.json").symlink_to(sessions)
+    config = str(tmp_path / "agent.json")
+
+    result = runner.invoke(app, ["--config", config, "sessions"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "links to a file of another kind" in result.output
+    assert real_state.client.session.requests == []
+    assert sessions.read_bytes() == before
 
 
 def test_cli_sessions_prune(mock_common_state):

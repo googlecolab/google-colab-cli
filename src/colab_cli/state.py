@@ -128,7 +128,50 @@ class SettingsStore(_LockedFileStore):
             self._write_data(f, settings.model_dump_json(indent=2))
 
 
-class DuplicateSessionError(Exception):
+_ATTACHED_SUFFIX = ".attached.json"
+
+
+class StoreError(Exception):
+    """A session store problem that the CLI reports as an error message."""
+
+
+class AttachedStorePathError(StoreError):
+    """The sessions path, or its attached path, aliases the other kind."""
+
+    def __init__(self, path: str, reason: str = ""):
+        if not reason:
+            reason = "it is an attached sessions file; pass a sessions file"
+        super().__init__(f"Cannot use '{path}' as the sessions file: {reason}.")
+
+
+def resolve_store_paths(path: Optional[str] = None) -> Tuple[str, str]:
+    """Returns the sessions file and its attached file for `path`.
+
+    Hard links and copies of either file are not detected.
+
+    Args:
+      path: The sessions file; None or empty means
+        ~/.config/colab-cli/sessions.json.
+
+    Raises:
+      AttachedStorePathError: If one store's attached file would be read as
+        another store's sessions file, or the reverse.
+    """
+    if not path:
+        path = os.path.expanduser("~/.config/colab-cli/sessions.json")
+    for name in (path, os.path.realpath(path)):
+        if name.lower().endswith(_ATTACHED_SUFFIX):
+            raise AttachedStorePathError(path)
+    attached_path = os.path.splitext(path)[0] + _ATTACHED_SUFFIX
+    resolved = os.path.realpath(attached_path).lower()
+    if not resolved.endswith(_ATTACHED_SUFFIX):
+        raise AttachedStorePathError(
+            path, f"'{attached_path}' links to a file of another kind"
+        )
+    return path, attached_path
+
+
+class DuplicateSessionError(StoreError):
     """A session name is in both the sessions file and the attached file."""
 
     def __init__(self, name: str):
@@ -147,12 +190,9 @@ class StateStore(_LockedFileStore):
     """
 
     def __init__(self, path: Optional[str] = None):
-        if not path:
-            path = os.path.expanduser("~/.config/colab-cli/sessions.json")
+        path, attached_path = resolve_store_paths(path)
         super().__init__(path)
-        self._attached = _LockedFileStore(
-            os.path.splitext(path)[0] + ".attached.json",
-        )
+        self._attached = _LockedFileStore(attached_path)
         make_private(self._attached.lock_path)
 
     def _load_raw(self, f, attached: bool) -> Dict[str, SessionState]:

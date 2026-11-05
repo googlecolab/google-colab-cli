@@ -21,7 +21,7 @@ below corresponds to a tag of the same name.
 ### Added
 
 - **ssh:** `colab ssh [-s NAME] -- CMD` runs one command on an existing runtime and exits with its status. Output is byte-exact when piped (a PTY only when stdin and stdout are terminals), and it never creates a runtime. Its handshake is tagged `ssh-mode-cmd`.
-- **sessions:** Sessions attached to a runtime the CLI did not create are kept in their own owner-only file beside the sessions file (`sessions.attached.json`, or `<stem>.attached.json` with `--config <stem>.json`), so older versions never see them. If one name is in both files, commands that read the store stop with an error before any Colab request, and `colab stop -s NAME` forgets the attached record without stopping its runtime.
+- **sessions:** Sessions attached to a runtime the CLI did not create are kept in their own owner-only file beside the sessions file (`sessions.attached.json`, or `<stem>.attached.json` with `--config <stem>.json`), so older versions never see them; `--config` refuses a path ending in `.attached.json`. If one name is in both files, commands that read the store stop with an error before any Colab request, and `colab stop -s NAME` forgets the attached record without stopping its runtime.
 
 ### Fixed
 
