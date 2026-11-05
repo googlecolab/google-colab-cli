@@ -19,7 +19,12 @@ import pytest
 from rich.markdown import Markdown
 from rich.text import Text
 
-from colab_cli.utils import handle_image, print_kitty, render_display_data
+from colab_cli.utils import (
+    handle_image,
+    open_url_in_browser,
+    print_kitty,
+    render_display_data,
+)
 
 
 @patch("colab_cli.utils.sys.stdout.isatty", return_value=True)
@@ -85,3 +90,20 @@ def test_render_display_data_plain():
 
 def test_render_display_data_none():
     assert render_display_data({"image/png": "..."}) is None
+
+
+@patch("colab_cli.utils.webbrowser.open", return_value=True)
+def test_open_url_in_browser_reports_success(mock_open):
+    assert open_url_in_browser("https://example.com/auth") is True
+    mock_open.assert_called_once_with("https://example.com/auth")
+
+
+@patch("colab_cli.utils.webbrowser.open", return_value=False)
+def test_open_url_in_browser_headless_returns_false(mock_open):
+    """No browser opener (SSH, containers, CI) must not raise."""
+    assert open_url_in_browser("https://example.com/auth") is False
+
+
+@patch("colab_cli.utils.webbrowser.open", side_effect=OSError("no opener"))
+def test_open_url_in_browser_swallows_opener_errors(mock_open):
+    assert open_url_in_browser("https://example.com/auth") is False
