@@ -15,6 +15,9 @@ End-to-end tests that run against a **live Colab backend** (unlike the mocked un
 | `repro_run_command/` | `colab run <script.py>` runs a local script on a fresh VM and cleans up; `--keep` leaves the session alive. |
 | `repro_variable_persistence/` | Variables persist across `colab exec` calls in the same session. |
 | `repro_piped_console/` | Fast smoke test (~5s including session creation): `echo cmd \| colab console -s s` runs the command and exits within 30s. Regression test for the 2026-05-07 EOF-handler fix. |
+| `repro_console_reconnect/` | CPU-only live fault injection: verifies fallback after a transient control-plane proxy failure, prompt exit after another process removes the local binding, and preservation of pre-existing assignments. |
+| `repro_console_flow_control/` | CPU-only live regression: streams more than 600 KB through `/colab/tty`, verifies application-level acknowledgements prevent the remote PTY from pausing, and preserves pre-existing assignments. |
+| `repro_runtime_token_refresh/` | CPU-only regression for issue #106: expires the saved runtime-proxy token and its timestamp, then verifies `ls`, `exec`, and piped `console` self-heal without disturbing pre-existing assignments. |
 | `repro_bundled_oauth/` | Fast smoke test (~5s): verifies that the fallback OAuth configuration is loaded and starts the OAuth flow with the default client ID when local config is missing. |
 | `repro_legacy_token_migration/` | Fast smoke test (~5s, no VM): a pre-keyring `~/.config/colab-cli/token.json` is migrated into the keyring and deleted, deleted when the keyring already has a token, and kept (with a stderr warning) when the keyring is inaccessible. Uses a throwaway HOME and file-backed test keyring. |
 | `repro_ssh/` | Fast smoke test (~5s): `--help` advertises the flags and an unknown session exits. Slow soak test (~95s): Live e2e allocates a CPU VM, runs a real remote command over `colab ssh --proxy-mode` |
@@ -40,3 +43,7 @@ uses no Bash or WSL, and preserves unrelated active sessions.
 1. Create `repro_<short_description>/`.
 2. Add a script (`.sh` or `.py`) that demonstrates or verifies the issue.
 3. Add a row to the table above noting whether it's fast (smoke) or slow (soak).
+
+### Console and token-refresh CPU regressions
+
+Run `repro_runtime_token_refresh`, `repro_console_reconnect`, and `repro_console_flow_control` sequentially with `uv run bash integration/repro_<name>/test.sh`. Each uses a unique session name and isolated session config, allocates without GPU/TPU flags, and releases its own endpoint while preserving existing assignments. OAuth detection checks the upstream keyring with a ten-second limit and also accepts a legacy token that has not yet migrated; otherwise the existing scoped ADC check applies. A locked keyring does not justify changing upstream credential storage.
