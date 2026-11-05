@@ -15,6 +15,14 @@
 from unittest.mock import MagicMock, patch
 
 import jupyter_kernel_client
+import pytest
+from mock_kernel import (
+    MockKernelClient,
+    connect_runtime,
+    reply_message,
+    status_message,
+    stdout_message,
+)
 
 from colab_cli.runtime import ColabRuntime
 
@@ -101,29 +109,33 @@ def test_colab_runtime_kernel_client_jupyterclient_fallback():
         assert runtime_mod  # keep import used for clarity
 
 
-def test_colab_runtime_execute_code():
+def test_colab_runtime_execute_code(monkeypatch):
     runtime = ColabRuntime("http://url", "token123")
-    mock_kc = MagicMock()
-    runtime._kernel_client = mock_kc
 
-    # Test empty reply
-    mock_kc.execute.return_value = {}
-    assert runtime.execute_code("print(1)") == []
+    # Test empty output without output_hook
+    mock_kc = MockKernelClient([(0.1, status_message("idle"))])
+    connect_runtime(runtime, mock_kc, monkeypatch)
+    assert runtime.execute_code("pass") == []
 
-    # Test normal reply
-    mock_kc.execute.return_value = {"outputs": [{"text": "1\n"}]}
-    assert runtime.execute_code("print(1)") == [{"text": "1\n"}]
+    # Test normal output without output_hook
+    mock_kc = MockKernelClient(
+        [(0.1, stdout_message("1\n")), (0.2, status_message("idle"))]
+    )
+    connect_runtime(runtime, mock_kc, monkeypatch)
+    assert runtime.execute_code("print(1)") == [
+        {"output_type": "stream", "name": "stdout", "text": "1\n"}
+    ]
 
     # Test error status without error output
-    mock_kc.execute.return_value = {
-        "status": "error",
-        "ename": "ValueError",
-        "evalue": "bad",
-        "outputs": [{"text": "partial"}],
-    }
+    reply = reply_message("error", ename="ValueError", evalue="bad", traceback=[])
+    mock_kc = MockKernelClient(
+        [(0.1, stdout_message("partial")), (0.2, status_message("idle"))],
+        shell=[(0.2, reply)],
+    )
+    connect_runtime(runtime, mock_kc, monkeypatch)
     outputs = runtime.execute_code("raise ValueError")
     assert len(outputs) == 2
-    assert outputs[0] == {"text": "partial"}
+    assert outputs[0] == {"output_type": "stream", "name": "stdout", "text": "partial"}
     assert outputs[1] == {
         "output_type": "error",
         "ename": "ValueError",
@@ -132,46 +144,62 @@ def test_colab_runtime_execute_code():
     }
 
 
-def test_colab_runtime_execute_code_default_no_timeout():
-    """By default, execute_code should NOT pass a timeout (relies on jupyter
-    kernel client default), preserving existing behavior for fast / streaming
-    workloads."""
+def test_colab_runtime_execute_code_allow_stdin_default_no_timeout():
+    """By default with allow_stdin=True, execute_code should NOT pass a timeout
+    (relies on jupyter kernel client default)."""
     runtime = ColabRuntime("http://url", "token123")
     mock_kc = MagicMock()
     runtime._kernel_client = mock_kc
 
     mock_kc.execute.return_value = {"outputs": []}
-    runtime.execute_code("print(1)")
+    runtime.execute_code("print(1)", allow_stdin=True)
 
     _, kwargs = mock_kc.execute.call_args
     assert "timeout" not in kwargs
 
 
-def test_colab_runtime_execute_code_with_timeout():
-    """When a timeout is supplied, it must be forwarded to kernel_client.execute."""
+def test_colab_runtime_execute_code_allow_stdin_with_timeout():
+    """When a timeout is supplied with allow_stdin=True, it must be forwarded
+    to kernel_client.execute."""
     runtime = ColabRuntime("http://url", "token123")
     mock_kc = MagicMock()
     runtime._kernel_client = mock_kc
 
     mock_kc.execute.return_value = {"outputs": []}
-    runtime.execute_code("print(1)", timeout=600)
+    runtime.execute_code("print(1)", allow_stdin=True, timeout=600)
 
     _, kwargs = mock_kc.execute.call_args
     assert kwargs.get("timeout") == 600
 
 
-def test_colab_runtime_execute_interactive_with_timeout():
-    """timeout must also be plumbed through the execute_interactive branch
-    (used when an output_hook is supplied)."""
+def test_colab_runtime_execute_code_allow_stdin_with_output_hook_not_implemented():
+    """Combining allow_stdin=True and output_hook raises NotImplementedError."""
     runtime = ColabRuntime("http://url", "token123")
-    mock_kc = MagicMock()
-    runtime._kernel_client = mock_kc
+    with pytest.raises(NotImplementedError):
+        runtime.execute_code(
+            "print(1)", output_hook=lambda o: None, allow_stdin=True, timeout=600
+        )
 
-    mock_kc.execute_interactive.return_value = {"content": {"status": "ok"}}
-    runtime.execute_code("print(1)", output_hook=lambda o: None, timeout=600)
 
-    _, kwargs = mock_kc.execute_interactive.call_args
-    assert kwargs.get("timeout") == 600
+@pytest.mark.parametrize("output_hook", [None, lambda o: None])
+def test_colab_runtime_streaming_timeout_is_an_idle_limit(monkeypatch, output_hook):
+    """Without stdin, execute_code streams through _execute_streaming (with or
+    without output_hook), where timeout is the longest silence allowed between
+    messages."""
+    for silence, finishes in ((599, True), (601, False)):
+        runtime = ColabRuntime("http://url", "token123")
+        mock_kc = MockKernelClient(
+            [(silence, stdout_message("1\n")), (silence + 0.5, status_message("idle"))]
+        )
+        connect_runtime(runtime, mock_kc, monkeypatch)
+        if finishes:
+            outputs = runtime.execute_code(
+                "print(1)", output_hook=output_hook, timeout=600
+            )
+            assert outputs[0]["text"] == "1\n"
+        else:
+            with pytest.raises(TimeoutError):
+                runtime.execute_code("print(1)", output_hook=output_hook, timeout=600)
 
 
 def test_colab_runtime_stop():
