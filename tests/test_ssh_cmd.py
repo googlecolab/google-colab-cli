@@ -49,8 +49,8 @@ def one_session(mock_common_state, mocker):
     mock_common_state.store.list.return_value = {"s1": session}
     mock_common_state.sync_sessions.return_value = ({"s1": session}, [])
 
-    def resolve(name):
-        return State.resolve_session(mock_common_state, name)
+    def resolve(name, **kwargs):
+        return State.resolve_session(mock_common_state, name, **kwargs)
 
     mock_common_state.resolve_session.side_effect = resolve
     mocker.patch.object(ssh_module.sys, "platform", "linux")

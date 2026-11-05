@@ -154,7 +154,7 @@ def _resolve_session(name: Optional[str]) -> SessionState:
     """
     from colab_cli.common import state
 
-    resolved = state.resolve_session(name)
+    resolved = state.resolve_session(name, allow_attached=True)
     s = state.get_session(
         resolved,
         ignore_missing_session=True,

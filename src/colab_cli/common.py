@@ -18,7 +18,7 @@ import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import NoReturn, Optional
+from typing import Dict, NoReturn, Optional
 
 import typer
 
@@ -205,7 +205,28 @@ class State:
 
         return self._sessions, assignments
 
-    def resolve_session(self, session_name: Optional[str]) -> str:
+    @staticmethod
+    def _exit_only_attached(sessions: Dict[str, SessionState]) -> NoReturn:
+        first, *others = sorted(sessions)
+        also = f" (also attached: {', '.join(others)})" if others else ""
+        forget = f", or forget it with 'colab stop -s {first}'"
+        State.exit_ssh_only(first, forget + also)
+
+    def resolve_session(
+        self, session_name: Optional[str], allow_attached: bool = False
+    ) -> str:
+        """Returns `session_name`, or the only active session when it is None.
+
+        Args:
+          session_name: The name given with -s, if any.
+          allow_attached: Let the pick choose an attached session.
+
+        Returns:
+          The name of the session to act on.
+
+        Raises:
+          typer.Exit: If no session can be picked or the pick is ambiguous.
+        """
         if session_name:
             return session_name
 
@@ -216,11 +237,16 @@ class State:
                 "[colab] Error: No active sessions found. Create one with 'colab new'."
             )
             raise typer.Exit(1)
+        only_attached = all(s.attached for s in local_sessions.values())
+        if only_attached and not allow_attached:
+            self._exit_only_attached(local_sessions)
 
         # If we have local sessions, we need to sync to make sure they are still valid.
         # This will trigger auth if valid credentials are not present.
         sessions, _ = self.sync_sessions()
-        active_names = list(sessions.keys())
+        active_names = [
+            n for n, s in sessions.items() if allow_attached or not s.attached
+        ]
 
         if len(active_names) == 1:
             name = active_names[0]
@@ -232,6 +258,8 @@ class State:
             )
             raise typer.Exit(1)
         else:
+            if sessions and not allow_attached:
+                self._exit_only_attached(sessions)
             typer.echo(
                 "[colab] Error: No active sessions found. Create one with 'colab new'."
             )
