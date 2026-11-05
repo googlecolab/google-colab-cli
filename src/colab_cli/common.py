@@ -18,7 +18,7 @@ import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import NoReturn, Optional
 
 import typer
 
@@ -100,13 +100,26 @@ class State:
         """
         record = self.store.get(name)
         if record is not None and record.attached:
-            typer.echo(
-                f"[colab] Error: Session '{name}' uses a runtime the CLI did"
-                f" not create. Forget it with 'colab stop -s {name}' or pick"
-                " another name.",
-                err=True,
-            )
-            raise typer.Exit(1)
+            forget = f", forget it with 'colab stop -s {name}'"
+            self.exit_ssh_only(name, f"{forget}, or pick another name")
+
+    @staticmethod
+    def exit_ssh_only(name: str, more: str = "") -> NoReturn:
+        """Exits because only `colab ssh` may use attached session `name`.
+
+        Args:
+          name: The attached session a command tried to use.
+          more: Further advice, appended after the `colab ssh` pointer.
+
+        Raises:
+          typer.Exit: Always (exit code 1).
+        """
+        typer.echo(
+            f"[colab] Error: Session '{name}' uses a runtime the CLI did not"
+            f" create. Use it with 'colab ssh -s {name}'{more}.",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     def prune_session(self, name: str):
         """Removes a session from local state."""
@@ -116,16 +129,29 @@ class State:
         self.history.log_event(name, "session_terminated", {"reason": "pruned"})
 
     def get_session(
-        self, name: str, ignore_missing_session: bool = False
+        self,
+        name: str,
+        ignore_missing_session: bool = False,
+        allow_attached: bool = False,
     ) -> Optional[SessionState]:
         """Load a session, refreshing its runtime proxy token if it's near expiry.
 
         A session is missing if it's unknown locally or its assignment is gone
-        server-side (in which case it's pruned). Missing sessions print an error
-        and exit, unless ignore_missing_session is set, in which case this
-        returns None.
+        server-side (in which case it's pruned).
+
+        Args:
+          name: The session to load.
+          ignore_missing_session: Return None for a missing session.
+          allow_attached: Return an attached session; only `colab ssh` and
+            `run` cleanup may use one.
+
+        Raises:
+          typer.Exit: If the session is missing (unless ignored), or attached
+            and not allowed; the attached check runs before any request.
         """
         s = self.store.get(name)
+        if s and s.attached and not allow_attached:
+            self.exit_ssh_only(name)
         if s and (
             not s.token_expires_at
             or s.token_expires_at - datetime.now(timezone.utc) <= TOKEN_REFRESH_MARGIN

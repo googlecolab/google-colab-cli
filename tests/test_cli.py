@@ -18,23 +18,29 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+from session_fakes import (
+    ATT,
+    DUP_CLI,
+    RecordingSession,
+    UnassignSession,
+    fresh_session,
+    unassigned_endpoints,
+    use_guarded_client,
+)
 from typer.testing import CliRunner
 
 from colab_cli.cli import app
 from colab_cli.client import (
     Assignment,
     AttachedRuntimeError,
-    Client,
     ColabRequestError,
     PostAssignmentResponse,
-    Prod,
     RuntimeProxyInfo,
     TooManyAssignmentsError,
 )
 from colab_cli.commands import run as run_cmd
 from colab_cli.commands import session as session_cmd
 from colab_cli.commands import ssh as ssh_module
-from colab_cli.common import State
 from colab_cli.consumption import ConsumptionUserInfo
 from colab_cli.state import SessionState, StateStore
 
@@ -360,29 +366,6 @@ def _dup_session(attached):
     )
 
 
-class _RecordingSession:
-    """Stands in for the authorized HTTP session and records every request."""
-
-    def __init__(self):
-        self.requests = []
-
-    def request(self, method, url, **kwargs):
-        self.requests.append((method, url))
-        raise RuntimeError(f"unexpected request: {method} {url}")
-
-
-@pytest.fixture
-def real_state(tmp_path, monkeypatch, mocker):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    mocker.patch("colab_cli.cli.auto_update.run_background_check")
-    st = State()
-    st._client = Client(Prod(), _RecordingSession())
-    st._history = MagicMock()
-    mocker.patch("colab_cli.common.state", st)
-    mocker.patch("colab_cli.cli.state", st)
-    return st
-
-
 @pytest.fixture
 def dup_state(real_state, tmp_path):
     real_state._store = StateStore(str(tmp_path / "sessions.json"))
@@ -457,46 +440,6 @@ def test_config_with_linked_attached_path_is_refused(real_state, tmp_path):
     assert sessions.read_bytes() == before
 
 
-def _fresh(name, ep, attached):
-    expires = datetime.now(timezone.utc) + timedelta(hours=1)
-    fields = dict(token="t", url="u", token_expires_at=expires)
-    return SessionState(name=name, endpoint=ep, attached=attached, **fields)
-
-
-ATT = ("att", "att-ep", True)
-DUP_CLI = ("dup", "dup-ep", False)
-
-
-@pytest.fixture
-def two_file_state(real_state, tmp_path):
-    real_state._store = StateStore(str(tmp_path / "sessions.json"))
-    for args in ATT, DUP_CLI, ("cli", "cli-ep", False), ("dup", "dup-at", True):
-        real_state.store.add(_fresh(*args))
-    return real_state
-
-
-class _UnassignSession(_RecordingSession):
-    """Records every request and accepts unassign calls."""
-
-    def request(self, method, url, **kwargs):
-        if "/unassign/" not in url:
-            return super().request(method, url, **kwargs)
-        self.requests.append((method, url))
-        body = '{"token": "xsrf"}' if method == "GET" else ""
-        return MagicMock(ok=True, status_code=200, reason="OK", text=body)
-
-
-def _use_guarded_client(st, mocker, session=None):
-    st._client = None
-    credentials = mocker.patch("colab_cli.common.get_credentials")
-    credentials.return_value = session or _RecordingSession()
-
-
-def _unassigned_endpoints(st):
-    urls = [url for _, url in st.client.session.requests if "/unassign/" in url]
-    return {url.rsplit("/", 1)[-1] for url in urls}
-
-
 def test_stop_forgets_attached_session(two_file_state, tmp_path):
     sessions_before = (tmp_path / "sessions.json").read_bytes()
 
@@ -511,7 +454,7 @@ def test_stop_forgets_attached_session(two_file_state, tmp_path):
 
 
 def test_client_refuses_to_unassign_attached_endpoint(two_file_state, mocker):
-    _use_guarded_client(two_file_state, mocker)
+    use_guarded_client(two_file_state, mocker)
 
     with pytest.raises(AttachedRuntimeError):
         two_file_state.client.unassign("att-ep")
@@ -548,21 +491,21 @@ def test_refuse_attached_name_allows_cli_and_unknown_names(
 @pytest.mark.parametrize(
     "args, session, unassigned, kept",
     [
-        (ATT, _RecordingSession, set(), ["cli", "dup"]),
-        (DUP_CLI, _UnassignSession, {"dup-ep"}, ["cli"]),
-        (DUP_CLI, _RecordingSession, {"dup-ep"}, ["cli", "dup"]),
+        (ATT, RecordingSession, set(), ["cli", "dup"]),
+        (DUP_CLI, UnassignSession, {"dup-ep"}, ["cli"]),
+        (DUP_CLI, RecordingSession, {"dup-ep"}, ["cli", "dup"]),
     ],
     ids=["attached", "duplicate", "duplicate-unassign-fails"],
 )
 def test_teardown_keeps_attached_records(
     two_file_state, tmp_path, mocker, capsys, args, session, unassigned, kept
 ):
-    _use_guarded_client(two_file_state, mocker, session())
+    use_guarded_client(two_file_state, mocker, session())
     attached_before = (tmp_path / "sessions.attached.json").read_bytes()
 
-    run_cmd._teardown(args[0], _fresh(*args), reason="script_exit")
+    run_cmd._teardown(args[0], fresh_session(*args), reason="script_exit")
 
-    assert _unassigned_endpoints(two_file_state) == unassigned
+    assert unassigned_endpoints(two_file_state) == unassigned
     assert (tmp_path / "sessions.attached.json").read_bytes() == attached_before
     assert sorted(json.loads((tmp_path / "sessions.json").read_text())) == kept
     run_cmd.ColabRuntime.assert_not_called()
@@ -574,7 +517,7 @@ def test_teardown_keeps_attached_records(
 def test_ssh_rm_never_unassigns_an_attached_record(
     two_file_state, tmp_path, mocker, capsys, mode, args
 ):
-    s = _fresh(*args)
+    s = fresh_session(*args)
     attached_before = (tmp_path / "sessions.attached.json").read_bytes()
     sessions_before = (tmp_path / "sessions.json").read_bytes()
     stop_spy = mocker.spy(ssh_module, "_stop_session")

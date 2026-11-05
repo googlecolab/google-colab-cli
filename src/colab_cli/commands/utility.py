@@ -94,6 +94,8 @@ def url(
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.", err=True)
         raise typer.Exit(code=1)
+    if s.attached:
+        state.exit_ssh_only(name)
 
     # Strip a trailing slash so we don't produce `https://host//notebooks/...`
     # or `https://host//tun/m/...` in the fragment URL.

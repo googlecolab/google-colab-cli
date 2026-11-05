@@ -14,9 +14,13 @@
 
 import pytest
 import typer
+from session_fakes import ATT, DUP_CLI, RecordingSession, fresh_session
 from unittest.mock import MagicMock
 
 from colab_cli.auth import AuthProvider
+from colab_cli.client import Client, Prod
+from colab_cli.common import State
+from colab_cli.state import StateStore
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +36,7 @@ def mock_common_state(mocker):
     mock_state.config_path = None
 
     # Token refresh is covered in test_common.py; elsewhere just read the store.
-    def get_session(name, ignore_missing_session=False):
+    def get_session(name, ignore_missing_session=False, allow_attached=False):
         s = mock_state.store.get(name)
         if not s and not ignore_missing_session:
             typer.echo(f"[colab] Session '{name}' not found.")
@@ -52,3 +56,23 @@ def mock_common_state(mocker):
     mocker.patch("colab_cli.commands.run.ColabRuntime")
 
     return mock_state
+
+
+@pytest.fixture
+def real_state(tmp_path, monkeypatch, mocker):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    mocker.patch("colab_cli.cli.auto_update.run_background_check")
+    st = State()
+    st._client = Client(Prod(), RecordingSession())
+    st._history = MagicMock()
+    mocker.patch("colab_cli.common.state", st)
+    mocker.patch("colab_cli.cli.state", st)
+    return st
+
+
+@pytest.fixture
+def two_file_state(real_state, tmp_path):
+    real_state._store = StateStore(str(tmp_path / "sessions.json"))
+    for args in ATT, DUP_CLI, ("cli", "cli-ep", False), ("dup", "dup-at", True):
+        real_state.store.add(fresh_session(*args))
+    return real_state
