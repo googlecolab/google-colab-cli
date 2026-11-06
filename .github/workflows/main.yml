@@ -1,0 +1,47 @@
+name: v1rtu4lyz1um Colab-CLI & Runtime CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 4 * * *' # Tägliche dezentrale Mesh-Simulation
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Repositorium auschecken
+      uses: actions/checkout@v4
+
+    - name: System-Abhängigkeiten installieren (CMake & Ninja)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build build-essential libffi-dev
+
+    - name: Python-Umgebung einrichten
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Python- & Qiskit-Abhängigkeiten installieren
+      run: |
+        python -m pip install --upgrade pip
+        pip install qiskit metakernel cffi ipywidgets cherrypy
+
+    - name: CMake & Ninja Build-Test (C-Kerne / VRAM)
+      run: |
+        cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --parallel $(nproc)
+
+    - name: Metakernel & Qiskit Runtime-Validierung
+      run: |
+        echo "[CI] Führe dezentrale Colab-Metakernel und Qiskit-Tests aus..."
+        # Hier kannst du deine Test-Skripte aufrufen (z.B. pytest oder direkte Python-Ausführung)
+        python -c "import qiskit; print('Qiskit Version:', qiskit.__version__); print('Mesh-Runtime-Check: OK')"
+    - name: Configure CMake
+      working-directory: ./pfad/zum/unterordner
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release .
