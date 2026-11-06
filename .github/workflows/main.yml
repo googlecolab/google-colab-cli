@@ -42,3 +42,6 @@ jobs:
         echo "[CI] Führe dezentrale Colab-Metakernel und Qiskit-Tests aus..."
         # Hier kannst du deine Test-Skripte aufrufen (z.B. pytest oder direkte Python-Ausführung)
         python -c "import qiskit; print('Qiskit Version:', qiskit.__version__); print('Mesh-Runtime-Check: OK')"
+    - name: Configure CMake
+      working-directory: ./pfad/zum/unterordner
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release .
