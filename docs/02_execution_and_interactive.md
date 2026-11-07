@@ -1,5 +1,7 @@
 ---
 log:
+2026-11-07: `colab exec` and `colab run` recover from transient kernel WebSocket failures using the original Jupyter session and execution request. Recovery waits up to 30 seconds, remains subject to the idle timeout, and never resubmits code. An unrecoverable disconnect reports that remote execution may still be running.
+
 2026-05-07: Fixed `colab console` piped-stdin handling. Previously a piped invocation (e.g. `echo 'cmd' | colab console -s s`) sent the command and then hung indefinitely because the previous EOF handler emitted a bare `\x04` (Ctrl-D), which the remote `tmux`-wrapped bash treats as a literal character rather than a session terminator. The new handler sends `exit\n` (which bash actually exits on) and then closes the websocket from the client side after a short grace period (`PIPED_EOF_GRACE_SECONDS = 0.5s`) so any tail output (bash `logout`, tmux `[exited]`) makes it back to the user. TTY mode is unchanged: real-terminal EOF is left to the remote shell. Verified live: `echo 'echo HELLO' | colab console -s s` now exits in ~1.2s instead of hanging.
 
 2026-05-07: Fixed `print_kitty` (used by `colab exec --output-image` and any image-producing exec) to no-op when `sys.stdout.isatty()` is false. The Kitty Graphics Protocol escape sequence is meaningless when stdout is a file or pipe and was visually corrupting captured output (a multi-KB base64 PNG blob would land in log files, grep targets, or showboat captures). Image bytes are still saved to disk via `handle_image`'s file-write path; only the inline-render attempt is suppressed.
@@ -31,6 +33,7 @@ Execution involves sending Python code (or shell commands) to the Jupyter kernel
     - If file path is remote: Execute `!python <path>`.
 - **Multi-Modal Output**: Handle `display_data` messages (e.g., `image/png`, `text/html`). For the CLI, we'll save images to temporary files and print their paths, or if the terminal supports it (e.g., iTerm2), inline them.
 - **Timeout Configuration**: Exposes a `--timeout` flag (default 30s): the longest silence allowed before execution fails. Raise it so long-running silent tasks (like model compilation or data downloading) are not prematurely killed; `0` means no limit.
+- **Connection Recovery**: Enable the kernel client's existing WebSocket reconnection with a one-second retry interval. During an unexpected transport failure, keep waiting for the original request on the same kernel and Jupyter session for up to 30 seconds. The idle timeout continues to apply during recovery. Read the socket's connection state as well as `connection_ready`, which can remain set during reconnection. If the listener exits or recovery exceeds this window, report that the remote execution may still be running. Code is never resubmitted; output produced during a disconnect can only be recovered if the backend retains it. A normal server close is subject to the WebSocket library's reconnect policy.
 
 ### 3. Console (`colab console`)
 - **Implementation**: Connects directly to the backend terminal endpoint (`/colab/tty`) via WebSockets using `websocket-client`.
@@ -50,6 +53,8 @@ TDD is mandatory for all execution features.
 - **Test Case**: Verify `ColabRuntime` correctly sends an `execute_request` message over the websocket.
 - **Test Case**: Verify `iopub.stream` messages are correctly handled and printed to `stdout` in real-time.
 - **Test Case**: Verify `display_data` (specifically `image/png`) triggers the correct local handling (saving or display).
+- **Test Case**: A transient disconnect while waiting for output or the completion reply resumes the original request without submitting code again. Recovery is bounded even with `--timeout 0`, and does not extend the idle timeout.
+- **Live Test**: `uv run bash integration/repro_execution_reconnect/test.sh` allocates an isolated CPU session, drops the kernel TCP connection twice during `colab exec`, and verifies completion on one request/session and a remote side effect occurring exactly once. It releases its runtime on exit.
 
 ### 2. TTY and Piping
 - **Test Case**: Mock `sys.stdin.isatty()` to verify `colab repl` correctly switches between interactive mode and one-shot piped execution.

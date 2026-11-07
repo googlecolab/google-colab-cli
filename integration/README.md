@@ -14,6 +14,7 @@ End-to-end tests that run against a **live Colab backend** (unlike the mocked un
 | `repro_plot_redirection/` | `colab exec` of a matplotlib script with `--output-image` redirection. |
 | `repro_run_command/` | `colab run <script.py>` runs a local script on a fresh VM and cleans up; `--keep` leaves the session alive. |
 | `repro_variable_persistence/` | Variables persist across `colab exec` calls in the same session. |
+| `repro_execution_reconnect/` | Live CPU test: drops the kernel TCP connection twice during `colab exec`, resumes the original request/session, and verifies that code ran exactly once. Uses isolated session state and releases its runtime on exit. |
 | `repro_piped_console/` | Fast smoke test (~5s including session creation): `echo cmd \| colab console -s s` runs the command and exits within 30s. Regression test for the 2026-05-07 EOF-handler fix. |
 | `repro_bundled_oauth/` | Fast smoke test (~5s): verifies that the fallback OAuth configuration is loaded and starts the OAuth flow with the default client ID when local config is missing. |
 | `repro_legacy_token_migration/` | Fast smoke test (~5s, no VM): a pre-keyring `~/.config/colab-cli/token.json` is migrated into the keyring and deleted, deleted when the keyring already has a token, and kept (with a stderr warning) when the keyring is inaccessible. Uses a throwaway HOME and file-backed test keyring. |

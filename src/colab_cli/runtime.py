@@ -23,6 +23,8 @@ import requests
 
 # The longest single wait for a kernel message, so a lost connection is noticed.
 _WAIT_SLICE_SEC = 1.0
+# Bound transport recovery even when execution has no idle timeout.
+_RECONNECT_TIMEOUT_SEC = 30.0
 # Kernel states that end any execution in progress.
 _KERNEL_GONE = frozenset({"dead", "restarting"})
 
@@ -105,6 +107,7 @@ class ColabRuntime:
                     client_kwargs = {
                         "subprotocol": jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
                         "extra_params": {"colab-runtime-proxy-token": self.token},
+                        "reconnect_interval": 1,
                     }
                     if self.session_id:
                         # WSSession (Session) expects 'session' for the ID
@@ -297,12 +300,41 @@ class ColabRuntime:
             timeout = None
         client = self.kernel_client._manager.client
         msg_id = client.execute(code, allow_stdin=False)
+        disconnected_at = None
 
         def next_message(get_msg, waiting_for):
+            nonlocal disconnected_at
             deadline = (time.monotonic() + timeout) if timeout is not None else None
             while True:
-                if not client.connection_ready.is_set():
-                    raise RuntimeError("Connection was lost.")
+                # websocket-client reconnects using the same socket app and
+                # Jupyter session. Keep waiting for msg_id; resubmitting code
+                # here would execute the user's work twice. connection_ready
+                # alone can remain set while the transport is reconnecting.
+                socket_app = client.kernel_socket
+                socket = socket_app.sock if socket_app is not None else None
+                connected = (
+                    client.connection_ready.is_set()
+                    and socket is not None
+                    and socket.connected
+                )
+                if connected:
+                    disconnected_at = None
+                else:
+                    if disconnected_at is None:
+                        disconnected_at = time.monotonic()
+                        logging.warning(
+                            "Kernel connection lost; waiting for reconnection."
+                        )
+                    if (
+                        client.connection_thread is None
+                        or not client.connection_thread.is_alive()
+                        or time.monotonic() - disconnected_at >= _RECONNECT_TIMEOUT_SEC
+                    ):
+                        raise RuntimeError(
+                            "Connection was lost and could not be restored. "
+                            "The remote execution may still be running; "
+                            "the code has not been resubmitted."
+                        )
                 wait = _WAIT_SLICE_SEC
                 if deadline is not None:
                     left = deadline - time.monotonic()
