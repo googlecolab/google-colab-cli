@@ -299,7 +299,22 @@ def _get_adc_credentials() -> Credentials:
     # That warning shows up on every single `colab` invocation under ADC,
     # which is pure noise. Filter it, but keep the scope as tight as possible:
     # only this exact message, only during this one call.
-    with warnings.catch_warnings():
+    #
+    # Additionally, when ADC user credentials lack a `quota_project_id`,
+    # `google.auth._default._get_gcloud_sdk_credentials` calls
+    # `google.auth._cloud_sdk.get_project_id()`, which spawns a
+    # `gcloud config get-value project` subprocess (adding 2-13s of latency on
+    # every CLI invocation) solely to compute the second tuple element
+    # (`project_id`) that we immediately discard (`_`). Stubbing
+    # `get_project_id` during `google.auth.default()` avoids spawning `gcloud`
+    # while preserving the full ADC discovery chain.
+    from unittest.mock import patch as _patch
+    from google.auth import _cloud_sdk
+
+    with (
+        warnings.catch_warnings(),
+        _patch.object(_cloud_sdk, "get_project_id", return_value="colab-cli"),
+    ):
         warnings.filterwarnings(
             "ignore",
             message=r"Your application has authenticated using end user credentials.*",
