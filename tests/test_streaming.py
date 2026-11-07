@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import pytest
+from types import SimpleNamespace
 from mock_kernel import (
     MockKernelClient,
     connect_runtime,
@@ -149,6 +150,64 @@ def test_a_lost_connection_stops_the_wait(run):
     with pytest.raises(RuntimeError, match="Connection was lost"):
         run(mock_kc, timeout=None)
     assert mock_kc.now < 12
+
+
+@pytest.mark.parametrize("waiting_for", ["output", "reply"])
+def test_reconnect_resumes_the_original_execution(run, waiting_for):
+    mock_kc = MockKernelClient(
+        [(1, stdout_message("before\n")), (15, status_message("idle"))],
+        shell=[(20, reply_message())],
+    )
+    getter_name = "get_iopub_msg" if waiting_for == "output" else "get_shell_msg"
+    original_get = getattr(mock_kc, getter_name)
+    mock_kc.connection_thread = SimpleNamespace(is_alive=lambda: True)
+    mock_kc.kernel_socket = SimpleNamespace(sock=SimpleNamespace(connected=True))
+    requests = []
+    execute = mock_kc.execute
+
+    def record_execute(code, **kwargs):
+        requests.append(code)
+        return execute(code, **kwargs)
+
+    def get_message(timeout):
+        # The transport reconnects while the caller waits for the same message.
+        connected = not (2 <= mock_kc.now < 6 or 16 <= mock_kc.now < 18)
+        mock_kc.kernel_socket.sock.connected = connected
+        if not connected:
+            mock_kc.connection_ready.clear()
+        else:
+            mock_kc.connection_ready.set()
+        return original_get(timeout=timeout)
+
+    mock_kc.execute = record_execute
+    setattr(mock_kc, getter_name, get_message)
+    outputs, _ = run(mock_kc, timeout=30)
+    assert outputs[0]["text"] == "before\n"
+    assert requests == ["work()"]
+
+
+@pytest.mark.parametrize("timeout", [None, 0, 300])
+@pytest.mark.parametrize("ready", [True, False])
+def test_reconnection_has_a_limit_even_without_an_execution_timeout(
+    run, timeout, ready
+):
+    mock_kc = MockKernelClient([])
+    if not ready:
+        mock_kc.connection_ready.clear()
+    mock_kc.connection_thread = SimpleNamespace(is_alive=lambda: True)
+    mock_kc.kernel_socket = SimpleNamespace(sock=None)
+    with pytest.raises(RuntimeError, match="Connection was lost.*still be running"):
+        run(mock_kc, timeout=timeout)
+    assert 29 <= mock_kc.now <= 31
+
+
+def test_reconnection_does_not_extend_the_idle_timeout(run):
+    mock_kc = MockKernelClient([])
+    mock_kc.connection_thread = SimpleNamespace(is_alive=lambda: True)
+    mock_kc.kernel_socket = SimpleNamespace(sock=None)
+    with pytest.raises(TimeoutError, match="Timeout waiting for output"):
+        run(mock_kc, timeout=3)
+    assert mock_kc.now == 3
 
 
 @pytest.mark.parametrize("state", ["dead", "restarting"])
