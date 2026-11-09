@@ -16,6 +16,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 from colab_cli.cli import app
+from colab_cli.commands.automation import show_drive_auth_url
 from colab_cli.state import SessionState
 
 runner = CliRunner()
@@ -123,3 +124,27 @@ def test_cli_auth_uses_long_timeout(mock_state, mock_runtime_class, mock_session
 
     _, kwargs = mock_runtime.execute_code.call_args
     assert kwargs.get("timeout") is not None and kwargs["timeout"] >= 300
+
+
+@patch("colab_cli.commands.automation.open_url_in_browser", return_value=True)
+def test_show_drive_auth_url_opens_browser(mock_open, capsys):
+    """The consent URL is printed and handed to the browser opener."""
+    url = "https://accounts.google.com/o/oauth2/v2/auth?state=abc"
+    assert show_drive_auth_url(url) is True
+
+    mock_open.assert_called_once_with(url)
+    out = capsys.readouterr().out
+    assert url in out
+    assert "Opened the authorization page" in out
+
+
+@patch("colab_cli.commands.automation.open_url_in_browser", return_value=False)
+def test_show_drive_auth_url_headless_still_prints(mock_open, capsys):
+    """With no browser opener the URL must stay on screen for manual use."""
+    url = "https://accounts.google.com/o/oauth2/v2/auth?state=abc"
+    assert show_drive_auth_url(url) is False
+
+    mock_open.assert_called_once_with(url)
+    out = capsys.readouterr().out
+    assert url in out
+    assert "Opened the authorization page" not in out
