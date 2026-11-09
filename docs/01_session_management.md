@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-04: `--gpu` and `--tpu` now reject unknown values instead of silently selecting `A100` (GPU) or `v6e1` (TPU). `resolve_runtime_options()` uses the new `GPU_ACCELERATORS` / `TPU_ACCELERATORS` maps and raises a `typer.BadParameter` that names the flag and the supported list; `--help` is generated from the same maps so it cannot drift. Validation runs before any assignment request, in both `colab new` and `colab run`.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to check if the active Linux `SecretService` keyring collection is locked via `secretstorage` before reading or writing OAuth tokens, logging and printing an immediate warning with the collection label, timeout, and `--auth=adc` hint while still attempting the keyring operation.
 2026-10-29: The debug log (`colab.log` and `--logtostderr`) masks access tokens, runtime proxy tokens, OAuth codes, client secrets, auth headers and cookies, including in percent-encoded URLs; `jupyter_kernel_client` logs at INFO so kernel stdin replies are not recorded.
 2026-10-29: `sessions.json`, `settings.json`, `colab.log` and session history files are created with mode 0600, and existing copies are tightened to 0600 the next time the CLI uses them (history files whenever the history logger starts).
@@ -34,6 +35,7 @@ Defines the specific hardware model.
 - **GPU Accelerators**:
     - `T4`: NVIDIA T4 (standard free-tier GPU).
     - `L4`: NVIDIA L4 (cost-effective modern GPU).
+    - `G4`: NVIDIA G4 (entry-level datacenter GPU).
     - `A100`: NVIDIA A100 (high-performance GPU).
     - `H100`: NVIDIA H100 (latest-gen performance GPU).
 - **TPU Accelerators**:
@@ -55,6 +57,12 @@ The CLI maps user flags to these backend parameters:
 - `colab new my-session --tpu=v5e1` -> `variant=TPU`, `accelerator=V5E1`
 - `colab new my-session --high-mem` -> adds `shape=hm` (when supported)
 - `colab new my-session --gpu A100 --high-mem` -> `variant=GPU`, `accelerator=A100`, `shape=hm`
+
+`--gpu` accepts `T4`, `L4`, `G4`, `H100`, and `A100`; `--tpu` accepts `v5e1`
+and `v6e1` (case-insensitive). Anything else is rejected with the supported
+list before a VM is requested. Unknown values used to fall back silently to
+`A100`/`v6e1`, which turned a typo in an automation script into a real,
+billable allocation.
 
 ## Approach
 

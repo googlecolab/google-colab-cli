@@ -110,6 +110,32 @@ def test_cli_new_gpu_variants(mock_client, mock_store, gpu_flag, expected_acc):
     assert added_state.accelerator == expected_acc
 
 
+@pytest.mark.parametrize("gpu_flag", ["A10O", "foo", "V100", "t4x"])
+def test_cli_new_rejects_unknown_gpu(mock_client, mock_store, gpu_flag):
+    """A typo must not silently provision an A100."""
+    result = runner.invoke(app, ["new", "-s", "s", "--gpu", gpu_flag])
+
+    assert result.exit_code != 0
+    assert f"unsupported value {gpu_flag!r}" in result.output
+    # The full list is asserted in tests/test_runtime_options.py; the rich
+    # error panel wraps long lines, so only check that --gpu is named here.
+    assert "--gpu" in result.output
+    mock_client.assign.assert_not_called()
+    mock_store.add.assert_not_called()
+
+
+@pytest.mark.parametrize("tpu_flag", ["v4", "foo", "v5e"])
+def test_cli_new_rejects_unknown_tpu(mock_client, mock_store, tpu_flag):
+    """Only v5e1 and v6e1 exist; anything else used to become v6e1."""
+    result = runner.invoke(app, ["new", "-s", "s", "--tpu", tpu_flag])
+
+    assert result.exit_code != 0
+    assert f"unsupported value {tpu_flag!r}" in result.output
+    assert "--tpu" in result.output
+    mock_client.assign.assert_not_called()
+    mock_store.add.assert_not_called()
+
+
 def test_cli_sessions_unified_format(mock_client, mock_common_state):
     """`sessions` should lead each line with the local name when known:
     `[name] endpoint | Hardware: X | Shape: Y | Variant: Z`.

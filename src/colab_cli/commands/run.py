@@ -47,7 +47,11 @@ from colab_cli.client import (
     TooManyAssignmentsError,
 )
 from colab_cli.commands.execution import _build_env_prelude, _parse_env_vars
-from colab_cli.commands.session import resolve_runtime_options
+from colab_cli.commands.session import (
+    GPU_ACCELERATORS,
+    TPU_ACCELERATORS,
+    resolve_runtime_options,
+)
 from colab_cli.runtime import ColabRuntime
 from colab_cli.state import SessionState
 from colab_cli.utils import get_status_code, is_terminal_error
@@ -225,13 +229,19 @@ def run_command(
     ] = None,
     tpu: Annotated[
         Optional[str],
-        typer.Option(help="TPU accelerator variant. Supported: v5e1, v6e1."),
+        typer.Option(
+            help=(
+                "TPU accelerator variant. Supported: "
+                f"{', '.join(name.upper() for name in TPU_ACCELERATORS)}."
+            )
+        ),
     ] = None,
     gpu: Annotated[
         Optional[str],
         typer.Option(
             help=(
-                "GPU accelerator variant. Supported: T4, L4, G4, H100, A100. "
+                "GPU accelerator variant. Supported: "
+                f"{', '.join(name.upper() for name in GPU_ACCELERATORS)}. "
                 "If omitted (along with --tpu), a CPU runtime is created."
             ),
         ),
