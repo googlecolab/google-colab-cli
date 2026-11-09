@@ -439,6 +439,38 @@ def test_run_unassign_called_on_exception_during_execute(
     mock_client.unassign.assert_called_once_with("ep-123")
 
 
+@pytest.mark.parametrize("kind", ["connection", "idle"])
+def test_run_preserves_runtime_when_execution_result_is_unknown(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    assign_response,
+    script_path,
+    kind,
+):
+    from colab_cli.runtime import ExecutionOutcomeUnknown, ExecutionIdleTimeout
+
+    mock_client.assign.return_value = assign_response
+    runtime = mock_runtime_class.return_value
+    error = (
+        ExecutionOutcomeUnknown("remote result unknown")
+        if kind == "connection"
+        else ExecutionIdleTimeout("remote task may still be running")
+    )
+    # The prelude succeeds; only monitoring the user's work fails.
+    runtime.execute_code.side_effect = [[], error]
+    persisted = {}
+    mock_store.add.side_effect = lambda s: persisted.setdefault("s", s)
+    mock_store.get.side_effect = lambda name: persisted.get("s")
+    result = runner.invoke(app, ["run", str(script_path)])
+    assert result.exit_code != 0
+    mock_client.unassign.assert_not_called()
+    mock_store.remove.assert_not_called()
+    assert persisted["s"].running is not None
+    assert "preserved" in result.output
+    assert "colab stop -s" in result.output
+
+
 # ---------------------------------------------------------------------------
 # Accelerator passthrough
 # ---------------------------------------------------------------------------

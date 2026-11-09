@@ -13,20 +13,25 @@
 # limitations under the License.
 
 import datetime
-import nbformat
 import os
 import re
 import sys
-import typer
 import uuid
+from typing import List, Optional
+
+import nbformat
+import typer
 from nbformat.v4 import new_output
 from rich.console import Console
-from typing import List, Optional
 from typing_extensions import Annotated
 
-from colab_cli.runtime import ColabRuntime
-from colab_cli.utils import handle_image, is_terminal_error, render_display_data
 from colab_cli.console import connect_console
+from colab_cli.runtime import (
+    ColabRuntime,
+    ExecutionIdleTimeout,
+    ExecutionOutcomeUnknown,
+)
+from colab_cli.utils import handle_image, is_terminal_error, render_display_data
 
 _console = Console()
 
@@ -143,6 +148,82 @@ def display_output(out, output_image=None):
         pass
 
 
+def recovery_callbacks(state, session):
+    """Persist identity before submission, using the same session as refresh."""
+
+    def record(execution):
+        session.execution = execution
+        state.store.add(session)
+
+    return {
+        "refresh_connection": lambda timeout: state.refresh_runtime_proxy(
+            session, timeout
+        ),
+        "on_execution_record": record,
+    }
+
+
+def require_resolved_execution(session):
+    if session.execution:
+        typer.echo(
+            f"[colab] Session '{session.name}' has an unresolved execution. "
+            f"Recover it with 'colab resume -s {session.name}' before submitting more code.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+
+def resume_command(
+    session: Annotated[
+        str | None, typer.Option("-s", "--session", help="Session name")
+    ] = None,
+    timeout: Annotated[
+        float | None,
+        typer.Option("--timeout", help="Execution idle timeout (0 disables it)"),
+    ] = 30.0,
+    output_image: Annotated[
+        str | None, typer.Option("--output-image", help="Path to save plot")
+    ] = None,
+):
+    """Recover the output and result of saved work."""
+    from colab_cli.common import state
+
+    name = state.resolve_session(session)
+    # Read saved identity before any operation which could prune local state.
+    s = state.store.get(name)
+    if s is None or not s.execution:
+        typer.echo("[colab] No saved execution to resume.", err=True)
+        raise typer.Exit(1)
+    runtime = ColabRuntime(
+        s.url,
+        s.token,
+        kernel_id=s.kernel_id,
+        session_id=s.session_id,
+        **recovery_callbacks(state, s),
+    )
+    try:
+        outputs = runtime.resume_execution(
+            s.execution["request_id"],
+            s.execution["path"],
+            output_hook=lambda out: display_output(out, output_image),
+            timeout=timeout,
+        )
+        s.execution = None
+        s.running = None
+        state.store.add(s)
+        state.history.log_event(name, "execution_resumed", {"outputs": outputs})
+        typer.echo(
+            f"[colab] Result recovered. Session retained; stop with 'colab stop -s {name}' when finished.",
+            err=True,
+        )
+        from colab_cli.commands.run import _exit_code_from_outputs
+
+        if code := _exit_code_from_outputs(outputs):
+            raise typer.Exit(code)
+    finally:
+        runtime.stop()
+
+
 def exec_command(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
@@ -157,7 +238,7 @@ def exec_command(
         Optional[float],
         typer.Option(
             "--timeout",
-            help="Seconds to wait without output before failing (0 for no limit)",
+            help="Seconds to wait without an execution message (0 disables idle timeout)",
         ),
     ] = 30.0,
     env: Annotated[
@@ -177,6 +258,7 @@ def exec_command(
     env_vars = _parse_env_vars(env)
     name = state.resolve_session(session)
     s = state.get_session(name)
+    require_resolved_execution(s)
 
     code_blocks = []
     if file:
@@ -220,6 +302,7 @@ def exec_command(
         session_id=s.session_id,
         on_kernel_started=on_started,
         on_session_started=on_sess_started,
+        **recovery_callbacks(state, s),
     )
     try:
         # Ensure we are in /content which is the standard Colab working directory
@@ -227,14 +310,12 @@ def exec_command(
             "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
         )
     except Exception as e:
-        if is_terminal_error(e):
-            typer.echo(
-                f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
-            )
-            state.prune_session(name)
-            raise typer.Exit(1)
+        # A proxy may reject an expired token with 404 while its VM is alive.
+        # Preserve local execution identity; HTTP status is not proof of loss.
+        runtime.stop()
         raise e
 
+    outcome_unknown = False
     try:
         is_nb = file and file.endswith(".ipynb")
         s.running = f"exec({file or 'stdin'})"
@@ -281,8 +362,19 @@ def exec_command(
                     "cell_id": block.get("id"),
                 },
             )
+    except (ExecutionOutcomeUnknown, ExecutionIdleTimeout, KeyboardInterrupt):
+        outcome_unknown = True
+        s.running = f"unknown: {s.running}"
+        typer.echo(
+            f"[colab] Execution result unknown; local state for session '{name}' "
+            "was preserved. "
+            f"Recover with 'colab resume -s {name}'. Do not resubmit the original work blindly.",
+            err=True,
+        )
+        raise
     finally:
-        s.running = None
+        if not outcome_unknown:
+            s.running = None
         state.store.add(s)
         runtime.stop()
         if file and file.endswith(".ipynb"):
@@ -408,5 +500,6 @@ def console(
 
 def register(app: typer.Typer):
     app.command(name="exec")(exec_command)
+    app.command(name="resume")(resume_command)
     app.command()(repl)
     app.command()(console)

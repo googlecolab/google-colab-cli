@@ -22,6 +22,19 @@ from colab_cli.cli import app
 runner = CliRunner()
 
 
+def test_exec_keeps_unknown_execution_state(mock_common_state, mocker):
+    from colab_cli.runtime import ExecutionOutcomeUnknown
+
+    session = mock_common_state.store.get.return_value
+    mock_common_state.resolve_session.return_value = "s1"
+    runtime = mocker.patch("colab_cli.commands.execution.ColabRuntime").return_value
+    runtime.execute_code.side_effect = [[], ExecutionOutcomeUnknown("connection lost")]
+    result = runner.invoke(app, ["exec", "-s", "s1"], input="side_effect()")
+    assert result.exit_code != 0
+    assert session.running == "unknown: exec(stdin)"
+    assert "Do not resubmit" in result.output
+
+
 @pytest.fixture
 def mock_store(mock_common_state):
     return mock_common_state.store
@@ -34,7 +47,7 @@ def mock_runtime_class(mocker):
 
 
 def test_cli_exec_file(mock_store, mock_runtime_class, mock_common_state, tmp_path):
-    mock_session = MagicMock()
+    mock_session = MagicMock(execution=None)
     mock_session.url = "http://url"
     mock_session.token = "token123"
     mock_session.name = "s1"
@@ -64,7 +77,7 @@ def test_cli_exec_file(mock_store, mock_runtime_class, mock_common_state, tmp_pa
 
 
 def test_cli_exec_stdin(mock_store, mock_runtime_class, mock_common_state):
-    mock_session = MagicMock()
+    mock_session = MagicMock(execution=None)
     mock_session.name = "s1"
     mock_session.url = "http://url"
     mock_session.token = "token"
@@ -90,7 +103,7 @@ def test_cli_exec_stdin(mock_store, mock_runtime_class, mock_common_state):
 def test_cli_exec_env_injects_prelude(
     mock_store, mock_runtime_class, mock_common_state
 ):
-    mock_session = MagicMock()
+    mock_session = MagicMock(execution=None)
     mock_session.name = "s1"
     mock_session.url = "http://url"
     mock_session.token = "token"
@@ -115,7 +128,7 @@ def test_cli_exec_env_injects_prelude(
 def test_cli_exec_env_flags_accumulate_and_split_on_first_equals(
     mock_store, mock_runtime_class, mock_common_state
 ):
-    mock_session = MagicMock()
+    mock_session = MagicMock(execution=None)
     mock_session.name = "s1"
     mock_session.url = "http://url"
     mock_session.token = "token"
@@ -146,7 +159,7 @@ def test_cli_exec_env_flags_accumulate_and_split_on_first_equals(
 def test_cli_exec_env_escapes_tricky_literals(
     mock_store, mock_runtime_class, mock_common_state
 ):
-    mock_session = MagicMock()
+    mock_session = MagicMock(execution=None)
     mock_session.name = "s1"
     mock_session.url = "http://url"
     mock_session.token = "token"
@@ -189,7 +202,7 @@ def test_cli_exec_not_found(mock_common_state):
 
 
 def test_cli_exec_no_input(mock_store, mock_common_state, mocker):
-    mock_session = MagicMock()
+    mock_session = MagicMock(execution=None)
     mock_session.name = "s1"
     mock_store.get.return_value = mock_session
 
@@ -207,7 +220,7 @@ def test_cli_exec_no_input(mock_store, mock_common_state, mocker):
 def test_cli_exec_outputs(
     mock_handle_image, mock_store, mock_runtime_class, mock_common_state
 ):
-    mock_session = MagicMock()
+    mock_session = MagicMock(execution=None)
     mock_session.name = "s1"
     mock_session.url = "http://url"
     mock_session.token = "token"
@@ -245,7 +258,7 @@ def test_cli_exec_outputs(
 
 
 def test_cli_exec_empty_code(mock_runtime_class, mock_store, mock_common_state):
-    mock_session = MagicMock()
+    mock_session = MagicMock(execution=None)
     mock_session.name = "s1"
     mock_session.url = "http://url"
     mock_session.token = "token"
@@ -258,10 +271,10 @@ def test_cli_exec_empty_code(mock_runtime_class, mock_store, mock_common_state):
     assert result.exit_code == 0
 
 
-def test_cli_exec_lost_session_prunes(
+def test_cli_exec_proxy_404_preserves_session(
     mock_runtime_class, mock_store, mock_common_state
 ):
-    mock_session = MagicMock()
+    mock_session = MagicMock(execution=None)
     mock_session.name = "lost-sess"
     mock_store.get.return_value = mock_session
     mock_common_state.resolve_session.return_value = "lost-sess"
@@ -272,12 +285,11 @@ def test_cli_exec_lost_session_prunes(
 
     result = runner.invoke(app, ["exec", "-s", "lost-sess"], input="print(1)")
     assert result.exit_code == 1
-    assert "appears to be lost" in result.output
-    mock_common_state.prune_session.assert_called_once_with("lost-sess")
+    mock_common_state.prune_session.assert_not_called()
 
 
 def test_cli_exec_timeout(mock_store, mock_runtime_class, mock_common_state, tmp_path):
-    mock_session = MagicMock()
+    mock_session = MagicMock(execution=None)
     mock_session.url = "http://url"
     mock_session.token = "token123"
     mock_session.name = "s1"

@@ -36,7 +36,7 @@ def test_resolve_session_with_local_but_none_on_server():
     state = State()
     state._store = MagicMock()
     # Local session exists
-    mock_session = MagicMock()
+    mock_session = MagicMock(execution=None)
     mock_session.endpoint = "e1"
     state._store.list.return_value = {"s1": mock_session}
 

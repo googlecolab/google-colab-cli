@@ -53,6 +53,7 @@ def test_colab_runtime_kernel_client():
             "client_kwargs": {
                 "subprotocol": jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
                 "extra_params": {"colab-runtime-proxy-token": "token123"},
+                "reconnect_interval": 1,
             },
             "headers": {
                 "X-Colab-Client-Agent": "colab-cli",
@@ -93,6 +94,7 @@ def test_colab_runtime_kernel_client_jupyterclient_fallback():
                 client_kwargs={
                     "subprotocol": jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
                     "extra_params": {"colab-runtime-proxy-token": "token123"},
+                    "reconnect_interval": 1,
                 },
                 headers={
                     "X-Colab-Client-Agent": "colab-cli",

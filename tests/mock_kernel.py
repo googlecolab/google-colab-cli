@@ -21,6 +21,7 @@ tests can cover long runs and long silences without waiting.
 import itertools
 import queue
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from colab_cli import runtime as runtime_module
@@ -70,6 +71,8 @@ class MockKernelClient:
         self.waits = []
         self.connection_ready = threading.Event()
         self.connection_ready.set()
+        self.kernel_socket = SimpleNamespace(sock=SimpleNamespace(connected=True))
+        self.connection_thread = SimpleNamespace(is_alive=self.connection_ready.is_set)
 
     def execute(self, code, **kwargs):
         self.code, self.execute_kwargs = code, kwargs
@@ -103,3 +106,9 @@ def connect_runtime(runtime, mock_kc, monkeypatch):
     monkeypatch.setattr(runtime_module.time, "monotonic", lambda: mock_kc.now)
     runtime._kernel_client = MagicMock()
     runtime._kernel_client._manager.client = mock_kc
+    # These tests exercise waiting, not the separate live-kernel journal setup.
+    monkeypatch.setattr(
+        runtime,
+        "_start_execution",
+        lambda client, code: (client.execute(code, allow_stdin=False), None),
+    )

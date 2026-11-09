@@ -110,7 +110,7 @@ class State:
             if s.endpoint in by_endpoint:
                 _apply_proxy_info(s, by_endpoint[s.endpoint].runtime_proxy_info)
                 self.store.add(s)
-            else:
+            elif not s.execution:
                 self.prune_session(name)
                 s = None
 
@@ -143,10 +143,10 @@ class State:
         self._sessions = local_sessions
         pruned = 0
         for name, s in list(self._sessions.items()):
-            if s.endpoint not in by_endpoint:
+            if s.endpoint not in by_endpoint and not s.execution:
                 self.prune_session(name)
                 pruned += 1
-            else:
+            elif s.endpoint in by_endpoint:
                 _apply_proxy_info(s, by_endpoint[s.endpoint].runtime_proxy_info)
                 self.store.add(s)
 
@@ -154,6 +154,20 @@ class State:
             typer.echo(f"[colab] Pruned {pruned} stale local session(s).")
 
         return self._sessions, assignments
+
+    def refresh_runtime_proxy(self, session: SessionState, timeout: float = 5.0):
+        """Refresh the original assignment without allocating or pruning anything."""
+        from colab_cli.runtime import RuntimeUnavailable
+
+        for assignment in self.client.list_assignments(timeout=timeout):
+            if assignment.endpoint == session.endpoint:
+                _apply_proxy_info(session, assignment.runtime_proxy_info)
+                self.store.add(session)
+                return session.url, session.token
+        raise RuntimeUnavailable(
+            "The original Colab assignment no longer exists. "
+            "The work has not been resubmitted and no replacement was allocated."
+        )
 
     def resolve_session(self, session_name: Optional[str]) -> str:
         if session_name:

@@ -80,6 +80,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | --- | --- |
 | `colab run [--gpu GPU] [--tpu TPU] [--high-mem] [--keep] SCRIPT [ARGS...]` | Run a local script on a fresh VM, forwarding arguments, then release it |
 | `colab exec [-s NAME] [-f FILE] [--output-image PATH]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook |
+| `colab resume [-s NAME] [--timeout SECONDS]` | Recover the output and result of saved work without executing it again |
 | `colab repl [-s NAME] [--output-image PATH]` | Start an interactive Python REPL on the VM (exits cleanly on piped EOF) |
 | `colab console [-s NAME]` | Connect to a raw interactive TTY shell (tmux) on the remote VM |
 | `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem]` | Open an SSH shell to the runtime over WebSocket, or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
@@ -156,6 +157,10 @@ Use `colab run` to run a local script on dedicated hardware without manual sessi
 # Run train.py on a T4 GPU and release the VM on completion
 colab run --gpu T4 train.py
 ```
+
+`exec` and `run` recover the original execution's output and result after transient WebSocket interruptions. If the runtime proxy rejects its credentials or address, the CLI refreshes them for the same assignment. A readable recovery record can keep monitoring working even if WebSocket reconnection stops. `--timeout 0` disables the execution idle timeout; unavailable recovery records and missing completion still have bounded waits.
+
+If the result cannot be confirmed, the CLI exits nonzero and retains local session state with an `unknown:` marker. `run` also preserves the VM. After a timeout, interruption, or CLI process exit, use `colab resume -s NAME` to recover the saved execution. It reads the original transcript from the beginning, so output displayed by the previous process may appear again; it never resubmits code or allocates a replacement runtime. For a notebook, this recovers the interrupted cell, without running later cells or rewriting the local notebook. Recovery requires the original records to remain accessible and cannot restore a destroyed kernel's unfinished work. A resumed session stays allocated: stop it with `colab stop -s NAME` when no longer needed.
 
 ### Shebang Execution Support
 

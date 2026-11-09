@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-09: Recover the original execution with journals, refreshed proxy credentials/routes, and HTTP fallback after WebSocket worker failure. Persist identity for `colab resume` after CLI exit. Preserve the VM on uncertainty or interruption and print recovery/stop commands; confirmed completion and script errors retain normal cleanup. Unavailable recovery and missing completion have bounded waits even with the idle timeout disabled.
 2026-09-25: Removed keep-alive daemon spawning from session allocation and teardown. `--keep` remains supported and skips unassignment on completion.
 2026-08-09: Added `--high-mem` flag (passthrough to session creation; sends `shape=hm` on assign when supported).
 2026-05-12: Initial design and implementation of `colab run <script.py> [args...]`. Combines `colab new` + `colab exec` + `colab stop` into a single fire-and-forget invocation so a Python file can use `#!/usr/bin/env -S colab run` as a shebang line and execute on a freshly-allocated Colab VM. Adds `--keep` (skip auto-stop), `--gpu` / `--tpu` (passthrough to session creation), `-s/--session` (name the ephemeral session), and propagates the script's exit status (non-zero on any uncaught exception in the kernel). The script's `sys.argv` is re-set inside the kernel to mirror native `python script.py arg1 arg2` semantics, and `__name__` is set to `"__main__"`.
@@ -34,7 +35,7 @@ colab run [OPTIONS] SCRIPT [SCRIPT_ARGS]...
 | `--tpu` | str | None | Same set as `colab new --tpu` (v5e1, v6e1). |
 | `--high-mem` | bool | False | Same as `colab new --high-mem` — request high-RAM when supported. |
 | `--keep` | bool | False | Do **not** stop the session after the script finishes. |
-| `--timeout` | float | 30.0 | Seconds to wait without output before failing, so a hung or silent task doesn't block forever. Raise it for long silent tasks; `0` means no limit. |
+| `--timeout` | float | 30.0 | Seconds to wait without a message from the execution before the CLI stops waiting. Raise it for long silent tasks; `0` disables this idle timeout, not connection recovery limits. A timeout does not stop the remote script. |
 
 ### Shebang usage
 With `--keep` and `--gpu` baked into the shebang line, an entire one-file workload becomes:
@@ -60,7 +61,7 @@ print(torch.cuda.get_device_name(0))
    ```
    Then executes the script body in the same kernel cell so any `if __name__ == "__main__":` guard fires.
 3. **Detect failure**: If the kernel returns any output of `output_type == "error"` (uncaught exception, syntax error, etc.) the CLI exits non-zero.
-4. **Tear down**: In a `finally` block, unless `--keep` was passed, the CLI:
+4. **Tear down**: After confirmed completion (including a reported script error), unless `--keep` was passed, the CLI:
    - Sends `runtime.stop(shutdown_kernel=True)` (best-effort).
    - Calls `state.client.unassign(endpoint)` to free the billable VM.
    - Removes the session from `StateStore`.
@@ -68,9 +69,13 @@ print(torch.cuda.get_device_name(0))
 
 If `--keep` is set, the session remains visible in `colab sessions` and `colab status` and can be reused with `colab exec -s <name>`, `colab repl -s <name>`, etc., until the user runs `colab stop` (or the backend reclaims it due to inactivity).
 
+If submission or monitoring fails without a confirmed result, including an idle timeout, the CLI exits nonzero and preserves the assignment even without `--keep`. It records the local running state as `unknown:` and prints commands to inspect and explicitly stop the session. A timeout does not establish that the remote script failed or stopped. Do not automatically retry the original script. This exception to automatic cleanup prevents a transport failure from destroying work that is still running; the preserved VM continues to consume resources until explicitly stopped or reclaimed by Colab.
+
+Recovery refreshes the original assignment's proxy credentials and route when needed, and can continue through HTTP after the socket worker exits. After a timeout or CLI exit, `colab resume -s NAME` retrieves the saved execution's output and result without executing the script again. It replays the transcript from the beginning and retains the VM for explicit inspection and cleanup, even if the original `run` omitted `--keep`. Stop it with `colab stop -s NAME` when finished. New submissions under the same name cannot overwrite unresolved work. A saved `unknown:` marker records uncertainty, not confirmation that the task is still running. Recovery cannot recreate unfinished work in a destroyed kernel or restore deleted records.
+
 ## AGENTS.md Constraints Honoured
 - **Item 7 (fire-and-forget)**: No background threads or daemons are created; commands execute and exit cleanly.
-- **Item 10 (live probes allocate real resources)**: The teardown is in a `try/finally` so an exception during execution still releases the VM. Tests assert `unassign` is called even when the script errors.
+- **Item 10 (live probes allocate real resources)**: Tests record and release their own endpoints in `finally`, including assignments intentionally preserved by the unknown-result path. Product cleanup releases a completed or failed script's VM; uncertainty alone preserves it for inspection.
 
 ## Testing Strategy (TDD)
 
@@ -83,7 +88,8 @@ If `--keep` is set, the session remains visible in `colab sessions` and `colab s
 6. **`test_run_with_gpu_flag`** — `colab run --gpu T4 script.py` calls `client.assign(..., variant=GPU, accelerator=T4)`.
 7. **`test_run_missing_script_errors`** — `colab run` with no script path errors out (Typer-level).
 8. **`test_run_nonexistent_script_errors_before_assign`** — `colab run does-not-exist.py` MUST exit non-zero **without** calling `client.assign` so users don't burn a VM on a typo.
-9. **`test_run_unassign_called_on_exception_during_execute`** — If `runtime.execute_code` raises, unassign is still called (try/finally guarantee).
+9. **`test_run_unassign_called_on_exception_during_execute`** — Ordinary non-monitoring exceptions still unassign the VM.
+10. **`test_run_preserves_runtime_when_execution_result_is_unknown`** — An uncertain connection result or idle timeout exits nonzero, preserves the assignment and running marker, and prints a stop command. The live reconnect integration test verifies that the preserved script finishes exactly once and that normal successful runs still clean up.
 
 ### Integration test (`integration/repro_run_command/test.sh`)
 - Write a tiny script that prints its argv and exits 0.

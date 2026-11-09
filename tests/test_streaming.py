@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import pytest
+from types import SimpleNamespace
 from mock_kernel import (
     MockKernelClient,
     connect_runtime,
@@ -151,6 +152,64 @@ def test_a_lost_connection_stops_the_wait(run):
     assert mock_kc.now < 12
 
 
+@pytest.mark.parametrize("waiting_for", ["output", "reply"])
+def test_reconnect_resumes_the_original_execution(run, waiting_for):
+    mock_kc = MockKernelClient(
+        [(1, stdout_message("before\n")), (15, status_message("idle"))],
+        shell=[(20, reply_message())],
+    )
+    getter_name = "get_iopub_msg" if waiting_for == "output" else "get_shell_msg"
+    original_get = getattr(mock_kc, getter_name)
+    mock_kc.connection_thread = SimpleNamespace(is_alive=lambda: True)
+    mock_kc.kernel_socket = SimpleNamespace(sock=SimpleNamespace(connected=True))
+    requests = []
+    execute = mock_kc.execute
+
+    def record_execute(code, **kwargs):
+        requests.append(code)
+        return execute(code, **kwargs)
+
+    def get_message(timeout):
+        # The transport reconnects while the caller waits for the same message.
+        connected = not (2 <= mock_kc.now < 6 or 16 <= mock_kc.now < 18)
+        mock_kc.kernel_socket.sock.connected = connected
+        if not connected:
+            mock_kc.connection_ready.clear()
+        else:
+            mock_kc.connection_ready.set()
+        return original_get(timeout=timeout)
+
+    mock_kc.execute = record_execute
+    setattr(mock_kc, getter_name, get_message)
+    outputs, _ = run(mock_kc, timeout=30)
+    assert outputs[0]["text"] == "before\n"
+    assert requests == ["work()"]
+
+
+@pytest.mark.parametrize("timeout", [None, 0, 300])
+@pytest.mark.parametrize("ready", [True, False])
+def test_reconnection_has_a_limit_even_without_an_execution_timeout(
+    run, timeout, ready
+):
+    mock_kc = MockKernelClient([])
+    if not ready:
+        mock_kc.connection_ready.clear()
+    mock_kc.connection_thread = SimpleNamespace(is_alive=lambda: True)
+    mock_kc.kernel_socket = SimpleNamespace(sock=None)
+    with pytest.raises(RuntimeError, match="Connection was lost.*still be running"):
+        run(mock_kc, timeout=timeout)
+    assert 29 <= mock_kc.now <= 31
+
+
+def test_reconnection_does_not_extend_the_idle_timeout(run):
+    mock_kc = MockKernelClient([])
+    mock_kc.connection_thread = SimpleNamespace(is_alive=lambda: True)
+    mock_kc.kernel_socket = SimpleNamespace(sock=None)
+    with pytest.raises(TimeoutError, match="Timeout waiting for output"):
+        run(mock_kc, timeout=3)
+    assert mock_kc.now == 3
+
+
 @pytest.mark.parametrize("state", ["dead", "restarting"])
 def test_a_kernel_that_dies_or_restarts_ends_the_wait(run, state):
     mock_kc = MockKernelClient(
@@ -162,3 +221,107 @@ def test_a_kernel_that_dies_or_restarts_ends_the_wait(run, state):
     )
     with pytest.raises(RuntimeError, match=f"Kernel {state}"):
         run(mock_kc, timeout=None)
+
+
+@pytest.mark.parametrize("error", [False, True])
+def test_task_finishing_offline_recovers_output_and_result_once(monkeypatch, error):
+    from unittest.mock import Mock
+
+    runtime = ColabRuntime("http://url", "token")
+    first = stdout_message("before\n")
+    missing = stdout_message("during outage\n")
+    idle = status_message("idle")
+    reply = reply_message(
+        "error" if error else "ok", ename="ValueError", evalue="offline"
+    )
+    mock_kc = MockKernelClient([(1, first)], shell=[])
+    mock_kc.connection_thread = SimpleNamespace(is_alive=lambda: True)
+    get = mock_kc.get_iopub_msg
+
+    def disconnected_get(timeout):
+        mock_kc.kernel_socket.sock.connected = not (1 <= mock_kc.now < 3)
+        return get(timeout)
+
+    mock_kc.get_iopub_msg = disconnected_get
+    connect_runtime(runtime, mock_kc, monkeypatch)
+    journal = Mock()
+    journal.read.side_effect = lambda **kw: (
+        [first, missing, reply, idle] if mock_kc.now >= 3 else [first]
+    )
+    monkeypatch.setattr(
+        runtime, "_start_execution", lambda *args: ("req-1", journal), raising=False
+    )
+    streamed = []
+    outputs = runtime.execute_code(
+        "side_effect()", output_hook=streamed.append, timeout=8
+    )
+    assert [o["text"] for o in streamed] == ["before\n", "during outage\n"]
+    assert [o["text"] for o in outputs if o["output_type"] == "stream"] == [
+        "before\n",
+        "during outage\n",
+    ]
+    assert any(o["output_type"] == "error" for o in outputs) == error
+    assert mock_kc.now < 8
+
+
+def test_completion_reconciles_messages_even_if_outage_was_too_short_to_poll(
+    monkeypatch,
+):
+    from unittest.mock import Mock
+
+    runtime = ColabRuntime("http://url", "token")
+    first, missing = stdout_message("before\n"), stdout_message("missing\n")
+    reply, idle = reply_message(), status_message("idle")
+    mock_kc = MockKernelClient([(1, first), (2, idle)], shell=[(2, reply)])
+    connect_runtime(runtime, mock_kc, monkeypatch)
+    journal = Mock()
+    journal.read.return_value = [first, missing, reply, idle]
+    monkeypatch.setattr(
+        runtime, "_start_execution", lambda *args: ("req-1", journal), raising=False
+    )
+    outputs = runtime.execute_code("work()", timeout=8)
+    assert [o["text"] for o in outputs] == ["before\n", "missing\n"]
+
+
+@pytest.mark.parametrize("unavailable", [True, False])
+def test_journal_recovery_is_bounded_after_completion_with_timeout_zero(
+    monkeypatch, unavailable
+):
+    from unittest.mock import Mock
+    import requests
+
+    runtime = ColabRuntime("http://url", "token")
+    mock_kc = MockKernelClient([(1, status_message("idle"))])
+    get = mock_kc.get_iopub_msg
+
+    def bounded_get(timeout):
+        assert mock_kc.now <= 35, "recovery kept waiting beyond its bound"
+        return get(timeout)
+
+    mock_kc.get_iopub_msg = bounded_get
+    connect_runtime(runtime, mock_kc, monkeypatch)
+    journal = Mock()
+    if unavailable:
+        journal.read.side_effect = requests.ConnectionError("HTTP unavailable")
+    else:
+        journal.read.return_value = []
+    monkeypatch.setattr(runtime, "_start_execution", lambda *args: ("req-1", journal))
+    with pytest.raises(RuntimeError, match="recovery"):
+        runtime.execute_code("side_effect()", timeout=0)
+    assert 30 <= mock_kc.now <= 32
+
+
+def test_output_consumer_failure_keeps_remote_result_unknown(monkeypatch):
+    from colab_cli.runtime import ExecutionOutcomeUnknown
+
+    runtime = ColabRuntime("http://url", "token")
+    client = MockKernelClient(
+        [(1, stdout_message("in progress\n")), (20, status_message("idle"))]
+    )
+    connect_runtime(runtime, client, monkeypatch)
+
+    def broken_output(output):
+        raise OSError("local output pipe closed")
+
+    with pytest.raises(ExecutionOutcomeUnknown, match="has not been resubmitted"):
+        runtime.execute_code("side_effect()", output_hook=broken_output)
