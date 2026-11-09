@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-04: `colab drivemount` now handles credentials-propagation failures instead of dumping the HTTP body. Responses are parsed defensively (HTML/empty bodies no longer raise out of the websocket hook), an authentication prompt is only shown when the server actually returns an `unauthorized_redirect_uri`, and failures print the status plus the multi-account guidance (select the account from `colab whoami`) while logging the raw body to history. The intercepted kernel request is answered on failure too, so the command exits promptly instead of hanging until its 600s timeout.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to inspect the active Linux `SecretService` collection via `secretstorage` before `get_password`/`set_password`, warning immediately when the keyring is locked so users know why the CLI is waiting on an unlock prompt (and suggesting `--auth=adc`).
 2026-10-29: Session history files are created readable only by the owner (0600), and existing ones are tightened to 0600 whenever the history logger starts.
 2026-10-21: Migrated OAuth2 token persistence in `auth.py` from `~/.config/colab-cli/token.json` to the OS native password storage via the `keyring` library (`KEYRING_SERVICE_NAME = "google-colab-cli"`, `KEYRING_USERNAME = "oauth_token"`). When the keyring is empty, locked, or inaccessible, `_run_remote_flow` is invoked; keyring read/write failures print a warning to stderr without failing the command. An existing `~/.config/colab-cli/token.json` (`LEGACY_TOKEN_PATH`) is used when the keyring has no token, copied into the keyring, and deleted only after the keyring write succeeds; it is also deleted when the keyring already holds a token.
@@ -143,6 +144,16 @@ How each provider supplies the scope:
     `jupyter_kernel_client` default raising `TimeoutError` mid-flow, this
     subcommand passes `timeout=INTERACTIVE_AUTOMATION_TIMEOUT_SEC` (600s) to
     `ColabRuntime.execute_code`. Same applies to `colab auth`.
+-   **Multi-account browsers**: Drive propagation is attributed to the Google
+    account that approves the consent page, which may not be the account the
+    CLI authenticated as. If the browser shows an account chooser, select the
+    account reported by `colab whoami`; approving with another account fails
+    with HTTP 400 even though the consent itself succeeded. A private window
+    only helps if it is already signed in to that account.
+-   **Failure reporting**: errors from the propagation endpoint never echo the
+    raw response body (often HTML). The CLI prints the status, points at
+    `colab whoami`, logs the body to the history file, and answers the waiting
+    kernel request so `drivemount` exits instead of hanging until its timeout.
 
 ### 4. Logging and Notebook Capture (`colab log`)
 

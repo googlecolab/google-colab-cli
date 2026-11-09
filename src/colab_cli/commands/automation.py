@@ -38,6 +38,69 @@ _console = Console()
 INTERACTIVE_AUTOMATION_TIMEOUT_SEC = 600
 
 
+def _parse_propagation_response(resp) -> dict:
+    """Extract the JSON payload from a credentials-propagation response.
+
+    Successful bodies are ``<prefix>\\n{json}``. Failures can return HTML, a
+    plain-text reason, or an empty body — none of those should raise, because
+    the exception would escape the websocket hook and leave the kernel waiting.
+    """
+    text = getattr(resp, "text", "") or ""
+    for candidate in (text, text.split("\n", 1)[-1], text.rsplit("\n", 1)[-1]):
+        candidate = candidate.strip()
+        if not candidate:
+            continue
+        try:
+            data = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def drive_propagation_failure_message(status: Optional[int], data: dict) -> str:
+    """Actionable text for a failed Drive credential propagation.
+
+    The usual cause is a browser that approved Drive access for a different
+    Google account than the one the CLI authenticated as. The raw response
+    body (often HTML) is never echoed; it goes to the history log instead.
+    """
+    headline = "[colab] Drive credentials could not be propagated"
+    if status is not None and status != 200:
+        headline += f" (HTTP {status})"
+    lines = [headline + "."]
+    detail = data.get("error") or data.get("message")
+    if isinstance(detail, str) and detail.strip():
+        lines.append(f"[colab] Server said: {detail.strip()[:300]}")
+    lines.append("[colab] If the browser showed an account chooser, re-run the command")
+    lines.append("[colab] and select the account reported by `colab whoami`. Approving")
+    lines.append(
+        "[colab] Drive access as a different Google account makes propagation fail"
+    )
+    lines.append("[colab] even though the consent itself succeeded.")
+    return "\n".join(lines)
+
+
+def _report_propagation_failure(history, session_name, status, body, data) -> None:
+    typer.echo(drive_propagation_failure_message(status, data))
+    history.log_event(
+        session_name,
+        "drive_auth_failed",
+        {"status": status, "body": (body or "")[:2000]},
+    )
+
+
+def _send_colab_reply(wsclient, deserialize_msg, msg_id) -> None:
+    """Answer the intercepted request so the kernel stops waiting."""
+    reply = wsclient.session.msg(
+        "input_reply",
+        {"value": {"type": "colab_reply", "colab_msg_id": msg_id}},
+    )
+    if "header" in deserialize_msg:
+        reply["parent_header"] = deserialize_msg["header"]
+    wsclient.stdin_channel.send(reply)
+
 
 def run_automation(
     name: str,
@@ -78,11 +141,14 @@ def run_automation(
                 state.client_oauth_config, provider=state.auth_provider
             )
             resp = creds.request("GET", url, params=params)
-            token = (
-                json.loads(resp.text.split("\n", 1)[-1]).get("token")
-                if get_status_code(resp) == 200
-                else None
-            )
+            data = _parse_propagation_response(resp)
+            token = data.get("token") if get_status_code(resp) == 200 else None
+            if not token:
+                _report_propagation_failure(
+                    state.history, s.name, get_status_code(resp), resp.text, data
+                )
+                _send_colab_reply(wsclient, deserialize_msg, msg_id)
+                return True
 
             headers = {"x-goog-colab-token": token}
             resp = creds.request(
@@ -92,10 +158,22 @@ def run_automation(
                 headers=headers,
                 files={"file_id": (None, "empty.ipynb")},
             )
-            data = json.loads(resp.text.split("\n", 1)[-1])
+            data = _parse_propagation_response(resp)
 
             if not data.get("success"):
                 uri = data.get("unauthorized_redirect_uri")
+                if not uri:
+                    # A failure that is not an auth challenge cannot be fixed
+                    # by approving again; report it instead of looping.
+                    _report_propagation_failure(
+                        state.history,
+                        s.name,
+                        get_status_code(resp),
+                        resp.text,
+                        data,
+                    )
+                    _send_colab_reply(wsclient, deserialize_msg, msg_id)
+                    return True
                 typer.echo(
                     f"\n[colab] REQUIRED: Google Drive Authorization needed.\nPlease visit:\n\n{uri}\n"
                 )
@@ -124,20 +202,19 @@ def run_automation(
                 headers=headers,
                 files={"file_id": (None, "empty.ipynb")},
             )
-            if get_status_code(resp) == 200:
+            status = get_status_code(resp)
+            if status == 200:
                 typer.echo("[colab] Credentials propagated. Resuming mount...")
                 state.history.log_event(s.name, "drive_auth_success", {})
-                reply = wsclient.session.msg(
-                    "input_reply",
-                    {"value": {"type": "colab_reply", "colab_msg_id": msg_id}},
-                )
-                if "header" in deserialize_msg:
-                    reply["parent_header"] = deserialize_msg["header"]
-                wsclient.stdin_channel.send(reply)
             else:
-                typer.echo(
-                    f"[colab] Error propagating: {get_status_code(resp)} {resp.text}"
+                _report_propagation_failure(
+                    state.history,
+                    s.name,
+                    status,
+                    resp.text,
+                    _parse_propagation_response(resp),
                 )
+            _send_colab_reply(wsclient, deserialize_msg, msg_id)
             return True
         return False
 
