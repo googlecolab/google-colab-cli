@@ -56,11 +56,7 @@ TPU_ACCELERATORS = {
 def _parse_accelerator(
     value: str, mapping: dict[str, Accelerator], flag: str
 ) -> Accelerator:
-    """Look up an accelerator, rejecting unknown values instead of guessing.
-
-    Silently falling back to A100 (or v6e1) turned a typo in an automation
-    script into a real, billable hardware request.
-    """
+    """Look up an accelerator, raises for unknown values."""
     accelerator = mapping.get(value.lower())
     if accelerator is None:
         supported = ", ".join(name.upper() for name in mapping)
