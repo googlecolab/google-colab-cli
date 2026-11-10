@@ -165,6 +165,20 @@ if ! echo "$E2E_OUT" | grep -q "$MARKER"; then
 fi
 echo "[SUCCESS] Handshake + pubkey-auth + bridge + remote exec all work."
 
+echo "[*] End-to-end: colab ssh -i <key>.pub -- CMD (public key path)."
+PUB_MARKER="ssh-pub-ok-$$-$RANDOM"
+PUB_OUT=$(
+  timeout 120 uv run colab $AUTH_FLAGS --config "$SESSION_FILE" ssh \
+    -s "$SESSION_NAME" -i "$KEY.pub" -- "whoami; echo $PUB_MARKER" </dev/null 2>&1
+)
+PUB_RC=$?
+echo "$PUB_OUT"
+if [ "$PUB_RC" -ne 0 ] || ! echo "$PUB_OUT" | grep -q "$PUB_MARKER"; then
+  echo "[FAILURE] colab ssh -i <key>.pub -- CMD failed (rc=$PUB_RC)."
+  exit 1
+fi
+echo "[SUCCESS] --identity with .pub suffix works end-to-end."
+
 echo "[*] Negative: an RSA key is rejected by the server (non-interactive)."
 ssh-keygen -t rsa -b 2048 -N "" -f "$RSA_KEY" >/dev/null
 RSA_OUT=$(
