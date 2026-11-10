@@ -12,11 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import keyring
+import keyring.backends.null
 import pytest
 import typer
 from unittest.mock import MagicMock
 
 from colab_cli.auth import AuthProvider
+
+
+@pytest.fixture(autouse=True)
+def isolate_keyring():
+    """Never touch the host OS keyring during unit tests."""
+    prev = keyring.get_keyring()
+    keyring.set_keyring(keyring.backends.null.Keyring())
+    try:
+        yield
+    finally:
+        keyring.set_keyring(prev)
 
 
 @pytest.fixture(autouse=True)
