@@ -18,20 +18,29 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+from session_fakes import (
+    ATT,
+    DUP_CLI,
+    RecordingSession,
+    UnassignSession,
+    fresh_session,
+    unassigned_endpoints,
+    use_guarded_client,
+)
 from typer.testing import CliRunner
 
 from colab_cli.cli import app
 from colab_cli.client import (
     Assignment,
-    Client,
+    AttachedRuntimeError,
     ColabRequestError,
     PostAssignmentResponse,
-    Prod,
     RuntimeProxyInfo,
     TooManyAssignmentsError,
 )
+from colab_cli.commands import run as run_cmd
 from colab_cli.commands import session as session_cmd
-from colab_cli.common import State
+from colab_cli.commands import ssh as ssh_module
 from colab_cli.consumption import ConsumptionUserInfo
 from colab_cli.state import SessionState, StateStore
 
@@ -322,6 +331,7 @@ def test_cli_session_resolution(mock_store, mock_common_state):
     mock_session_state.url = "http://url"
     mock_session_state.token = "token"
     mock_session_state.kernel_id = None
+    mock_session_state.attached = False
 
     # Setup for resolve_session
     mock_common_state.resolve_session.return_value = "unique-session"
@@ -339,6 +349,7 @@ def test_cli_stop(mock_client, mock_store, mock_common_state):
     mock_session_state.url = "http://url"
     mock_session_state.token = "token"
     mock_session_state.kernel_id = None
+    mock_session_state.attached = False
     mock_store.get.return_value = mock_session_state
 
     mock_common_state.resolve_session.return_value = "s1"
@@ -353,29 +364,6 @@ def _dup_session(attached):
     return SessionState(
         name="dup", token="t", url="u", endpoint="dup-ep", attached=attached
     )
-
-
-class _RecordingSession:
-    """Stands in for the authorized HTTP session and records every request."""
-
-    def __init__(self):
-        self.requests = []
-
-    def request(self, method, url, **kwargs):
-        self.requests.append((method, url))
-        raise RuntimeError(f"unexpected request: {method} {url}")
-
-
-@pytest.fixture
-def real_state(tmp_path, monkeypatch, mocker):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    mocker.patch("colab_cli.cli.auto_update.run_background_check")
-    st = State()
-    st._client = Client(Prod(), _RecordingSession())
-    st._history = MagicMock()
-    mocker.patch("colab_cli.common.state", st)
-    mocker.patch("colab_cli.cli.state", st)
-    return st
 
 
 @pytest.fixture
@@ -450,6 +438,108 @@ def test_config_with_linked_attached_path_is_refused(real_state, tmp_path):
     assert "links to a file of another kind" in result.output
     assert real_state.client.session.requests == []
     assert sessions.read_bytes() == before
+
+
+def test_stop_forgets_attached_session(two_file_state, tmp_path):
+    sessions_before = (tmp_path / "sessions.json").read_bytes()
+
+    result = runner.invoke(app, ["stop", "-s", "att"])
+
+    assert result.exit_code == 0, result.output
+    assert "keeps running and the notebook still owns it" in result.output
+    assert two_file_state.client.session.requests == []
+    session_cmd.ColabRuntime.assert_not_called()
+    assert (tmp_path / "sessions.json").read_bytes() == sessions_before
+    assert two_file_state.store.get("att") is None
+
+
+def test_client_refuses_to_unassign_attached_endpoint(two_file_state, mocker):
+    use_guarded_client(two_file_state, mocker)
+
+    with pytest.raises(AttachedRuntimeError):
+        two_file_state.client.unassign("att-ep")
+
+    assert two_file_state.client.session.requests == []
+
+
+@pytest.mark.parametrize("name", ["att", "dup"])
+@pytest.mark.parametrize("command", ["new", "run"])
+def test_new_and_run_refuse_an_attached_name(
+    two_file_state, tmp_path, monkeypatch, command, name
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "job.py").write_text("print(1)\n")
+    script = ["job.py"] if command == "run" else []
+
+    result = runner.invoke(app, [command, "-s", name, *script])
+
+    assert result.exit_code == 1
+    assert f"colab stop -s {name}" in result.output
+    assert two_file_state.client.session.requests == []
+
+
+@pytest.mark.parametrize("name", ["cli", "fresh"], ids=["cli-owned", "unknown"])
+def test_refuse_attached_name_allows_cli_and_unknown_names(
+    two_file_state, capsys, name
+):
+    two_file_state.refuse_attached_name(name)
+
+    assert capsys.readouterr().err == ""
+    assert two_file_state.client.session.requests == []
+
+
+@pytest.mark.parametrize(
+    "args, session, unassigned, kept",
+    [
+        (ATT, RecordingSession, set(), ["cli", "dup"]),
+        (DUP_CLI, UnassignSession, {"dup-ep"}, ["cli"]),
+        (DUP_CLI, RecordingSession, {"dup-ep"}, ["cli", "dup"]),
+    ],
+    ids=["attached", "duplicate", "duplicate-unassign-fails"],
+)
+def test_teardown_keeps_attached_records(
+    two_file_state, tmp_path, mocker, capsys, args, session, unassigned, kept
+):
+    use_guarded_client(two_file_state, mocker, session())
+    attached_before = (tmp_path / "sessions.attached.json").read_bytes()
+
+    run_cmd._teardown(args[0], fresh_session(*args), reason="script_exit")
+
+    assert unassigned_endpoints(two_file_state) == unassigned
+    assert (tmp_path / "sessions.attached.json").read_bytes() == attached_before
+    assert sorted(json.loads((tmp_path / "sessions.json").read_text())) == kept
+    run_cmd.ColabRuntime.assert_not_called()
+    assert ("colab stop -s" in capsys.readouterr().err) == (kept != ["cli"])
+
+
+@pytest.mark.parametrize("args", [ATT, DUP_CLI], ids=["attached", "duplicate"])
+@pytest.mark.parametrize("mode", ["interactive", "proxy"])
+def test_ssh_rm_never_unassigns_an_attached_record(
+    two_file_state, tmp_path, mocker, capsys, mode, args
+):
+    s = fresh_session(*args)
+    attached_before = (tmp_path / "sessions.attached.json").read_bytes()
+    sessions_before = (tmp_path / "sessions.json").read_bytes()
+    stop_spy = mocker.spy(ssh_module, "_stop_session")
+    if mode == "interactive":
+        mocker.patch.object(ssh_module, "_run_interactive_ssh", return_value=0)
+        ssh_module._run_interactive_shell(s, None, True, True)
+    else:
+        mocker.patch("signal.signal")
+        mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
+        mocker.patch.object(ssh_module, "_connect_websocket")
+        mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
+        ssh_module._run_proxy_bridge(s, None, True)
+
+    stop_spy.assert_called_once_with(s.name)
+    assert two_file_state.client.session.requests == []
+    assert (tmp_path / "sessions.json").read_bytes() == sessions_before
+    if s.attached:
+        assert two_file_state.store.get("att") is None
+    else:
+        attached_after = (tmp_path / "sessions.attached.json").read_bytes()
+        assert attached_after == attached_before
+        assert "colab stop -s dup" in capsys.readouterr().err
 
 
 def test_cli_sessions_prune(mock_common_state):

@@ -166,6 +166,7 @@ def new(
             err=True,
         )
 
+    state.refuse_attached_name(name)
     typer.echo(f"[colab] Creating session '{name}'...")
     try:
         res = state.client.assign(
@@ -361,7 +362,7 @@ def stop(
 
     name = state.resolve_session(session)
     try:
-        s = state.get_session(name, ignore_missing_session=True)
+        record = state.store.get(name)
     except DuplicateSessionError:
         state.store.remove_attached(name)
         typer.echo(
@@ -369,6 +370,14 @@ def stop(
             " its runtime keeps running."
         )
         return
+    if record is not None and record.attached:
+        state.store.remove_attached(name)
+        typer.echo(
+            f"[colab] Forgot attached session '{name}'; its runtime keeps"
+            " running and the notebook still owns it."
+        )
+        return
+    s = state.get_session(name, ignore_missing_session=True)
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.")
         return

@@ -461,6 +461,32 @@ def test_remove_attached_keeps_the_cli_record(tmp_path):
     assert path.read_bytes() == before
 
 
+def test_remove_cli_keeps_the_attached_record(tmp_path):
+    path = tmp_path / "sessions.json"
+    attached = tmp_path / "sessions.attached.json"
+    store = StateStore(str(path))
+    store.add(_session_state("dup"))
+    store.add(_session_state("dup", attached=True))
+    before = attached.read_bytes()
+
+    store.remove_cli("dup")
+
+    assert '"dup"' not in path.read_text()
+    assert store.get("dup").attached is True
+    assert attached.read_bytes() == before
+
+
+def test_attached_endpoints_are_those_of_the_attached_file(tmp_path):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    store.add(_session_state("cli"))
+    store.add(_session_state("att", attached=True))
+    store.add(_session_state("other", attached=True))
+
+    endpoints = store.attached_endpoints()
+
+    assert endpoints == {"att-ep", "other-ep"}
+
+
 @pytest.mark.parametrize(
     "stored_flag", [{}, {"attached": False}], ids=["no-flag", "flag-false"]
 )

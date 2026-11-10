@@ -16,7 +16,7 @@ import contextlib
 import json
 import os
 from datetime import datetime
-from typing import Dict, Optional, Tuple, Iterator, IO
+from typing import Dict, Optional, Set, Tuple, Iterator, IO
 
 import filelock
 from pydantic import BaseModel
@@ -258,6 +258,14 @@ class StateStore(_LockedFileStore):
     def remove_attached(self, name: str) -> None:
         """Forgets only the attached record for `name`."""
         self._remove_from(self._attached, name)
+
+    def remove_cli(self, name: str) -> None:
+        """Removes only the CLI record for `name`."""
+        self._remove_from(self, name)
+
+    def attached_endpoints(self) -> Set[str]:
+        """Returns the endpoints of the attached records."""
+        return {s.endpoint for s in self._read(self._attached).values()}
 
     def list(self) -> Dict[str, SessionState]:
         """Returns the records of both files by name.
