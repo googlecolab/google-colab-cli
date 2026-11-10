@@ -200,3 +200,30 @@ def test_get_credentials_adc_does_not_suppress_unrelated_warnings(mocker, recwar
     assert len(matching) == 1, (
         "Unrelated UserWarnings from google.auth must NOT be suppressed."
     )
+
+
+def test_get_credentials_adc_skips_gcloud_project_subprocess(mocker):
+    """When ADC user credentials have no quota_project_id, google.auth.default()
+    normally calls google.auth._cloud_sdk.get_project_id(), spawning a slow
+    `gcloud config get-value project` subprocess on every CLI invocation for a
+    project_id that _get_adc_credentials discards. Verify that subprocess path
+    is bypassed during google.auth.default()."""
+    from google.auth import _cloud_sdk
+
+    mock_creds = MagicMock()
+    mock_creds.requires_scopes = False
+
+    observed_project_id = []
+
+    def fake_default(*args, **kwargs):
+        observed_project_id.append(_cloud_sdk.get_project_id())
+        return mock_creds, observed_project_id[-1]
+
+    mocker.patch("google.auth.default", side_effect=fake_default)
+    m_subproc = mocker.patch("subprocess.check_output")
+    mocker.patch("colab_cli.auth.requests.AuthorizedSession")
+
+    get_credentials(provider=AuthProvider.ADC)
+
+    assert observed_project_id == ["colab-cli"]
+    m_subproc.assert_not_called()

@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-07: Optimized `_get_adc_credentials` in `auth.py` to stub `google.auth._cloud_sdk.get_project_id` around `google.auth.default()`. When ADC user credentials lack a `quota_project_id`, `google-auth` otherwise spawns `gcloud config get-value project` on every CLI invocation to resolve a `project_id` that `_get_adc_credentials` immediately discards (`_`).
 2026-11-04: `colab drivemount` now opens the Drive consent URL in the system browser (`utils.open_url_in_browser`, also used by `colab pay`/`colab url --open`) instead of only printing it. The URL is still printed first, and a missing browser opener (SSH, containers, CI) is treated as normal: the flow keeps waiting for the user exactly as before. The prompt moved into `commands/automation.py::show_drive_auth_url` so it can be unit-tested.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to inspect the active Linux `SecretService` collection via `secretstorage` before `get_password`/`set_password`, warning immediately when the keyring is locked so users know why the CLI is waiting on an unlock prompt (and suggesting `--auth=adc`).
 2026-10-29: Session history files are created readable only by the owner (0600), and existing ones are tightened to 0600 whenever the history logger starts.
