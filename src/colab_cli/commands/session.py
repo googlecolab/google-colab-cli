@@ -38,6 +38,35 @@ def _hardware_label(accelerator: str) -> str:
     return "CPU" if accelerator == "NONE" else accelerator
 
 
+# Accepted values for `--gpu` / `--tpu`, keyed by the lowercase spelling the
+# CLI accepts. Keep the order stable: it is used in `--help` and error text.
+GPU_ACCELERATORS = {
+    "t4": Accelerator.T4,
+    "l4": Accelerator.L4,
+    "g4": Accelerator.G4,
+    "h100": Accelerator.H100,
+    "a100": Accelerator.A100,
+}
+TPU_ACCELERATORS = {
+    "v5e1": Accelerator.V5E1,
+    "v6e1": Accelerator.V6E1,
+}
+
+
+def _parse_accelerator(
+    value: str, mapping: dict[str, Accelerator], flag: str
+) -> Accelerator:
+    """Look up an accelerator, raises for unknown values."""
+    accelerator = mapping.get(value.lower())
+    if accelerator is None:
+        supported = ", ".join(name.upper() for name in mapping)
+        raise typer.BadParameter(
+            f"unsupported value {value!r}. Supported: {supported}.",
+            param_hint=flag,
+        )
+    return accelerator
+
+
 def _format_session_line(
     name: str,
     endpoint: str,
@@ -72,17 +101,10 @@ def resolve_runtime_options(
     """Map CLI flags to backend variant, accelerator, and optional shape."""
     if tpu:
         variant = Variant.TPU
-        accelerator = Accelerator.V5E1 if tpu.lower() == "v5e1" else Accelerator.V6E1
+        accelerator = _parse_accelerator(tpu, TPU_ACCELERATORS, "--tpu")
     elif gpu:
         variant = Variant.GPU
-        mapping = {
-            "a100": Accelerator.A100,
-            "h100": Accelerator.H100,
-            "l4": Accelerator.L4,
-            "t4": Accelerator.T4,
-            "g4": Accelerator.G4,
-        }
-        accelerator = mapping.get(gpu.lower(), Accelerator.A100)
+        accelerator = _parse_accelerator(gpu, GPU_ACCELERATORS, "--gpu")
     else:
         variant = Variant.DEFAULT
         accelerator = Accelerator.NONE
@@ -98,14 +120,18 @@ def new(
     tpu: Annotated[
         Optional[str],
         typer.Option(
-            help="TPU accelerator variant. Supported: v5e1, v6e1.",
+            help=(
+                "TPU accelerator variant. Supported: "
+                f"{', '.join(name.upper() for name in TPU_ACCELERATORS)}."
+            ),
         ),
     ] = None,
     gpu: Annotated[
         Optional[str],
         typer.Option(
             help=(
-                "GPU accelerator variant. Supported: T4, L4, G4, H100, A100."
+                "GPU accelerator variant. Supported: "
+                f"{', '.join(name.upper() for name in GPU_ACCELERATORS)}."
                 "\n\nIf omitted (along with --tpu), a CPU runtime is created."
                 "\n\nAvailability varies by Colab subscription tier."
             ),

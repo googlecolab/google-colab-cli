@@ -73,3 +73,22 @@ def test_interactive_ssh_builds_args(mocker, identity):
     else:
         assert "-i" not in args
         assert "--identity" not in joined
+
+
+@pytest.mark.parametrize("priv_exists", [True, False], ids=["priv-on-disk", "pub-only"])
+def test_ssh_base_args_strips_pub_when_sibling_private_key_exists(
+    tmp_path, priv_exists
+):
+    """When `--identity` ends with `.pub` and the sibling private key exists on
+    disk, pass the private key path to `ssh -i` (OpenSSH rejects a `0644` `.pub`
+    file as an unprotected private key unless the key is loaded in ssh-agent);
+    when only the `.pub` file exists, pass the `.pub` path as-is."""
+    priv = tmp_path / "id_ed25519"
+    pub = tmp_path / "id_ed25519.pub"
+    pub.write_text("ssh-ed25519 AAAAfake user@host\n")
+    if priv_exists:
+        priv.write_text("(private key)")
+
+    args = ssh_module._ssh_base_args("proxy", str(pub))
+    idx = args.index("-i")
+    assert args[idx + 1] == str(priv if priv_exists else pub)

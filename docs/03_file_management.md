@@ -31,7 +31,7 @@ File management on the Colab VM will be implemented using the Jupyter Contents A
 ### 3. Downloading Files (`colab download`)
 - **API**: `GET /api/contents/<remote_path>?content=1` (as seen in HAR).
 - **Response**: JSON with `content` field.
-- **Handling**: Decodes content based on `format` (text or base64) and saves it locally.
+- **Handling**: Decodes content based on `format` (`base64`, `json`, or plain `text`) and saves it locally.
 
 ### 4. Deleting Files (`colab rm`)
 - **API**: `DELETE /api/contents/<remote_path>`.

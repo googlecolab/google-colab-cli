@@ -17,6 +17,7 @@ import json
 import logging
 from importlib import resources
 import os
+import sys
 import threading
 import warnings
 from typing import Optional
@@ -88,23 +89,57 @@ def _run_with_timeout(func, *args, timeout: float):
     return result
 
 
+def _check_linux_keyring_locked() -> None:
+    """Warn if the active Linux SecretService keyring collection is locked."""
+    if sys.platform != "linux":
+        return
+    try:
+        from contextlib import closing
+        from keyring.backends import SecretService, chainer
+        import secretstorage
+
+        kr = keyring.get_keyring()
+        if isinstance(kr, chainer.ChainerBackend):
+            primary = kr.backends[0] if kr.backends else None
+        else:
+            primary = kr
+        if not isinstance(primary, SecretService.Keyring):
+            return
+
+        with closing(secretstorage.dbus_init()) as bus:
+            collection_path = getattr(primary, "preferred_collection", None)
+            collection = (
+                secretstorage.Collection(bus, collection_path)
+                if collection_path
+                else secretstorage.Collection(bus)
+            )
+            if collection.is_locked():
+                label = collection.get_label() or collection.collection_path
+                msg = (
+                    f"Keyring '{label}' is locked; waiting on unlock prompt for "
+                    f"{KEYRING_TIMEOUT_SECONDS:g}s (use --auth=adc if keyring can't be unlocked)."
+                )
+                logger.warning(msg)
+                typer.echo(f"Warning: {msg}", err=True)
+    except Exception as e:
+        logger.debug(f"Could not check Linux keyring lock status: {e}")
+
+
 def _get_token_from_keyring() -> Optional[str]:
-    return _run_with_timeout(
-        keyring.get_password,
-        KEYRING_SERVICE_NAME,
-        KEYRING_USERNAME,
-        timeout=KEYRING_TIMEOUT_SECONDS,
-    )
+    def get_password() -> Optional[str]:
+        _check_linux_keyring_locked()
+        return keyring.get_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME)
+
+    return _run_with_timeout(get_password, timeout=KEYRING_TIMEOUT_SECONDS)
 
 
 def _save_token_to_keyring(token_json: str) -> None:
-    _run_with_timeout(
-        keyring.set_password,
-        KEYRING_SERVICE_NAME,
-        KEYRING_USERNAME,
-        token_json,
-        timeout=KEYRING_TIMEOUT_SECONDS,
-    )
+    def set_password() -> None:
+        _check_linux_keyring_locked()
+        keyring.set_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME, token_json)
+
+    _run_with_timeout(set_password, timeout=KEYRING_TIMEOUT_SECONDS)
+
 
 # Remote copy-paste OAuth flow.
 #
@@ -264,7 +299,22 @@ def _get_adc_credentials() -> Credentials:
     # That warning shows up on every single `colab` invocation under ADC,
     # which is pure noise. Filter it, but keep the scope as tight as possible:
     # only this exact message, only during this one call.
-    with warnings.catch_warnings():
+    #
+    # Additionally, when ADC user credentials lack a `quota_project_id`,
+    # `google.auth._default._get_gcloud_sdk_credentials` calls
+    # `google.auth._cloud_sdk.get_project_id()`, which spawns a
+    # `gcloud config get-value project` subprocess (adding 2-13s of latency on
+    # every CLI invocation) solely to compute the second tuple element
+    # (`project_id`) that we immediately discard (`_`). Stubbing
+    # `get_project_id` during `google.auth.default()` avoids spawning `gcloud`
+    # while preserving the full ADC discovery chain.
+    from unittest.mock import patch as _patch
+    from google.auth import _cloud_sdk
+
+    with (
+        warnings.catch_warnings(),
+        _patch.object(_cloud_sdk, "get_project_id", return_value="colab-cli"),
+    ):
         warnings.filterwarnings(
             "ignore",
             message=r"Your application has authenticated using end user credentials.*",

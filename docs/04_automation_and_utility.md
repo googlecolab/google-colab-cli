@@ -1,5 +1,9 @@
 ---
 log:
+2026-11-07: Optimized `_get_adc_credentials` in `auth.py` to stub `google.auth._cloud_sdk.get_project_id` around `google.auth.default()`. When ADC user credentials lack a `quota_project_id`, `google-auth` otherwise spawns `gcloud config get-value project` on every CLI invocation to resolve a `project_id` that `_get_adc_credentials` immediately discards (`_`).
+2026-11-04: `colab drivemount` now opens the Drive consent URL in the system browser (`utils.open_url_in_browser`, also used by `colab pay`/`colab url --open`) instead of only printing it. The URL is still printed first, and a missing browser opener (SSH, containers, CI) is treated as normal: the flow keeps waiting for the user exactly as before. The prompt moved into `commands/automation.py::show_drive_auth_url` so it can be unit-tested.
+2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to inspect the active Linux `SecretService` collection via `secretstorage` before `get_password`/`set_password`, warning immediately when the keyring is locked so users know why the CLI is waiting on an unlock prompt (and suggesting `--auth=adc`).
+2026-10-29: Session history files are created readable only by the owner (0600), and existing ones are tightened to 0600 whenever the history logger starts.
 2026-10-21: Migrated OAuth2 token persistence in `auth.py` from `~/.config/colab-cli/token.json` to the OS native password storage via the `keyring` library (`KEYRING_SERVICE_NAME = "google-colab-cli"`, `KEYRING_USERNAME = "oauth_token"`). When the keyring is empty, locked, or inaccessible, `_run_remote_flow` is invoked; keyring read/write failures print a warning to stderr without failing the command. An existing `~/.config/colab-cli/token.json` (`LEGACY_TOKEN_PATH`) is used when the keyring has no token, copied into the keyring, and deleted only after the keyring write succeeds; it is also deleted when the keyring already holds a token.
 2026-09-25: Cleaned up references to keep-alive background daemon and pre-flight pings. VM liveness is automatically maintained by the Colab backend based on active kernel activity.
 2026-08-10: Added `colab usage` for account-level compute-unit rate/balance via `GET /tun/m/ccu-info` on the session backend (same bearer token as `colab new`).
@@ -36,7 +40,10 @@ backend, selected via the global `--auth=<provider>` flag:
     prompt. The refresh token is cached in the OS native keyring via the
     `keyring` library (`service_name="google-colab-cli"`, `username="oauth_token"`),
     falling back to running `_run_remote_flow` if the keyring is not accessible
-    or locked. Keyring read/write failures are printed to stderr, since a
+    or locked. On Linux, `_check_linux_keyring_locked` inspects the active
+    `SecretService` collection via `secretstorage` before reading or writing
+    and prints an immediate warning if the collection is locked while waiting
+    on the unlock prompt. Keyring read/write failures are printed to stderr, since a
     failed write means the user is prompted again on every command. A token
     left at the pre-keyring path `~/.config/colab-cli/token.json` is migrated
     into the keyring on first use and the file is deleted once the keyring
@@ -132,7 +139,10 @@ How each provider supplies the scope:
     automatically interacts with the Colab backend
     (`/tun/m/credentials-propagation/`), prompts the user with the Google OAuth
     consent URL if needed, and dispatches the required `colab_reply` message to
-    the `stdin` channel to unlock the kernel thread.
+    the `stdin` channel to unlock the kernel thread. The consent URL is also
+    passed to `webbrowser.open` (see `utils.open_url_in_browser`); when no
+    browser opener is available (SSH, containers, CI) the URL stays on screen
+    and the flow continues to wait for the user, unchanged.
 -   **Timeout**: The kernel is silent (no iopub traffic) the entire time the
     user is OAuthing in their browser. To avoid the upstream 10s
     `jupyter_kernel_client` default raising `TimeoutError` mid-flow, this
@@ -144,7 +154,8 @@ How each provider supplies the scope:
 -   **Action**: Capture the session's command history and outputs.
 -   **Storage**: Maintain a local JSON-L file of all major operations,
     executions, and stdin interactions in
-    `~/.config/colab-cli/history/<session_name>.jsonl`.
+    `~/.config/colab-cli/history/<session_name>.jsonl`, readable only by the
+    owner (mode 0600).
 -   **Viewing**: `colab log list` and `colab log show <session>`.
 -   **Conversion (Planned)**: Future expansion to convert history logs to
     `.ipynb` or `.html`.

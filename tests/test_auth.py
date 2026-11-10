@@ -24,6 +24,7 @@ from colab_cli.auth import (
     PUBLIC_SCOPES,
     REMOTE_REDIRECT_URI,
     AuthProvider,
+    _check_linux_keyring_locked,
     _run_with_timeout,
     get_credentials,
 )
@@ -307,9 +308,12 @@ def test_keyring_save_failure_warns_on_stderr(mock_deps, mocker, capsys):
 
 def test_legacy_token_file_migrated_to_keyring(mock_deps, mocker):
     """A pre-keyring token.json is used, copied into the keyring, then deleted."""
-    mock_deps["exists"].side_effect = lambda path: path in (
-        "dummy_config.json",
-        LEGACY_TOKEN_PATH,
+    mock_deps["exists"].side_effect = lambda path: (
+        path
+        in (
+            "dummy_config.json",
+            LEGACY_TOKEN_PATH,
+        )
     )
     m_remove = mocker.patch("colab_cli.auth.os.remove")
 
@@ -335,9 +339,12 @@ def test_legacy_token_file_migrated_to_keyring(mock_deps, mocker):
 
 def test_legacy_token_file_kept_when_keyring_save_fails(mock_deps, mocker):
     """Never delete the legacy token unless it was persisted to the keyring."""
-    mock_deps["exists"].side_effect = lambda path: path in (
-        "dummy_config.json",
-        LEGACY_TOKEN_PATH,
+    mock_deps["exists"].side_effect = lambda path: (
+        path
+        in (
+            "dummy_config.json",
+            LEGACY_TOKEN_PATH,
+        )
     )
     mock_deps["keyring"].get_password.side_effect = KeyringError("locked")
     mock_deps["keyring"].set_password.side_effect = KeyringError("locked")
@@ -357,9 +364,12 @@ def test_legacy_token_file_kept_when_keyring_save_fails(mock_deps, mocker):
 
 
 def test_legacy_token_file_deleted_when_keyring_has_token(mock_deps, mocker):
-    mock_deps["exists"].side_effect = lambda path: path in (
-        "dummy_config.json",
-        LEGACY_TOKEN_PATH,
+    mock_deps["exists"].side_effect = lambda path: (
+        path
+        in (
+            "dummy_config.json",
+            LEGACY_TOKEN_PATH,
+        )
     )
     m_remove = mocker.patch("colab_cli.auth.os.remove")
     mock_deps["keyring"].get_password.return_value = '{"token": "valid"}'
@@ -390,10 +400,9 @@ def test_corrupt_legacy_token_file_falls_back_to_remote_flow(mock_deps, mocker):
     mocker.patch(
         "colab_cli.auth.input",
         create=True,
-        side_effect=lambda _: legacy_present_at_prompt.append(
-            LEGACY_TOKEN_PATH in files
-        )
-        or "pasted-code",
+        side_effect=lambda _: (
+            legacy_present_at_prompt.append(LEGACY_TOKEN_PATH in files) or "pasted-code"
+        ),
     )
 
     with patch("builtins.open", mock_open(read_data='{"web":{"client_id":"id"}}')):
@@ -411,9 +420,12 @@ def test_corrupt_legacy_token_file_deleted_even_if_keyring_save_fails(
     mock_deps, mocker
 ):
     """The corrupt file holds nothing worth keeping, unlike a valid legacy token."""
-    mock_deps["exists"].side_effect = lambda path: path in (
-        "dummy_config.json",
-        LEGACY_TOKEN_PATH,
+    mock_deps["exists"].side_effect = lambda path: (
+        path
+        in (
+            "dummy_config.json",
+            LEGACY_TOKEN_PATH,
+        )
     )
     mock_deps["keyring"].set_password.side_effect = KeyringError("locked")
     m_remove = mocker.patch("colab_cli.auth.os.remove")
@@ -470,4 +482,178 @@ def test_get_credentials_fallback_config(mock_deps):
     m_file.is_file.assert_called_once()
     m_file.read_text.assert_called_once()
     mock_deps["creds_cls"].from_authorized_user_info.assert_called_once()
+    assert res == mock_deps["session"].return_value
+
+
+def test_linux_locked_keyring_warns_and_still_reads_and_saves(
+    mock_deps, mocker, capsys
+):
+    """When the Linux SecretService collection is locked, warn before get/set_password."""
+    from keyring.backends import SecretService
+
+    mocker.patch("colab_cli.auth.sys.platform", "linux")
+    mock_deps["exists"].side_effect = lambda path: path == "dummy_config.json"
+    mock_deps["keyring"].get_keyring.return_value = SecretService.Keyring()
+    mock_deps["keyring"].get_password.return_value = None
+
+    m_ss = MagicMock()
+    m_collection = MagicMock()
+    m_collection.is_locked.return_value = True
+    m_collection.get_label.return_value = "Default keyring"
+    m_collection.collection_path = "/org/freedesktop/secrets/aliases/default"
+    m_ss.Collection.return_value = m_collection
+    mocker.patch.dict("sys.modules", {"secretstorage": m_ss})
+
+    _setup_remote_flow(mock_deps, mocker)
+
+    with patch("builtins.open", mock_open(read_data='{"web":{"client_id":"id"}}')):
+        get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
+
+    err = capsys.readouterr().err
+    expected_msg = (
+        "Keyring 'Default keyring' is locked; waiting on unlock prompt for 30s "
+        "(use --auth=adc if keyring can't be unlocked)."
+    )
+    assert err.count(expected_msg) == 2
+    mock_deps["keyring"].get_password.assert_called_once_with(
+        KEYRING_SERVICE_NAME, KEYRING_USERNAME
+    )
+    mock_deps["keyring"].set_password.assert_called_once_with(
+        KEYRING_SERVICE_NAME, KEYRING_USERNAME, '{"token":"new"}'
+    )
+
+
+def test_check_linux_keyring_locked_unlocked_is_silent(mock_deps, mocker, capsys):
+    """No warning is emitted when the SecretService collection is unlocked."""
+    from keyring.backends import SecretService
+
+    mocker.patch("colab_cli.auth.sys.platform", "linux")
+    mock_deps["keyring"].get_keyring.return_value = SecretService.Keyring()
+
+    m_ss = MagicMock()
+    m_collection = MagicMock()
+    m_collection.is_locked.return_value = False
+    m_ss.Collection.return_value = m_collection
+    mocker.patch.dict("sys.modules", {"secretstorage": m_ss})
+
+    _check_linux_keyring_locked()
+
+    assert capsys.readouterr().err == ""
+
+
+def test_check_linux_keyring_locked_uses_preferred_collection(
+    mock_deps, mocker, capsys
+):
+    """If SecretService.Keyring specifies preferred_collection, check that path."""
+    from keyring.backends import SecretService
+
+    mocker.patch("colab_cli.auth.sys.platform", "linux")
+    kr = SecretService.Keyring()
+    kr.preferred_collection = "/org/freedesktop/secrets/collection/login"
+    mock_deps["keyring"].get_keyring.return_value = kr
+
+    m_ss = MagicMock()
+    m_bus = MagicMock()
+    m_ss.dbus_init.return_value = m_bus
+    m_collection = MagicMock()
+    m_collection.is_locked.return_value = True
+    m_collection.get_label.return_value = ""
+    m_collection.collection_path = "/org/freedesktop/secrets/collection/login"
+    m_ss.Collection.return_value = m_collection
+    mocker.patch.dict("sys.modules", {"secretstorage": m_ss})
+
+    _check_linux_keyring_locked()
+
+    m_ss.Collection.assert_called_once_with(
+        m_bus, "/org/freedesktop/secrets/collection/login"
+    )
+    err = capsys.readouterr().err
+    assert "Keyring '/org/freedesktop/secrets/collection/login' is locked" in err
+
+
+def test_check_linux_keyring_locked_ignores_errors_and_other_platforms(
+    mock_deps, mocker, capsys
+):
+    """Non-Linux platforms and D-Bus errors do not raise or print warnings."""
+    from keyring.backends import SecretService
+
+    mocker.patch("colab_cli.auth.sys.platform", "darwin")
+    _check_linux_keyring_locked()
+    assert capsys.readouterr().err == ""
+
+    mocker.patch("colab_cli.auth.sys.platform", "linux")
+    mock_deps["keyring"].get_keyring.return_value = SecretService.Keyring()
+    m_ss = MagicMock()
+    m_ss.dbus_init.side_effect = RuntimeError("D-Bus unavailable")
+    mocker.patch.dict("sys.modules", {"secretstorage": m_ss})
+
+    _check_linux_keyring_locked()
+    assert capsys.readouterr().err == ""
+
+
+def test_check_linux_keyring_locked_chainer_only_checks_first_backend(
+    mock_deps, mocker, capsys
+):
+    """Only warn for ChainerBackend when SecretService is the highest-priority backend."""
+    from keyring.backends import SecretService, chainer
+
+    mocker.patch("colab_cli.auth.sys.platform", "linux")
+    m_ss = MagicMock()
+    m_collection = MagicMock()
+    m_collection.is_locked.return_value = True
+    m_collection.get_label.return_value = "Default keyring"
+    m_collection.collection_path = "/org/freedesktop/secrets/aliases/default"
+    m_ss.Collection.return_value = m_collection
+    mocker.patch.dict("sys.modules", {"secretstorage": m_ss})
+
+    # Case 1: Higher-priority backend (e.g. KWallet) is first, SecretService is second.
+    mocker.patch.object(
+        chainer.ChainerBackend,
+        "backends",
+        [MagicMock(), SecretService.Keyring()],
+    )
+    mock_deps["keyring"].get_keyring.return_value = chainer.ChainerBackend()
+
+    _check_linux_keyring_locked()
+    assert capsys.readouterr().err == ""
+    m_ss.dbus_init.assert_not_called()
+
+    # Case 2: SecretService is the highest-priority (first) backend in ChainerBackend.
+    mocker.patch.object(
+        chainer.ChainerBackend,
+        "backends",
+        [SecretService.Keyring(), MagicMock()],
+    )
+    _check_linux_keyring_locked()
+    assert "Keyring 'Default keyring' is locked" in capsys.readouterr().err
+    m_ss.dbus_init.assert_called_once()
+
+
+def test_linux_keyring_lock_check_runs_under_timeout(mock_deps, mocker, capsys):
+    """A wedged D-Bus call inside _check_linux_keyring_locked is bounded by the timeout."""
+    import threading
+    from keyring.backends import SecretService
+
+    mocker.patch("colab_cli.auth.sys.platform", "linux")
+    mocker.patch("colab_cli.auth.KEYRING_TIMEOUT_SECONDS", 0.05)
+    mock_deps["exists"].side_effect = lambda path: path == "dummy_config.json"
+    mock_deps["keyring"].get_keyring.return_value = SecretService.Keyring()
+
+    hang_event = threading.Event()
+    m_ss = MagicMock()
+    m_ss.dbus_init.side_effect = lambda: hang_event.wait(1.0)
+    mocker.patch.dict("sys.modules", {"secretstorage": m_ss})
+
+    mock_flow, mock_creds_new = _setup_remote_flow(mock_deps, mocker)
+
+    try:
+        with patch("builtins.open", mock_open(read_data='{"web":{"client_id":"id"}}')):
+            res = get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
+    finally:
+        hang_event.set()
+
+    err = capsys.readouterr().err
+    assert "Operation 'get_password' timed out" in err
+    assert "Operation 'set_password' timed out" in err
+    mock_flow.fetch_token.assert_called_once_with(code="pasted-code")
     assert res == mock_deps["session"].return_value

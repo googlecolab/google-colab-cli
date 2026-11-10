@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-09: `--identity/-i` now accepts either a `.pub` public key or a private key path: `_resolve_pubkey` reads the `.pub` file directly when present before falling back to `_pubkey_from_identity` (`ssh-keygen -y -f`), and `_ssh_base_args` strips `.pub` for `ssh -i` when the sibling private key exists on disk.
 2026-10-29: Removed the `colab console` subcommand, so `colab ssh` is the interactive shell on the runtime. Dropped console behavior from the Windows validation caveat.
 2026-10-29: Added `colab ssh [-s NAME] -- CMD`, which runs one command on an existing session and exits with its status (a PTY only when stdin and stdout are terminals; neither it nor its ProxyCommand child creates a runtime). Its handshake carries `ssh-mode-cmd`, and the update banner is skipped for `ssh` when stdout is not a terminal. Added `tests/test_ssh_cmd.py`.
 2026-10-29: HTTP 429 now shows the server's SSH session limit ("N of N SSH sessions in use") when the body carries one.
@@ -35,7 +36,7 @@ colab ssh [OPTIONS] [-- CMD [ARGS]...]
 |---|---|---|---|
 | `-s`, `--session` | str | auto | Session to connect to. If omitted, uses your only active session, auto-creates one when you have none (not with `-- CMD`), or errors when you have several. |
 | `--proxy-mode` | bool | False | Act as an OpenSSH `ProxyCommand`-compatible WebSocket↔stdio bridge (reads stdin, writes stdout) for `~/.ssh/config`. Every other flag still applies. |
-| `-i`, `--identity` | str | auto | Private key for the public key sent to Colab. Default: first of `~/.ssh/id_ed25519`, `id_ecdsa`. |
+| `-i`, `--identity` | str | auto | SSH key (`.pub` public key or private key path) for the public key sent to Colab. Default: first of `~/.ssh/id_ed25519.pub`, `id_ecdsa.pub`. |
 | `--gpu` | str | None | GPU accelerator for a runtime this command creates (T4, L4, G4, H100, A100). |
 | `--tpu` | str | None | TPU accelerator for a runtime this command creates (v5e1, v6e1). |
 | `--high-mem` | bool | False | Request high-RAM when this command auto-creates a runtime (ignored when connecting to an existing session). |
@@ -139,8 +140,10 @@ session (never creating one); every word from CMD on goes to CMD, flags too.
 
 ### Unit tests (`tests/test_ssh.py`)
 1. WebSocket URL construction (`wss` for https, `ws` for http; token query param).
-2. Pubkey resolution — `--identity` (via `ssh-keygen -y -f`) and the `~/.ssh`
-   default scan; missing-key and missing-identity exit paths.
+2. Pubkey resolution — `--identity` (reads the matching `.pub` file first,
+   whether passed with or without `.pub`, before falling back to `ssh-keygen -y
+   -f`) and the `~/.ssh` default scan; missing-key and missing-identity exit
+   paths.
 3. The full status→message map (400/401/403/404/429/502/other/none).
 4. Shell quoting for the `ProxyCommand` string.
 5. Session resolution (existing vs missing).
