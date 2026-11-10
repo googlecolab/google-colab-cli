@@ -75,6 +75,7 @@ core-metadata-version = "2.4"
 
 [tool.uv]
 package = true
+cache-keys = [{ file = "pyproject.toml" }, { git = { commit = true, tags = true } }]
 
 [[tool.uv.index]]
 url = "https://pypi.org/simple"
