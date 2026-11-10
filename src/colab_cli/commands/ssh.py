@@ -132,8 +132,8 @@ def _resolve_pubkey(identity: Optional[str]) -> str:
             pub_path = expanded
             priv_path = expanded.with_suffix("")
         else:
-            pub_path = Path(f"{expanded}.pub")
             priv_path = expanded
+            pub_path = expanded.with_suffix(".pub")
         if pub_path.exists():
             if pubkey := pub_path.read_text().strip():
                 return pubkey
