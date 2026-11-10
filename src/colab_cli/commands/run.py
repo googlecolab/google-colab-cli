@@ -39,9 +39,9 @@ import typer
 from typing_extensions import Annotated
 
 from colab_cli.client import (
+    HIGH_MEM_ONLY_ACCELERATORS,
     Accelerator,
     ColabRequestError,
-    HIGH_MEM_ONLY_ACCELERATORS,
     PostAssignmentResponse,
     Shape,
     TooManyAssignmentsError,
@@ -52,9 +52,13 @@ from colab_cli.commands.session import (
     TPU_ACCELERATORS,
     resolve_runtime_options,
 )
-from colab_cli.runtime import ColabRuntime
+from colab_cli.runtime import (
+    ColabRuntime,
+    ExecutionIdleTimeout,
+    ExecutionOutcomeUnknown,
+)
 from colab_cli.state import SessionState
-from colab_cli.utils import get_status_code, is_terminal_error
+from colab_cli.utils import get_status_code
 
 
 def _build_script_payload(
@@ -270,7 +274,7 @@ def run_command(
         Optional[float],
         typer.Option(
             "--timeout",
-            help="Seconds to wait without output before failing (0 for no limit)",
+            help="Seconds to wait without an execution message (0 disables idle timeout)",
         ),
     ] = 30.0,
     env: Annotated[
@@ -306,9 +310,15 @@ def run_command(
         raise typer.Exit(2)
 
     name = session or f"run-{uuid.uuid4().hex[:6]}"
-    variant, accelerator, shape = resolve_runtime_options(
-        gpu, tpu, high_mem=high_mem
+    existing = state.store.get(name)
+    from colab_cli.commands.execution import (
+        recovery_callbacks,
+        require_resolved_execution,
     )
+
+    if isinstance(existing, SessionState):
+        require_resolved_execution(existing)
+    variant, accelerator, shape = resolve_runtime_options(gpu, tpu, high_mem=high_mem)
 
     if high_mem and accelerator in HIGH_MEM_ONLY_ACCELERATORS:
         typer.echo(
@@ -392,6 +402,7 @@ def run_command(
     # ----- Execute the script -------------------------------------------------
     exit_code = 0
     cleanup_reason = "run_completed"
+    preserve = False
 
     def on_started(kid):
         s.kernel_id = kid
@@ -408,24 +419,14 @@ def run_command(
         session_id=s.session_id,
         on_kernel_started=on_started,
         on_session_started=on_sess_started,
+        **recovery_callbacks(state, s),
     )
 
     try:
         # Same /content prelude as `colab exec` for consistency.
-        try:
-            runtime.execute_code(
-                "import os; os.makedirs('/content', exist_ok=True); "
-                "os.chdir('/content')"
-            )
-        except Exception as e:
-            if is_terminal_error(e):
-                typer.echo(
-                    f"[colab] Session '{name}' appears to be lost (404/401).",
-                    err=True,
-                )
-                state.prune_session(name)
-                raise typer.Exit(1)
-            raise
+        runtime.execute_code(
+            "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
+        )
 
         payload = _build_script_payload(script, script_args, env_vars)
         s.running = f"run({os.path.basename(script)})"
@@ -441,8 +442,8 @@ def run_command(
                 payload, output_hook=_make_run_output_hook(), timeout=timeout
             )
         except Exception:
-            # Genuine transport-level failure. Cleanup still happens via the
-            # outer finally; surface non-zero exit so callers/CI notice.
+            # Unknown outcomes are handled by the outer exception handler;
+            # confirmed failures still follow normal cleanup.
             exit_code = 1
             cleanup_reason = "run_failed"
             raise
@@ -455,8 +456,21 @@ def run_command(
                 "execution",
                 {"code": payload, "outputs": outputs, "via": "run"},
             )
+    except (ExecutionOutcomeUnknown, ExecutionIdleTimeout, KeyboardInterrupt):
+        preserve = True
+        s.running = f"unknown: {s.running or 'preparing execution'}"
+        typer.echo(
+            f"[colab] Execution result unknown; session '{name}' was preserved. "
+            "The original code may still be running. Do not resubmit it blindly. "
+            f"Recover with 'colab resume -s {name}'. "
+            f"Inspect with 'colab status -s {name}' and stop it explicitly with "
+            f"'colab stop -s {name}' when no longer needed.",
+            err=True,
+        )
+        raise
     finally:
-        s.running = None
+        if not preserve:
+            s.running = None
         state.store.add(s)
         # Best-effort runtime close (keeps remote kernel alive for --keep).
         try:
@@ -464,7 +478,7 @@ def run_command(
         except Exception:
             pass
 
-        if not keep:
+        if not keep and not preserve:
             _teardown(name, s, reason=cleanup_reason)
 
     if exit_code != 0:

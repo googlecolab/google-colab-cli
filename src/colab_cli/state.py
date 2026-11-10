@@ -35,6 +35,8 @@ class SessionState(BaseModel):
     session_id: Optional[str] = None
     last_execution: Optional[Tuple[str, Optional[str], str]] = None
     running: Optional[str] = None
+    # Identity of submitted work, retained across monitoring/process failures.
+    execution: dict[str, str] | None = None
 
 
 class Settings(BaseModel):
