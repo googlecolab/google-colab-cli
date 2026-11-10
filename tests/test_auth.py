@@ -262,6 +262,9 @@ def test_get_credentials_keyring_timeout_falls_back_to_remote_flow(mock_deps, mo
             res = get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
     finally:
         hang_event.set()
+        for t in list(threading.enumerate()):
+            if t is not threading.current_thread() and t.daemon:
+                t.join(timeout=1.0)
 
     mock_flow.fetch_token.assert_called_once_with(code="pasted-code")
     mock_deps["session"].assert_called_once_with(mock_creds_new)
@@ -455,6 +458,9 @@ def test_run_with_timeout_infers_operation_name():
             _run_with_timeout(custom_slow_operation, timeout=0.01)
     finally:
         hang_event.set()
+        for t in list(threading.enumerate()):
+            if t is not threading.current_thread() and t.daemon:
+                t.join(timeout=1.0)
 
 
 def test_remote_redirect_is_not_oob():
@@ -651,6 +657,9 @@ def test_linux_keyring_lock_check_runs_under_timeout(mock_deps, mocker, capsys):
             res = get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
     finally:
         hang_event.set()
+        for t in list(threading.enumerate()):
+            if t is not threading.current_thread() and t.daemon:
+                t.join(timeout=1.0)
 
     err = capsys.readouterr().err
     assert "Operation 'get_password' timed out" in err
