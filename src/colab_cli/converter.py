@@ -105,8 +105,6 @@ def convert_history_to_ipynb(
 
         elif etype == "execution":
             code = event.get("code", "")
-            # Check for shell commands (starting with ! or from piped console)
-            # If it's a raw shell command from a console pipe, wrap it in %%bash if it doesn't have !
             if event.get("source") == "piped" and not code.startswith("!"):
                 code = "%%bash\n" + code
 
