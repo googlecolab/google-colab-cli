@@ -100,20 +100,25 @@ def render_display_data(data: dict) -> Union[Markdown, Text, None]:
     return None
 
 
-def handle_image(image_b64: str, mime_type: str = "image/png", target_path: str = None):
+def save_image(
+    image_b64: str, mime_type: str = "image/png", target_path: str = None
+) -> str:
+    """Write a base64 image to `target_path` (or a temp file); return its path."""
     image_bytes = base64.b64decode(image_b64)
-    # Print inline using Kitty protocol
-    print_kitty(image_bytes)
-
     if target_path:
-        # If a target path is specified, save it there
         with open(target_path, "wb") as f:
             f.write(image_bytes)
-        print(f"\n[Image saved to: {target_path}]")
-    else:
-        # Save to temp file as fallback
-        ext = mime_type.split("/")[-1]
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}")
-        tmp.write(image_bytes)
-        tmp.close()
-        print(f"\n[Image saved to: {tmp.name}]")
+        return target_path
+    # Save to temp file as fallback
+    ext = mime_type.split("/")[-1]
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}")
+    tmp.write(image_bytes)
+    tmp.close()
+    return tmp.name
+
+
+def handle_image(image_b64: str, mime_type: str = "image/png", target_path: str = None):
+    # Print inline using Kitty protocol
+    print_kitty(base64.b64decode(image_b64))
+    path = save_image(image_b64, mime_type, target_path)
+    print(f"\n[Image saved to: {path}]")
