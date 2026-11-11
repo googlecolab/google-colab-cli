@@ -20,6 +20,12 @@ below corresponds to a tag of the same name.
 
 ### Added
 
+- **exec:** `colab exec --json` prints one JSON object per executed cell on
+  stdout (`status`, `stdout`, `stderr`, `data`, `images`, `error`) instead of
+  streaming output, for scripts and AI agents. Tracebacks are plain text
+  without ANSI colour codes, images are saved to disk and reported by path,
+  `[colab]` progress lines go to stderr, and the exit status is 1 when any
+  cell failed. Without `--json`, output and exit status are unchanged.
 - **ssh:** `colab ssh [-s NAME] -- CMD` runs one command on an existing runtime and exits with its status. Output is byte-exact when piped (a PTY only when stdin and stdout are terminals), and it never creates a runtime. Its handshake is tagged `ssh-mode-cmd`.
 
 ### Removed
