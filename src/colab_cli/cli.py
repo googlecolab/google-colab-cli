@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from typing import Optional
+from typing import Any, Optional
 
 import click
 import typer
@@ -24,6 +24,7 @@ from colab_cli import auto_update
 from colab_cli.auth import AuthProvider
 from colab_cli.common import state, setup_logging
 from colab_cli.commands import session, execution, files, automation, run, ssh, utility, usage
+from colab_cli.state import StoreError, resolve_store_paths
 
 
 class AlphabeticalGroup(TyperGroup):
@@ -36,6 +37,14 @@ class AlphabeticalGroup(TyperGroup):
 
     def list_commands(self, ctx: click.Context) -> list[str]:
         return sorted(super().list_commands(ctx))
+
+    def invoke(self, ctx: click.Context) -> Any:
+        """Reports a `StoreError` as a CLI error, not a traceback."""
+        try:
+            return super().invoke(ctx)
+        except StoreError as e:
+            typer.echo(f"[colab] Error: {e}", err=True)
+            raise typer.Exit(1)
 
 
 app = typer.Typer(
@@ -59,7 +68,13 @@ def callback(
         Optional[str],
         typer.Option(
             "--config",
-            help="Path to session state file (~/.config/colab-cli/sessions.json)",
+            help=(
+                "Path to session state file"
+                " (~/.config/colab-cli/sessions.json); attached sessions and"
+                " their tokens are kept beside it in <stem>.attached.json,"
+                " where <stem> is the path without its extension;"
+                " *.attached.json paths are refused"
+            ),
         ),
     ] = None,
     logtostderr: Annotated[
@@ -84,6 +99,7 @@ def callback(
     state.config_path = config
     state.logtostderr = logtostderr
     state.auth_provider = auth
+    resolve_store_paths(config)
     setup_logging(logtostderr)
 
     # Daily fetch + cached banner on every invocation.

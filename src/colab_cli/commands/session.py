@@ -29,7 +29,7 @@ from colab_cli.client import (
     shape_display_label,
 )
 from colab_cli.utils import get_status_code
-from colab_cli.state import SessionState
+from colab_cli.state import DuplicateSessionError, SessionState
 from colab_cli.runtime import ColabRuntime
 
 
@@ -356,7 +356,15 @@ def stop(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
-    s = state.get_session(name, ignore_missing_session=True)
+    try:
+        s = state.get_session(name, ignore_missing_session=True)
+    except DuplicateSessionError:
+        state.store.remove_attached(name)
+        typer.echo(
+            f"[colab] Forgot the attached record for '{name}';"
+            " its runtime keeps running."
+        )
+        return
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.")
         return

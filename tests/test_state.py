@@ -12,16 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import multiprocessing
 import os
 import pytest
+import stat
 import tempfile
 import threading
 from datetime import datetime, timezone
 
 import filelock
 
-from colab_cli.state import StateStore, SessionState, SettingsStore, Settings
+from colab_cli.state import (
+    AttachedStorePathError,
+    DuplicateSessionError,
+    StateStore,
+    SessionState,
+    SettingsStore,
+    Settings,
+)
 
 
 @pytest.fixture
@@ -344,3 +353,242 @@ def test_state_store_multiprocess_concurrency(temp_config):
     assert p1.exitcode == 0
     assert p2.exitcode == 0
     assert len(StateStore(temp_config).list()) == 80
+
+
+OWNER_ONLY = 0o600
+
+
+def _session_state(name, attached=False):
+    return SessionState(
+        name=name, token="t", url="u", endpoint=f"{name}-ep", attached=attached
+    )
+
+
+def _record(name, **fields):
+    return dict(name=name, token="t", url="u", endpoint=f"{name}-ep", **fields)
+
+
+@pytest.mark.parametrize(
+    "config, sessions_file, attached_file",
+    [
+        (
+            None,
+            ".config/colab-cli/sessions.json",
+            ".config/colab-cli/sessions.attached.json",
+        ),
+        ("custom.json", "custom.json", "custom.attached.json"),
+    ],
+    ids=["default", "config-file"],
+)
+def test_attached_record_goes_to_its_own_file(
+    tmp_path, monkeypatch, config, sessions_file, attached_file
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".config/colab-cli").mkdir(parents=True)
+    store = StateStore(str(tmp_path / config) if config else None)
+
+    store.add(_session_state("att", attached=True))
+
+    assert not (tmp_path / sessions_file).exists()
+    assert (tmp_path / attached_file).exists()
+    assert store.get("att").attached is True
+
+
+def test_store_reads_and_lists_both_files(tmp_path):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+    store.add(_session_state("cli"))
+    store.add(_session_state("att", attached=True))
+
+    assert '"cli"' in path.read_text()
+    assert '"att"' not in path.read_text()
+    attached_text = (tmp_path / "sessions.attached.json").read_text()
+    assert '"att"' in attached_text
+    assert '"cli"' not in attached_text
+    reloaded = StateStore(str(path))
+    assert reloaded.get("cli").attached is False
+    assert reloaded.get("att").attached is True
+    assert sorted(reloaded.list()) == ["att", "cli"]
+
+
+def test_remove_deletes_the_record_from_either_file(tmp_path):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+    store.add(_session_state("cli"))
+    store.add(_session_state("att", attached=True))
+    reloaded = StateStore(str(path))
+
+    reloaded.remove("att")
+    reloaded.remove("cli")
+
+    assert StateStore(str(path)).list() == {}
+
+
+def test_attached_add_leaves_sessions_file_byte_identical(tmp_path):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+    store.add(_session_state("cli"))
+    before = path.read_bytes()
+
+    store.add(_session_state("att", attached=True))
+
+    assert path.read_bytes() == before
+
+
+def test_attached_remove_leaves_sessions_file_byte_identical(tmp_path):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+    store.add(_session_state("cli"))
+    store.add(_session_state("att", attached=True))
+    before = path.read_bytes()
+
+    store.remove("att")
+
+    assert path.read_bytes() == before
+
+
+def test_remove_attached_keeps_the_cli_record(tmp_path):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+    store.add(_session_state("dup"))
+    store.add(_session_state("dup", attached=True))
+    before = path.read_bytes()
+
+    store.remove_attached("dup")
+
+    assert '"dup"' not in (tmp_path / "sessions.attached.json").read_text()
+    assert store.get("dup").attached is False
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "stored_flag", [{}, {"attached": False}], ids=["no-flag", "flag-false"]
+)
+def test_refreshed_attached_record_stays_attached(tmp_path, stored_flag):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+    store.add(_session_state("cli"))
+    before = path.read_bytes()
+    attached_file = tmp_path / "sessions.attached.json"
+    attached_file.write_text(json.dumps({"att": _record("att", **stored_flag)}))
+
+    store.add(store.get("att"))
+
+    assert path.read_bytes() == before
+    assert sorted(store.list()) == ["att", "cli"]
+    assert store.get("att").attached is True
+
+
+def test_refreshed_cli_record_stays_out_of_attached_file(tmp_path):
+    path = tmp_path / "sessions.json"
+    path.write_text(json.dumps({"cli": _record("cli", attached=True)}))
+    store = StateStore(str(path))
+
+    store.add(store.get("cli"))
+
+    assert not (tmp_path / "sessions.attached.json").exists()
+    assert store.get("cli").attached is False
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["fresh", "was-0644"])
+def test_attached_file_and_lock_are_private(tmp_path, existing):
+    attached = tmp_path / "sessions.attached.json"
+    lock = tmp_path / "sessions.attached.json.lock"
+    old_umask = os.umask(0o022)
+    try:
+        if existing:
+            for p in (attached, lock):
+                p.touch()
+                os.chmod(p, 0o644)
+        store = StateStore(str(tmp_path / "sessions.json"))
+        store.add(_session_state("att", attached=True))
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(attached.stat().st_mode) == OWNER_ONLY
+    assert stat.S_IMODE(lock.stat().st_mode) == OWNER_ONLY
+
+
+@pytest.mark.parametrize(
+    "read",
+    [lambda store: store.get("dup"), lambda store: store.list()],
+    ids=["get", "list"],
+)
+def test_name_in_both_files_raises_with_recovery_command(tmp_path, read):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    store.add(_session_state("dup"))
+    store.add(_session_state("dup", attached=True))
+
+    with pytest.raises(DuplicateSessionError) as exc:
+        read(store)
+
+    assert "colab stop -s dup" in str(exc.value)
+
+
+def test_get_of_another_name_ignores_the_duplicate(tmp_path):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    store.add(_session_state("dup"))
+    store.add(_session_state("dup", attached=True))
+    store.add(_session_state("other"))
+
+    other = store.get("other")
+
+    assert other.endpoint == "other-ep"
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["sessions.attached.json", "Sessions.ATTACHED.json", "link.json"],
+    ids=["attached-file", "other-case", "symlink"],
+)
+def test_store_refuses_an_attached_file_as_sessions_file(tmp_path, name):
+    attached = tmp_path / "sessions.attached.json"
+    attached.write_text(json.dumps({"att": _record("att", attached=True)}))
+    before = attached.read_bytes()
+    path = tmp_path / name
+    if name == "link.json":
+        path.symlink_to(attached)
+
+    with pytest.raises(AttachedStorePathError):
+        StateStore(str(path))
+
+    assert attached.read_bytes() == before
+
+
+def test_store_refuses_an_attached_path_linked_to_another_file(tmp_path):
+    sessions = tmp_path / "sessions.json"
+    sessions.write_text(json.dumps({"cli": _record("cli")}))
+    before = sessions.read_bytes()
+    (tmp_path / "agent.attached.json").symlink_to(sessions)
+
+    with pytest.raises(AttachedStorePathError):
+        StateStore(str(tmp_path / "agent.json"))
+
+    assert sessions.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "config, link, target",
+    [
+        ("sessions.json", "sessions.json", "real-sessions.json"),
+        ("agent.json", "agent.attached.json", "other.attached.json"),
+    ],
+    ids=["sessions-file", "attached-file"],
+)
+def test_store_accepts_links_to_files_of_the_same_kind(tmp_path, config, link, target):
+    (tmp_path / target).write_text("{}")
+    (tmp_path / link).symlink_to(tmp_path / target)
+    store = StateStore(str(tmp_path / config))
+
+    store.add(_session_state("att", attached=True))
+
+    assert store.get("att").attached is True
+
+
+def test_store_refuses_a_dangling_attached_link(tmp_path):
+    (tmp_path / "a.attached.json").symlink_to(tmp_path / "nowhere.json")
+
+    with pytest.raises(AttachedStorePathError):
+        StateStore(str(tmp_path / "a.json"))
+
+    assert [p.name for p in tmp_path.iterdir()] == ["a.attached.json"]

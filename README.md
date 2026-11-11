@@ -107,7 +107,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 ### Global Options
 * `--auth {oauth2,adc}` — Authentication strategy for the Colab API (default: `adc`).
 * `-c, --client-oauth-config PATH` — Path to public OAuth client credentials configuration (default: `~/.colab-cli-oauth-config.json`).
-* `--config PATH` — Path to local session metadata storage (default: `~/.config/colab-cli/sessions.json`).
+* `--config PATH` — Path to local session metadata storage (default: `~/.config/colab-cli/sessions.json`). Sessions attached to a runtime the CLI did not create, and their tokens, are kept beside it in `<stem>.attached.json`, where `<stem>` is the path without its extension (`sessions.attached.json` by default); a path ending in `.attached.json` is refused.
 * `--logtostderr` — Direct debug logging output to stderr.
 
 ---
@@ -145,7 +145,7 @@ colab stop -s analysis
 * **Machine shape:** Use `--high-mem` with `colab new`, `colab run`, or `colab ssh` (when auto-creating a runtime) to request a high-RAM machine shape. Requires Colab Pro or Pro+ entitlement for supported accelerators (CPU, T4, A100, etc.). L4 and TPU runtimes ignore this flag because they only offer one shape. Machine shape is shown in `colab sessions` and `colab status`.
 * **TTY Requirements:** `colab repl` and interactive `colab ssh` expect a local TTY. When running inside automated scripts or pipelines, pipe stdin to `colab repl` (e.g., `echo "print(1)" | colab repl`) to trigger its non-interactive mode, or run one-shot shell commands with `colab ssh -s NAME -- CMD` (e.g., `colab ssh -s NAME -- ls /content`); pass untrusted values as separate arguments (after `--` where the program accepts it), since a single argument is a remote shell line. `colab ssh` needs a local `ssh` client and key, so where it can't work (no client or key, a tool not on the minimal ssh environment's `PATH`, or the runtime's concurrent SSH connections in use), pipe the commands to `colab exec` with IPython's `!` prefix (e.g., `echo '!ls /content' | colab exec`); each `!` line is its own shell and IPython expands `{expr}` and `$name` in it, so start a multi-line script with `%%bash` and keep untrusted text out of `!` lines.
 * **Transparent Code Execution:** When calling `colab exec -f file.py`, the CLI reads the file locally and transmits its content to the remote kernel. You do not need to manually upload files before execution.
-* **Storage & State Paths:** Session tokens and metadata are stored at `~/.config/colab-cli/sessions.json`. Global CLI settings are located at `~/.config/colab-cli/settings.json`. These can be customized or isolated via the global `--config` flag.
+* **Storage & State Paths:** Session tokens and metadata are stored at `~/.config/colab-cli/sessions.json`; sessions attached to a runtime the CLI did not create, and their tokens, are kept beside it in `sessions.attached.json` (`<stem>.attached.json` for `--config <stem>.json`). Global CLI settings are located at `~/.config/colab-cli/settings.json`. These can be customized or isolated via the global `--config` flag.
 
 ### Ephemeral Accelerator Jobs
 

@@ -11,7 +11,7 @@
   - `colab.research.google.com` (session backend / `tun/m/...`): accepts the `userinfo.email` scope. Handles assign, unassign, CCU info, and the contents API.
 - **Runtime**: `ColabRuntime` wraps `jupyter-kernel-client` for execution.
 - **State**:
-  - `StateStore` persists session metadata in `~/.config/colab-cli/sessions.json`.
+  - `StateStore` persists session metadata in `~/.config/colab-cli/sessions.json`; attached sessions (a runtime the CLI did not create) and their tokens go to the derived `<stem>.attached.json` beside it, and the file a record is read from decides its `attached` flag.
   - Persistent settings are in `~/.config/colab-cli/settings.json`.
 - **History**: `HistoryLogger` records structured events in `~/.config/colab-cli/history/*.jsonl`.
 
@@ -47,7 +47,7 @@ The package version is derived from the git tag via `hatch-vcs` (see `pyproject.
 1. **Verify a clean, current `main`**: `git fetch origin && git checkout main && git pull --ff-only origin main`. Confirm `git status` is clean. If `main` has diverged or there are unmerged feature branches the user expects in the release, stop and ask.
 2. **Identify unreleased commits**: Find the last release tag with `git describe --tags --abbrev=0`, then list commits since then with `git log <last-tag>..HEAD --oneline`. These are what the new changelog section must cover. Cross-reference each commit's PR number (the `(#NN)` suffix in the merge commit subject) — every entry in the changelog should cite at least one PR.
 3. **Infer the next version (semver)**: Categorize each commit using the Keep-a-Changelog buckets already present in `CHANGELOG.md` (`Added`, `Changed`, `Fixed`, `Removed`, `Deprecated`, `Security`). Pick the bump:
-   - **Major** (`X.0.0`): any breaking change to the CLI surface, flag semantics, on-disk state schema (`sessions.json` / `settings.json`), or persisted token format.
+   - **Major** (`X.0.0`): any breaking change to the CLI surface, flag semantics, on-disk state schema (`sessions.json` / `<stem>.attached.json` / `settings.json`), or persisted token format.
    - **Minor** (`0.X.0`): at least one `Added` entry (new subcommand, new flag, new capability) with no breaking changes.
    - **Patch** (`0.0.X`): only `Fixed`, `Changed`, `Removed` (non-breaking cleanup), `Deprecated`, or `Security` entries.
    Confirm the inferred version with the user before proceeding — never tag without that confirmation, even when the bump seems obvious.
