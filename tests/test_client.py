@@ -24,10 +24,13 @@ from colab_cli.client import (
     Assignment,
     Client,
     ColabRequestError,
+    ConnectionInfo,
     GetAssignmentResponse,
+    Operation,
     PostAssignmentResponse,
     Prod,
     Shape,
+    Status,
     TooManyAssignmentsError,
     Variant,
     resolve_assign_shape,
@@ -303,7 +306,6 @@ def test_client_assign_existing(client, mock_session):
 
 
 def test_client_list_assignments(client, mock_session):
-    # Mock list_assignments (GET)
     resp = MagicMock()
     resp.ok = True
     resp.text = ")]}'\n" + json.dumps(
@@ -326,12 +328,45 @@ def test_client_list_assignments(client, mock_session):
 
     mock_session.request.return_value = resp
 
-    # This should fail if list_assignments is not implemented
     res = client.list_assignments()
 
     assert len(res) == 1
     assert res[0].endpoint == "e1"
     assert "tun/m/assignments" in mock_session.request.call_args.args[1]
+
+
+def test_public_client_list_assignments(mock_session):
+    public_client = Client(Prod(), mock_session, use_public_api=True)
+    resp = MagicMock()
+    resp.ok = True
+    resp.text = json.dumps(
+        {
+            "runtimes": [
+                {
+                    "name": "runtimes/r1",
+                    "connectionInfo": {
+                        "expireTime": "2026-09-24T19:00:00Z",
+                        "endpoint": "e1",
+                        "url": "u1",
+                        "token": "t1",
+                    },
+                    "runtimeSpec": {
+                        "variant": "VARIANT_CPU",
+                        "accelerator": "NONE",
+                        "shape": "SHAPE_STANDARD",
+                    },
+                }
+            ]
+        }
+    )
+
+    mock_session.request.return_value = resp
+
+    res = public_client.list_assignments()
+
+    assert len(res) == 1
+    assert res[0].endpoint == "e1"
+    assert "/v1beta/runtimes" in mock_session.request.call_args.args[1]
 
 
 def test_client_assign_url_includes_shape_hm(client, mock_session):
@@ -410,3 +445,65 @@ def test_client_assign_url_omits_shape_for_standard(client, mock_session):
 )
 def test_resolve_assign_shape(accelerator, high_mem, expected):
     assert resolve_assign_shape(accelerator, high_mem=high_mem) == expected
+
+
+def test_public_models_connection_info_and_operation():
+    info = ConnectionInfo(
+        expireTime="2026-09-24T19:00:00Z", url="https://u1", token="t1"
+    )
+    assert info.endpoint is None
+
+    op = Operation(
+        name="operations/op1",
+        done=True,
+        error=Status(
+            code=9, message="quota exceeded", details=[{"reason": "NO_RUNTIMES"}]
+        ),
+    )
+    assert op.name == "operations/op1"
+    assert op.done is True
+    assert op.error.code == 9
+    assert op.error.details[0]["reason"] == "NO_RUNTIMES"
+
+
+def test_check_api_access_caches_results(tmp_path, mock_session):
+    from colab_cli.state import SettingsStore
+
+    store = SettingsStore(str(tmp_path / "settings.json"))
+    c = Client(Prod(), mock_session, settings_store=store)
+
+    pub_resp = MagicMock(ok=False, status_code=403, reason="Forbidden", text="denied")
+    tun_resp = MagicMock(ok=True, text=")]}'\n" + json.dumps({"assignments": []}))
+    mock_session.request.side_effect = [pub_resp, tun_resp]
+
+    pub_ok, tun_ok = c.check_api_access()
+
+    assert pub_ok is False
+    assert tun_ok is True
+    saved = store.load()
+    assert saved.public_api_supported is False
+    assert saved.tunnel_api_supported is True
+
+
+def test_issue_request_auth_error_uses_cached_support_for_hint(tmp_path, mock_session):
+    from colab_cli.state import Settings, SettingsStore
+
+    store = SettingsStore(str(tmp_path / "settings.json"))
+    store.save(Settings(public_api_supported=True, tunnel_api_supported=True))
+    c = Client(Prod(), mock_session, settings_store=store)
+
+    resp = MagicMock(ok=False, status_code=403, reason="Forbidden", text="denied")
+    mock_session.request.return_value = resp
+
+    with pytest.raises(ColabRequestError) as exc:
+        c._issue_request("https://colaboratory.googleapis.com/v1beta/runtimes")
+
+    assert "--no-public-api" in str(exc.value)
+    assert store.load().public_api_supported is False
+
+    store.save(Settings(public_api_supported=True, tunnel_api_supported=True))
+    with pytest.raises(ColabRequestError) as exc2:
+        c._issue_request("https://colab.research.google.com/tun/m/assignments")
+
+    assert "--public-api" in str(exc2.value)
+    assert store.load().tunnel_api_supported is False

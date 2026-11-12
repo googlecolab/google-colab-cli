@@ -686,3 +686,35 @@ def test_cli_new_412_without_accelerator_shows_friendly_error(mock_client, mock_
     assert result.exit_code != 0
     assert "precondition" in result.output.lower()
     mock_store.add.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "args,env,expected",
+    [
+        (["sessions"], {}, False),
+        (["--public-api", "sessions"], {}, True),
+        (["--no-public-api", "sessions"], {}, False),
+        (["sessions"], {"COLAB_CLI_PUBLIC_API": "1"}, True),
+        (["sessions"], {"COLAB_CLI_PUBLIC_API": "0"}, False),
+    ],
+)
+def test_cli_public_api_flag_and_env(args, env, expected):
+    from colab_cli import cli
+
+    result = runner.invoke(app, args, env=env)
+    assert result.exit_code == 0
+    assert cli.state.use_public_api is expected
+
+
+def test_cli_test_public_api_hidden_and_reports_status(mock_common_state):
+    help_res = runner.invoke(app, ["--help"])
+    assert "test-public-api" not in help_res.output
+
+    sub_help = runner.invoke(app, ["test-public-api", "--help"])
+    assert sub_help.exit_code == 0
+
+    mock_common_state.client.check_api_access.return_value = (False, True)
+    res = runner.invoke(app, ["test-public-api"])
+    assert res.exit_code == 0
+    assert "Public API" in res.output
+    assert "Tunnel API" in res.output

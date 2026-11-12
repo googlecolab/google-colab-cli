@@ -4,6 +4,7 @@ log:
 2026-11-04: `colab drivemount` now opens the Drive consent URL in the system browser (`utils.open_url_in_browser`, also used by `colab pay`/`colab url --open`) instead of only printing it. The URL is still printed first, and a missing browser opener (SSH, containers, CI) is treated as normal: the flow keeps waiting for the user exactly as before. The prompt moved into `commands/automation.py::show_drive_auth_url` so it can be unit-tested.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to inspect the active Linux `SecretService` collection via `secretstorage` before `get_password`/`set_password`, warning immediately when the keyring is locked so users know why the CLI is waiting on an unlock prompt (and suggesting `--auth=adc`).
 2026-10-29: Session history files are created readable only by the owner (0600), and existing ones are tightened to 0600 whenever the history logger starts.
+2026-10-22: Added hidden `colab test-public-api` subcommand and `Client.check_api_access()` to probe both `colaboratory.googleapis.com/v1beta/runtimes` and `colab.research.google.com/tun/m/assignments`, caching `public_api_supported` and `tunnel_api_supported` in `Settings` for targeted HTTP 401/403 error hints.
 2026-10-21: Migrated OAuth2 token persistence in `auth.py` from `~/.config/colab-cli/token.json` to the OS native password storage via the `keyring` library (`KEYRING_SERVICE_NAME = "google-colab-cli"`, `KEYRING_USERNAME = "oauth_token"`). When the keyring is empty, locked, or inaccessible, `_run_remote_flow` is invoked; keyring read/write failures print a warning to stderr without failing the command. An existing `~/.config/colab-cli/token.json` (`LEGACY_TOKEN_PATH`) is used when the keyring has no token, copied into the keyring, and deleted only after the keyring write succeeds; it is also deleted when the keyring already holds a token.
 2026-09-25: Cleaned up references to keep-alive background daemon and pre-flight pings. VM liveness is automatically maintained by the Colab backend based on active kernel activity.
 2026-08-10: Added `colab usage` for account-level compute-unit rate/balance via `GET /tun/m/ccu-info` on the session backend (same bearer token as `colab new`).
@@ -75,8 +76,9 @@ allowing the core `Client` to remain authentication-agnostic — it only sees a
 ### Required Scopes
 
 The CLI talks to the Colab session backend at `colab.research.google.com`
-for assignment, unassignment, CCU info, and the contents API. The `userinfo.email` scope is
-sufficient for this host.
+for assignment, unassignment, CCU info, and the contents API, and to the
+public Colab API at `colaboratory.googleapis.com`. The `userinfo.email` scope is
+sufficient for the session backend.
 
 How each provider supplies the scope:
 
@@ -290,6 +292,14 @@ How each provider supplies the scope:
     -   If reading from resources fails (e.g. during development when not
         installed), it falls back to reading the files from the project root.
     -   Prints the content to stdout.
+
+### 11. Public & Tunnel API Probe (`colab test-public-api`)
+
+-   **Action**: Hidden diagnostic command (`hidden=True`, suppressed from auto-update banner) that runs `state.client.check_api_access()`.
+-   **Implementation**:
+    -   Issues read-only GET probes to `https://colaboratory.googleapis.com/v1beta/runtimes` and `https://colab.research.google.com/tun/m/assignments`.
+    -   Persists `public_api_supported` and `tunnel_api_supported` booleans in `~/.config/colab-cli/settings.json` and prints `OK` or `FAILED` for each backend.
+    -   When `Client._issue_request` receives HTTP 401/403, it updates the failed backend's cached flag and appends a targeted remediation hint (`--no-public-api` or `--public-api`) if the alternate backend is cached as supported.
 
 ## Implementation Details
 

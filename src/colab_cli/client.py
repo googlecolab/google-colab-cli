@@ -47,12 +47,14 @@ COLAB_XSRF_TOKEN_HEADER = {"key": "X-Goog-Colab-Token", "value": ""}
 class ColabEnvironment(abc.ABC):
     domain: str
     api: str
+    public_api: str = "https://colaboratory.googleapis.com"
 
 
 @dataclass
 class Prod(ColabEnvironment):
     domain: str = "https://colab.research.google.com"
     api: str = "https://colab.pa.googleapis.com"
+    public_api: str = "https://colaboratory.googleapis.com"
 
 
 def uuid_to_web_safe_base64(uuid_val: uuid.UUID) -> str:
@@ -145,6 +147,57 @@ class ListedAssignments(BaseModel):
     assignments: List[ListedAssignment]
 
 
+class PublicVariant(str, Enum):
+    VARIANT_UNSPECIFIED = "VARIANT_UNSPECIFIED"
+    VARIANT_CPU = "VARIANT_CPU"
+    VARIANT_GPU = "VARIANT_GPU"
+    VARIANT_TPU = "VARIANT_TPU"
+
+
+class PublicShape(str, Enum):
+    SHAPE_UNSPECIFIED = "SHAPE_UNSPECIFIED"
+    SHAPE_STANDARD = "SHAPE_STANDARD"
+    SHAPE_HIGHMEM = "SHAPE_HIGHMEM"
+
+
+class ConnectionInfo(BaseModel):
+    expire_time: str = Field(..., alias="expireTime")
+    endpoint: Optional[str] = None
+    url: str
+    token: str
+
+
+class RuntimeSpecKey(BaseModel):
+    variant: PublicVariant
+    accelerator: str
+    shape: PublicShape
+
+
+class Runtime(BaseModel):
+    name: str
+    version: Optional[str] = None
+    connection_info: ConnectionInfo = Field(..., alias="connectionInfo")
+    runtime_spec: RuntimeSpecKey = Field(..., alias="runtimeSpec")
+
+
+class ListRuntimesResponse(BaseModel):
+    runtimes: Optional[List[Runtime]] = None
+
+
+class Status(BaseModel):
+    code: Optional[int] = None
+    message: Optional[str] = None
+    details: Optional[List[Dict]] = None
+
+
+class Operation(BaseModel):
+    name: Optional[str] = None
+    done: Optional[bool] = None
+    metadata: Optional[Dict] = None
+    error: Optional[Status] = None
+    response: Optional[Dict] = None
+
+
 class PostAssignmentResponse(BaseModel):
     accelerator: Accelerator
     endpoint: str
@@ -185,11 +238,38 @@ class TooManyAssignmentsError(Exception):
 
 
 class Client:
-    def __init__(self, env: ColabEnvironment, session, logger=None):
+    def __init__(
+        self,
+        env: ColabEnvironment,
+        session,
+        logger=None,
+        use_public_api: bool = False,
+        settings_store=None,
+    ):
         self.colab_domain = env.domain
         self.colab_api_domain = env.api
+        self.colab_public_api = env.public_api
         self.session = session
         self.logger = logger or logging.getLogger(__name__)
+        self.use_public_api = use_public_api
+        self.settings_store = settings_store
+
+    def _auth_error_hint(self, endpoint: str, status_code: int) -> str:
+        if status_code not in (401, 403) or self.settings_store is None:
+            return ""
+        host = urlparse(endpoint).hostname
+        settings = self.settings_store.load()
+        if host == urlparse(self.colab_public_api).hostname:
+            settings.public_api_supported = False
+            self.settings_store.save(settings)
+            if settings.tunnel_api_supported:
+                return " (Public API access denied; pass --no-public-api to use the tunnel API)"
+        elif host == urlparse(self.colab_domain).hostname:
+            settings.tunnel_api_supported = False
+            self.settings_store.save(settings)
+            if settings.public_api_supported:
+                return " (Tunnel API access denied; pass --public-api to use the Public API)"
+        return " (Run 'colab test-public-api' or 'colab whoami' to check auth access)"
 
     def _strip_xssi_prefix(self, v: str) -> str:
         if not v.startswith(XSSI_PREFIX):
@@ -235,8 +315,9 @@ class Client:
         self.logger.debug(f"Response Headers: {response.headers}")
         self.logger.debug(f"Response Body: {response.text}")
         if not response.ok:
+            hint = self._auth_error_hint(endpoint, response.status_code)
             raise ColabRequestError(
-                f"Failed to issue request {method} {endpoint}: {response.reason}",
+                f"Failed to issue request {method} {endpoint}: {response.reason}{hint}",
                 request=response.request,
                 response=response,
                 response_body=response.text,
@@ -258,10 +339,86 @@ class Client:
         ccu = self._issue_request(url, schema=CcuInfo)
         return consumption_user_info_from_tunnel(ccu)
 
+    def check_api_access(self) -> tuple[bool, bool]:
+        try:
+            self._list_assignments_public()
+            pub_ok = True
+        except Exception:
+            pub_ok = False
+        try:
+            self._list_assignments_tunnel()
+            tun_ok = True
+        except Exception:
+            tun_ok = False
+        if self.settings_store is not None:
+            settings = self.settings_store.load()
+            settings.public_api_supported = pub_ok
+            settings.tunnel_api_supported = tun_ok
+            self.settings_store.save(settings)
+        return pub_ok, tun_ok
+
     def list_assignments(self) -> List[ListedAssignment]:
+        if self.use_public_api:
+            return self._list_assignments_public()
+        return self._list_assignments_tunnel()
+
+    def _list_assignments_tunnel(self) -> List[ListedAssignment]:
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/assignments")
-        assignments = self._issue_request(url, schema=ListedAssignments)
-        return assignments.assignments
+        resp = self._issue_request(url, schema=ListedAssignments)
+        return resp.assignments if resp else []
+
+    def _list_assignments_public(self) -> List[ListedAssignment]:
+        url = urljoin(self.colab_public_api, "/v1beta/runtimes")
+        resp = self._issue_request(url, schema=ListRuntimesResponse)
+        if not resp or not resp.runtimes:
+            return []
+
+        assignments = []
+        for r in resp.runtimes:
+            if r.runtime_spec.shape == PublicShape.SHAPE_HIGHMEM:
+                mapped_shape = Shape.HIGH_RAM
+            else:
+                mapped_shape = Shape.STANDARD
+
+            if r.runtime_spec.variant == PublicVariant.VARIANT_GPU:
+                mapped_variant = AssignmentVariant.GPU
+            elif r.runtime_spec.variant == PublicVariant.VARIANT_TPU:
+                mapped_variant = AssignmentVariant.TPU
+            else:
+                mapped_variant = AssignmentVariant.DEFAULT
+
+            try:
+                mapped_accelerator = Accelerator(r.runtime_spec.accelerator)
+            except ValueError:
+                mapped_accelerator = Accelerator.NONE
+
+            expires_in = 3600
+            try:
+                dt = datetime.fromisoformat(
+                    r.connection_info.expire_time.replace("Z", "+00:00")
+                )
+                now = datetime.now(timezone.utc)
+                expires_in = max(0, int((dt - now).total_seconds()))
+            except Exception:
+                pass
+
+            proxy_info = RuntimeProxyInfo(
+                token=r.connection_info.token,
+                tokenExpiresInSeconds=expires_in,
+                url=r.connection_info.url,
+            )
+
+            assignments.append(
+                ListedAssignment(
+                    accelerator=mapped_accelerator,
+                    endpoint=r.connection_info.endpoint
+                    or r.name.removeprefix("runtimes/"),
+                    variant=mapped_variant,
+                    machineShape=mapped_shape,
+                    runtimeProxyInfo=proxy_info,
+                )
+            )
+        return assignments
 
     def unassign(self, endpoint: str):
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/unassign/{endpoint}")
