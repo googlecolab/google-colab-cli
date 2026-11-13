@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: Documented `--auth {oauth2,adc}` (default `oauth2`) and required ADC `gcloud` scopes under Global Flags.
 2026-11-04: `--gpu` and `--tpu` now reject unknown values instead of silently selecting `A100` (GPU) or `v6e1` (TPU). `resolve_runtime_options()` uses the new `GPU_ACCELERATORS` / `TPU_ACCELERATORS` maps and raises a `typer.BadParameter` that names the flag and the supported list; `--help` is generated from the same maps so it cannot drift. Validation runs before any assignment request, in both `colab new` and `colab run`.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to check if the active Linux `SecretService` keyring collection is locked via `secretstorage` before reading or writing OAuth tokens, logging and printing an immediate warning with the collection label, timeout, and `--auth=adc` hint while still attempting the keyring operation.
 2026-10-29: Removed the `colab console` subcommand; the long-lived connections that skip mid-session token refresh are now `repl` and `ssh`.
@@ -131,8 +132,9 @@ The runtime proxy token (`runtimeProxyInfo.token`) authenticates every request t
 - **VM Resource Usage**: Add real-time resource usage (CPU/RAM/GPU) to the `status` output by executing a diagnostic snippet on the VM (distinct from account-level CU info, which is available via `colab usage`).
 
 ## Implementation Details
-- **Authentication**: Uses `google-auth-oauthlib` to perform a local server OAuth flow.
+- **Authentication**: Uses `google-auth-oauthlib` (`InstalledAppFlow` remote copy-paste flow, default `--auth oauth2`) or Application Default Credentials (`--auth adc`).
 - **Global Flags**:
+    - `--auth`: Authentication strategy (`oauth2` or `adc`, default: `oauth2`). User ADC credentials require `gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`.
     - `-c`, `--client-oauth-config`: Path to the client secrets JSON file (default: `~/.colab-cli-oauth-config.json`).
     - `--config`: Path to the session state JSON file (default: `~/.config/colab-cli/sessions.json`).
 - **Token Storage**: Credentials are persisted to the OS native keyring via the `keyring` library (`service_name="google-colab-cli"`, `username="oauth_token"`) after the initial flow. If the keyring is inaccessible or locked, `_run_remote_flow` is invoked for the current run and a warning is printed to stderr. A legacy `~/.config/colab-cli/token.json` is migrated into the keyring on first use and deleted after a successful keyring write, or immediately if the keyring already holds a token.

@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-13: Updated scope documentation to clarify that both `colaboratory` and `userinfo.email` are required by `colab.research.google.com`, and standardized the `gcloud auth application-default login --scopes=...` command snippet.
 2026-11-07: Optimized `_get_adc_credentials` in `auth.py` to stub `google.auth._cloud_sdk.get_project_id` around `google.auth.default()`. When ADC user credentials lack a `quota_project_id`, `google-auth` otherwise spawns `gcloud config get-value project` on every CLI invocation to resolve a `project_id` that `_get_adc_credentials` immediately discards (`_`).
 2026-11-04: `colab drivemount` now opens the Drive consent URL in the system browser (`utils.open_url_in_browser`, also used by `colab pay`/`colab url --open`) instead of only printing it. The URL is still printed first, and a missing browser opener (SSH, containers, CI) is treated as normal: the flow keeps waiting for the user exactly as before. The prompt moved into `commands/automation.py::show_drive_auth_url` so it can be unit-tested.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to inspect the active Linux `SecretService` collection via `secretstorage` before `get_password`/`set_password`, warning immediately when the keyring is locked so users know why the CLI is waiting on an unlock prompt (and suggesting `--auth=adc`).
@@ -75,15 +76,15 @@ allowing the core `Client` to remain authentication-agnostic — it only sees a
 ### Required Scopes
 
 The CLI talks to the Colab session backend at `colab.research.google.com`
-for assignment, unassignment, CCU info, and the contents API. The `userinfo.email` scope is
-sufficient for this host.
+for assignment, unassignment, CCU info, and the contents API. Both the
+`colaboratory` and `userinfo.email` scopes are required for this host.
 
-How each provider supplies the scope:
+How each provider supplies the scopes:
 
--   **`oauth2`**: `PUBLIC_SCOPES` already includes `colaboratory`, so the
-    InstalledAppFlow consent screen lists it. Existing cached tokens in the
-    keyring that were minted before a scope change must be cleared to trigger a
-    fresh consent flow.
+-   **`oauth2`**: `PUBLIC_SCOPES` includes both `colaboratory` and
+    `userinfo.email`, so the InstalledAppFlow consent screen lists them.
+    Existing cached tokens in the keyring that were minted before a scope
+    change must be cleared to trigger a fresh consent flow.
 -   **`adc`**: `google.auth.default(scopes=PUBLIC_SCOPES)` is called, and for
     credential subclasses that support `with_scopes` (service accounts,
     GCE/GKE metadata, impersonated) we re-apply via `creds.with_scopes(...)`.
@@ -91,20 +92,16 @@ How each provider supplies the scope:
     `scopes=` kwarg AND raise `NotImplementedError` on `with_scopes`; those
     users must explicitly re-authenticate:
 
-    ```
+    ```bash
     gcloud auth application-default login \
-        --scopes=openid,\
-    https://www.googleapis.com/auth/cloud-platform,\
-    https://www.googleapis.com/auth/userinfo.email,\
-    https://www.googleapis.com/auth/colaboratory
+        --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory
     ```
 
-    `userinfo.email` is required for the session backend at
-    `colab.research.google.com` (otherwise assign/unassign/sessions
-    return HTTP 401); `colaboratory` is retained for forward compatibility and
-    other Colab features; `openid` and `cloud-platform` are mandated by
-    `gcloud` itself (`gcloud auth application-default login` rejects scope
-    lists that omit `cloud-platform` with `Invalid value for [--scopes]`).
+    `colaboratory` and `userinfo.email` are required for the session backend at
+    `colab.research.google.com` (otherwise assign/unassign/sessions return HTTP
+    401); `openid` and `cloud-platform` are mandated by `gcloud` itself
+    (`gcloud auth application-default login` rejects scope lists that omit
+    `cloud-platform` with `Invalid value for [--scopes]`).
 
 ## Approach
 
