@@ -311,19 +311,24 @@ def _get_adc_credentials() -> Credentials:
     # while preserving the full ADC discovery chain.
     from unittest.mock import patch as _patch
     from google.auth import _cloud_sdk
+    from google.auth.exceptions import DefaultCredentialsError
 
-    with (
-        warnings.catch_warnings(),
-        _patch.object(_cloud_sdk, "get_project_id", return_value="colab-cli"),
-    ):
-        warnings.filterwarnings(
-            "ignore",
-            message=r"Your application has authenticated using end user credentials.*",
-            category=UserWarning,
-        )
-        creds, _ = google.auth.default(scopes=list(PUBLIC_SCOPES))
+    creds = None
+    try:
+        with (
+            warnings.catch_warnings(),
+            _patch.object(_cloud_sdk, "get_project_id", return_value="colab-cli"),
+        ):
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Your application has authenticated using end user credentials.*",
+                category=UserWarning,
+            )
+            creds, _ = google.auth.default(scopes=list(PUBLIC_SCOPES))
+    except DefaultCredentialsError as e:
+        logger.warning(f"Failed to obtain default credentials: {e}")
 
-    if not creds.valid:
+    if creds and not creds.valid:
         from google.auth import compute_engine
 
         if isinstance(creds, compute_engine.Credentials):
@@ -347,7 +352,7 @@ def _get_adc_credentials() -> Credentials:
             "https://www.googleapis.com/auth/colaboratory\n",
             err=True,
         )
-        exit(1)
+        sys.exit(1)
 
     # Some credential subclasses ignore the `scopes=` kwarg in `default()`
     # (e.g. user creds), so re-apply via `with_scopes` when supported.
