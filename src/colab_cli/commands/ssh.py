@@ -807,6 +807,17 @@ def ssh(
             ),
         ),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help=(
+                "Kill stale SSH sessions on the runtime before connecting. "
+                "Use when a previous `colab ssh` client died and left sshd "
+                "running, causing HTTP 429 on reconnect."
+            ),
+        ),
+    ] = False,
     ssh_mode: Annotated[
         str, typer.Option("--colab-internal-mode", hidden=True)
     ] = _DEFAULT_SSH_MODE,
@@ -834,6 +845,8 @@ def ssh(
     if cmd:
         with contextlib.redirect_stdout(sys.stderr):
             s = _resolve_session(session)
+        if force:
+            _killStaleSshd(s)
         _warn_accelerator_ignored(gpu, tpu, False, high_mem=high_mem)
         if rm:
             typer.echo("[colab] --rm ignored with -- CMD.", err=True)
@@ -841,13 +854,19 @@ def ssh(
     if proxy_mode and ssh_mode == _CMD_SSH_MODE:
         with contextlib.redirect_stdout(sys.stderr):
             s = _resolve_session(session)
+            if force:
+                _killStaleSshd(s)
         raise typer.Exit(code=_run_proxy_bridge(s, identity, rm, ssh_mode))
     if proxy_mode:
         s, created = _select_proxy_session(session, gpu, tpu, high_mem=high_mem)
+        if force:
+            _killStaleSshd(s)
         _warn_accelerator_ignored(gpu, tpu, created, high_mem=high_mem)
         raise typer.Exit(code=_run_proxy_bridge(s, identity, rm, ssh_mode))
 
     s, created = _select_interactive_session(session, gpu, tpu, high_mem=high_mem)
+    if force:
+        _killStaleSshd(s)
     _warn_accelerator_ignored(gpu, tpu, created, high_mem=high_mem)
     raise typer.Exit(code=_run_interactive_shell(s, identity, created, rm))
 
