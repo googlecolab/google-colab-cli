@@ -408,23 +408,22 @@ def _close_quietly(ws: websocket.WebSocket) -> None:
         pass
 
 
-def _killStaleSshd(session: "SessionState") -> None:
-    """Kills stale per-connection sshd processes on the runtime via the kernel."""
+def _killStaleSshd(session: SessionState) -> None:
+    """Kills existing SSH sessions on the runtime via the kernel."""
     from colab_cli.runtime import ColabRuntime
 
     typer.echo("[colab] --force: killing stale SSH sessions...", err=True)
+    rt = ColabRuntime(session.url, session.token, kernel_id=session.kernel_id)
     try:
-        rt = ColabRuntime(url=session.url, token=session.token)
         rt.execute_code(
-            "import subprocess; subprocess.run("
-            "['pkill', '-P', subprocess.check_output("
-            "['pgrep', '-o', '-x', 'sshd']).decode().strip()],"
-            " stderr=subprocess.DEVNULL)",
+            "import os; os.system('pkill -P $(pgrep -o -x sshd)')",
             timeout=10.0,
         )
-        time.sleep(2)
     except Exception as e:
         typer.echo(f"[colab] --force: failed to kill sshd: {e}", err=True)
+    finally:
+        rt.stop()
+    time.sleep(2)
 
 
 _DATA_OPCODES = (websocket.ABNF.OPCODE_BINARY, websocket.ABNF.OPCODE_TEXT)
@@ -812,9 +811,9 @@ def ssh(
         typer.Option(
             "--force",
             help=(
-                "Kill stale SSH sessions on the runtime before connecting. "
-                "Use when a previous `colab ssh` client died and left sshd "
-                "running, causing HTTP 429 on reconnect."
+                "Kill all existing SSH sessions on the runtime before "
+                "connecting. Use when a dead client causes HTTP 429 on "
+                "reconnect."
             ),
         ),
     ] = False,
