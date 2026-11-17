@@ -225,23 +225,27 @@ def test_explain_handshake_failure_mapping(status, body, must_contain):
 
 _FALLBACK_429 = (
     "Already-active SSH session (HTTP 429): another `colab ssh` is "
-    "connected to this runtime. Disconnect it and retry."
+    "connected to this runtime. Disconnect it and retry. "
+    "If the previous client died, retry with `--force`."
 )
 _LIMIT_BODY_PREFIX = b'{"error":"already-active-session","limit":'
 _LIMIT_1_TEXT = (
     "SSH session limit reached (HTTP 429): 1 of 1 SSH sessions in use on "
     "this runtime. Close another `colab ssh` or IDE connection to it and "
-    "retry. The limit depends on your Colab plan."
+    "retry. If the previous client died, retry with `--force`. "
+    "The limit depends on your Colab plan."
 )
 _LIMIT_2_TEXT = (
     "SSH session limit reached (HTTP 429): 2 of 2 SSH sessions in use on "
     "this runtime. Close another `colab ssh` or IDE connection to it and "
-    "retry. The limit depends on your Colab plan."
+    "retry. If the previous client died, retry with `--force`. "
+    "The limit depends on your Colab plan."
 )
 _LIMIT_4_TEXT = (
     "SSH session limit reached (HTTP 429): 4 of 4 SSH sessions in use on "
     "this runtime. Close another `colab ssh` or IDE connection to it and "
-    "retry. The limit depends on your Colab plan."
+    "retry. If the previous client died, retry with `--force`. "
+    "The limit depends on your Colab plan."
 )
 
 

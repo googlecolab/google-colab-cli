@@ -331,13 +331,15 @@ def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
             message = (
                 f"SSH session limit reached (HTTP 429): {limit} of {limit} "
                 "SSH sessions in use on this runtime. Close another "
-                "`colab ssh` or IDE connection to it and retry. The limit "
+                "`colab ssh` or IDE connection to it and retry. If the "
+                "previous client died, retry with `--force`. The limit "
                 "depends on your Colab plan."
             )
         case 429:
             message = (
                 "Already-active SSH session (HTTP 429): another `colab ssh` "
-                "is connected to this runtime. Disconnect it and retry."
+                "is connected to this runtime. Disconnect it and retry. "
+                "If the previous client died, retry with `--force`."
             )
         case 502:
             message = (
