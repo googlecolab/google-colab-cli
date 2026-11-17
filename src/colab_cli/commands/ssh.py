@@ -853,8 +853,6 @@ def ssh(
     if proxy_mode and ssh_mode == _CMD_SSH_MODE:
         with contextlib.redirect_stdout(sys.stderr):
             s = _resolve_session(session)
-            if force:
-                _killStaleSshd(s)
         raise typer.Exit(code=_run_proxy_bridge(s, identity, rm, ssh_mode))
     if proxy_mode:
         s, created = _select_proxy_session(session, gpu, tpu, high_mem=high_mem)
