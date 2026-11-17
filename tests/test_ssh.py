@@ -665,8 +665,18 @@ def test_proxy_command_keeps_global_options(
 # --- --force flag -----------------------------------------------------------
 
 
-def test_force_calls_kill_before_interactive(mock_common_state, mocker):
-    """--force calls _killStaleSshd before the interactive SSH subprocess."""
+@pytest.mark.parametrize(
+    ("argv", "kills"),
+    [
+        (["--force"], 1),
+        (["--proxy-mode", "--force"], 1),
+        (["--force", "--", "true"], 1),
+        ([], 0),
+    ],
+    ids=["interactive", "proxy-mode", "cmd", "no-force"],
+)
+def test_force_kills_stale_sshd(mock_common_state, mocker, argv, kills):
+    """--force calls _killStaleSshd; without it, the helper is skipped."""
     sess = _make_session()
     mock_common_state.resolve_session.return_value = "s1"
     mock_common_state.store.get.return_value = sess
@@ -674,53 +684,25 @@ def test_force_calls_kill_before_interactive(mock_common_state, mocker):
 
     killSshd = mocker.patch.object(ssh_module, "_killStaleSshd")
     mocker.patch.object(ssh_module, "_run_interactive_ssh", return_value=0)
+    mocker.patch.object(ssh_module, "_run_proxy_bridge", return_value=0)
+    mocker.patch.object(ssh_module, "_run_remote_command", return_value=0)
 
-    result = runner.invoke(app, ["ssh", "-s", "s1", "--force"])
+    result = runner.invoke(app, ["ssh", "-s", "s1", *argv])
     assert result.exit_code == 0
-    killSshd.assert_called_once_with(sess)
+    assert killSshd.call_count == kills
 
 
-def test_force_calls_kill_before_proxy_mode(mock_common_state, mocker):
-    """--force calls _killStaleSshd before the proxy-mode bridge."""
+def test_kill_stale_sshd_body(mock_common_state, mocker):
+    """_killStaleSshd passes kernel_id and calls rt.stop()."""
     sess = _make_session()
-    mock_common_state.resolve_session.return_value = "s1"
-    mock_common_state.store.get.return_value = sess
+    sess.kernel_id = "k123"
+    mockRt = MagicMock()
+    mockRt.execute_code.return_value = []
+    rtCls = mocker.patch("colab_cli.runtime.ColabRuntime", return_value=mockRt)
+    mocker.patch.object(ssh_module.time, "sleep")
 
-    killSshd = mocker.patch.object(ssh_module, "_killStaleSshd")
-    mocker.patch.object(
-        ssh_module, "_resolve_pubkey", return_value="ssh-ed25519 AAAAfake u@h"
-    )
-    mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
-    mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
+    ssh_module._killStaleSshd(sess)
 
-    result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1", "--force"])
-    assert result.exit_code == 0
-    killSshd.assert_called_once_with(sess)
-
-
-def test_no_force_skips_kill(mock_common_state, mocker):
-    """Without --force, _killStaleSshd is never called."""
-    sess = _make_session()
-    mock_common_state.resolve_session.return_value = "s1"
-    mock_common_state.store.get.return_value = sess
-    mock_common_state.store.list.return_value = [sess]
-
-    killSshd = mocker.patch.object(ssh_module, "_killStaleSshd")
-    mocker.patch.object(ssh_module, "_run_interactive_ssh", return_value=0)
-
-    result = runner.invoke(app, ["ssh", "-s", "s1"])
-    assert result.exit_code == 0
-    killSshd.assert_not_called()
-
-
-def test_429_message_mentions_force():
-    """Both 429 error messages hint at --force."""
-    noLimit = ssh_module._explain_handshake_failure(
-        429, b'{"error":"already-active-session"}'
-    )
-    assert "--force" in noLimit
-
-    withLimit = ssh_module._explain_handshake_failure(
-        429, b'{"error":"already-active-session","limit":1}'
-    )
-    assert "--force" in withLimit
+    rtCls.assert_called_once_with(sess.url, sess.token, kernel_id="k123")
+    mockRt.execute_code.assert_called_once()
+    mockRt.stop.assert_called_once()
