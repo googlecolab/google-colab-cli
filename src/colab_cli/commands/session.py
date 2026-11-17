@@ -347,30 +347,47 @@ def status(
         _print_status_for(s)
 
 
+def _stopOne(name: str, s: SessionState) -> None:
+    """Terminate a single session (kernel, backend, local store)."""
+    from colab_cli.common import state
+
+    typer.echo(f"[colab] Stopping session '{name}'...")
+    try:
+        ColabRuntime(s.url, s.token, kernel_id=s.kernel_id).stop(shutdown_kernel=True)
+    except Exception:
+        pass
+    state.client.unassign(s.endpoint)
+    state.store.remove(name)
+    state.history.log_event(name, "session_terminated", {"reason": "user_requested"})
+
+
 def stop(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
     ] = None,
+    allSessions: Annotated[
+        bool, typer.Option("--all", help="Stop all active sessions")
+    ] = False,
 ):
-    """Stop a session"""
+    """Stop a session, or all sessions with --all"""
     from colab_cli.common import state
+
+    if allSessions:
+        sessions, _ = state.sync_sessions()
+        if not sessions:
+            typer.echo("[colab] No active sessions.")
+            return
+        for name, s in sessions.items():
+            _stopOne(name, s)
+        typer.echo(f"[colab] Stopped {len(sessions)} session(s).")
+        return
 
     name = state.resolve_session(session)
     s = state.get_session(name, ignore_missing_session=True)
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.")
         return
-
-    typer.echo(f"[colab] Stopping session '{name}'...")
-    try:
-        runtime = ColabRuntime(s.url, s.token, kernel_id=s.kernel_id)
-        runtime.stop(shutdown_kernel=True)
-    except Exception:
-        pass
-
-    state.client.unassign(s.endpoint)
-    state.store.remove(name)
-    state.history.log_event(name, "session_terminated", {"reason": "user_requested"})
+    _stopOne(name, s)
     typer.echo("[colab] Session terminated.")
 
 
