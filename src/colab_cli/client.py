@@ -137,7 +137,10 @@ class RuntimeProxyInfo(BaseModel):
 
 class ListedAssignment(BaseModel):
     accelerator: Accelerator
-    endpoint: str
+    endpoint: str = ""
+    # Public API runtime resource name (e.g. "runtimes/<id>"); may be empty
+    # when listed via the legacy tunnel API.
+    name: str = ""
     variant: AssignmentVariant
     machine_shape: Shape = Field(..., alias="machineShape")
     runtime_proxy_info: RuntimeProxyInfo = Field(..., alias="runtimeProxyInfo")
@@ -411,8 +414,8 @@ class Client:
             assignments.append(
                 ListedAssignment(
                     accelerator=mapped_accelerator,
-                    endpoint=r.connection_info.endpoint
-                    or r.name.removeprefix("runtimes/"),
+                    endpoint=r.connection_info.endpoint or "",
+                    name=r.name,
                     variant=mapped_variant,
                     machineShape=mapped_shape,
                     runtimeProxyInfo=proxy_info,
