@@ -28,7 +28,6 @@ from colab_cli.runtime import ColabRuntime
 from colab_cli.utils import handle_image, render_display_data
 
 
-
 class ColabREPL:
     def __init__(
         self,
