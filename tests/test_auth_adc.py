@@ -40,20 +40,29 @@ def test_get_credentials_adc_success(mocker):
     assert res == mock_session_cls.return_value
 
 
-def test_get_credentials_adc_default_error_propagates(mocker):
-    """If google.auth.default() raises (e.g. no ADC configured), the error
-    should propagate to the caller so they can run `gcloud auth
-    application-default login`."""
+def test_get_credentials_adc_default_error_prints_gcloud_and_exits(mocker, capsys):
+    """If google.auth.default() raises DefaultCredentialsError (e.g. no ADC
+    configured on a non-GCE host), print the scoped `gcloud auth
+    application-default login` command and exit non-zero."""
     from google.auth.exceptions import DefaultCredentialsError
 
     mocker.patch(
         "google.auth.default",
         side_effect=DefaultCredentialsError("No ADC found"),
     )
-    mocker.patch("colab_cli.auth.requests.AuthorizedSession")
+    mock_session_cls = mocker.patch("colab_cli.auth.requests.AuthorizedSession")
 
-    with pytest.raises(DefaultCredentialsError):
+    with pytest.raises(SystemExit) as exc_info:
         get_credentials(provider=AuthProvider.ADC)
+
+    assert exc_info.value.code == 1
+    mock_session_cls.assert_not_called()
+    err = capsys.readouterr().err
+    assert "No valid default credentials found." in err
+    assert "gcloud auth application-default login" in err
+    assert "https://www.googleapis.com/auth/cloud-platform" in err
+    assert "https://www.googleapis.com/auth/userinfo.email" in err
+    assert "https://www.googleapis.com/auth/colaboratory" in err
 
 
 def test_get_credentials_adc_does_not_invoke_other_providers(mocker):

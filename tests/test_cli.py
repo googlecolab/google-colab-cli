@@ -14,7 +14,7 @@
 
 import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import click
 import pytest
@@ -343,6 +343,25 @@ def test_cli_stop(mock_client, mock_store, mock_common_state):
 
     mock_client.unassign.assert_called_with("e1")
     mock_store.remove.assert_called_with("s1")
+
+
+def test_cli_stop_all(mock_client, mock_store, mock_common_state):
+    sessions = {"s1": MagicMock(endpoint="e1"), "s2": MagicMock(endpoint="e2")}
+    mock_common_state.sync_sessions.return_value = (sessions, [])
+
+    result = runner.invoke(app, ["stop", "--all"])
+    assert result.exit_code == 0
+    assert "Stopped 2 session(s)" in result.output
+    assert mock_client.unassign.call_args_list == [call("e1"), call("e2")]
+    assert mock_store.remove.call_args_list == [call("s1"), call("s2")]
+
+
+def test_cli_stop_all_no_sessions(mock_common_state):
+    mock_common_state.sync_sessions.return_value = ({}, [])
+
+    result = runner.invoke(app, ["stop", "--all"])
+    assert result.exit_code == 0
+    assert "No active sessions" in result.output
 
 
 def test_cli_sessions_prune(mock_common_state):

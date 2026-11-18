@@ -178,7 +178,12 @@ def _run_remote_flow(client_config: dict) -> Credentials:
     typer.echo("After approving, Google will display an authorization code.", err=True)
     code = input("Enter the authorization code: ").strip()
 
-    flow.fetch_token(code=code)
+    # Clear the requested scopes before exchanging the code so oauthlib does not
+    # raise a scope-changed Warning on partial consent, then set the granted
+    # scopes so flow.credentials persists only what the user approved.
+    flow.oauth2session.scope = None
+    token = flow.fetch_token(code=code)
+    flow.oauth2session.scope = token.get("scope")
     return flow.credentials
 
 
@@ -211,9 +216,7 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
     try:
         token_json = _get_token_from_keyring()
         if token_json:
-            creds = Credentials.from_authorized_user_info(
-                json.loads(token_json), PUBLIC_SCOPES
-            )
+            creds = Credentials.from_authorized_user_info(json.loads(token_json))
             _remove_legacy_token()
     except Exception as e:
         logger.warning(f"Failed to load token from keyring: {e}")
@@ -226,9 +229,7 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
 
     if not creds and os.path.exists(LEGACY_TOKEN_PATH):
         try:
-            creds = Credentials.from_authorized_user_file(
-                LEGACY_TOKEN_PATH, PUBLIC_SCOPES
-            )
+            creds = Credentials.from_authorized_user_file(LEGACY_TOKEN_PATH)
             needs_save = True
         except Exception as e:
             logger.warning(f"Failed to load legacy token from {LEGACY_TOKEN_PATH}: {e}")
@@ -310,19 +311,24 @@ def _get_adc_credentials() -> Credentials:
     # while preserving the full ADC discovery chain.
     from unittest.mock import patch as _patch
     from google.auth import _cloud_sdk
+    from google.auth.exceptions import DefaultCredentialsError
 
-    with (
-        warnings.catch_warnings(),
-        _patch.object(_cloud_sdk, "get_project_id", return_value="colab-cli"),
-    ):
-        warnings.filterwarnings(
-            "ignore",
-            message=r"Your application has authenticated using end user credentials.*",
-            category=UserWarning,
-        )
-        creds, _ = google.auth.default(scopes=list(PUBLIC_SCOPES))
+    creds = None
+    try:
+        with (
+            warnings.catch_warnings(),
+            _patch.object(_cloud_sdk, "get_project_id", return_value="colab-cli"),
+        ):
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Your application has authenticated using end user credentials.*",
+                category=UserWarning,
+            )
+            creds, _ = google.auth.default(scopes=list(PUBLIC_SCOPES))
+    except DefaultCredentialsError as e:
+        logger.warning(f"Failed to obtain default credentials: {e}")
 
-    if not creds.valid:
+    if creds and not creds.valid:
         from google.auth import compute_engine
 
         if isinstance(creds, compute_engine.Credentials):
@@ -346,7 +352,7 @@ def _get_adc_credentials() -> Credentials:
             "https://www.googleapis.com/auth/colaboratory\n",
             err=True,
         )
-        exit(1)
+        sys.exit(1)
 
     # Some credential subclasses ignore the `scopes=` kwarg in `default()`
     # (e.g. user creds), so re-apply via `with_scopes` when supported.
