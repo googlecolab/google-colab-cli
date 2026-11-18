@@ -87,6 +87,24 @@ def test_cli_exec_stdin(mock_store, mock_runtime_class, mock_common_state):
     )
 
 
+def test_cli_exec_stdin_forwards_shell_escape(
+    mock_store, mock_runtime_class, mock_common_state
+):
+    mock_session = MagicMock()
+    mock_session.name = "s1"
+    mock_session.kernel_id = None
+    mock_session.session_id = None
+    mock_store.get.return_value = mock_session
+
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_runtime = mock_runtime_class.return_value
+    mock_runtime.execute_code.return_value = []
+
+    result = runner.invoke(app, ["exec", "-s", "s1"], input="!echo hi")
+    assert result.exit_code == 0
+    mock_runtime.execute_code.assert_any_call("!echo hi", output_hook=ANY, timeout=30.0)
+
+
 def test_cli_exec_env_injects_prelude(
     mock_store, mock_runtime_class, mock_common_state
 ):

@@ -76,7 +76,48 @@ def test_build_ws_url_scheme(url, scheme):
 # --- Pubkey resolution -------------------------------------------------------
 
 
-def test_resolve_pubkey_with_identity_calls_ssh_keygen(mocker, tmp_path):
+@pytest.mark.parametrize(
+    "pass_pub_suffix", [True, False], ids=["with-pub", "without-pub"]
+)
+def test_resolve_pubkey_with_identity_reads_pub_file_first(
+    mocker, tmp_path, pass_pub_suffix
+):
+    """When `<key>.pub` exists, `_resolve_pubkey` reads it directly (whether
+    `--identity` was passed with or without `.pub`) before calling
+    `_pubkey_from_identity`."""
+    key = tmp_path / "id_test"
+    pub = tmp_path / "id_test.pub"
+    key.write_text("(fake private key)")
+    fake_pub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDfake user@host"
+    pub.write_text(fake_pub + "\n")
+    spy_from_identity = mocker.spy(ssh_module, "_pubkey_from_identity")
+    mock_run = mocker.patch("subprocess.run")
+
+    arg = str(pub if pass_pub_suffix else key)
+    out = ssh_module._resolve_pubkey(arg)
+    assert out == fake_pub
+    spy_from_identity.assert_not_called()
+    mock_run.assert_not_called()
+
+
+def test_resolve_pubkey_with_pub_only_identity_needs_no_private_key(mocker, tmp_path):
+    """A standalone `.pub` file (no private key on disk) works without
+    invoking `_pubkey_from_identity`."""
+    pub = tmp_path / "agent_only.pub"
+    fake_pub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAGENT user@host"
+    pub.write_text(fake_pub + "\n")
+    spy_from_identity = mocker.spy(ssh_module, "_pubkey_from_identity")
+
+    assert ssh_module._resolve_pubkey(str(pub)) == fake_pub
+    spy_from_identity.assert_not_called()
+
+
+@pytest.mark.parametrize("pass_pub_suffix", [False, True], ids=["priv-arg", "pub-arg"])
+def test_resolve_pubkey_with_identity_calls_ssh_keygen_when_no_pub_file(
+    mocker, tmp_path, pass_pub_suffix
+):
+    """When no `.pub` file exists on disk, `_resolve_pubkey` falls back to
+    `_pubkey_from_identity` (`ssh-keygen -y -f`) using the private key path."""
     key = tmp_path / "id_test"
     key.write_text("(fake private key)")
     fake_pub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDfake user@host"
@@ -84,15 +125,19 @@ def test_resolve_pubkey_with_identity_calls_ssh_keygen(mocker, tmp_path):
         "subprocess.run",
         return_value=MagicMock(stdout=fake_pub + "\n", returncode=0),
     )
-    out = ssh_module._resolve_pubkey(str(key))
+    arg = f"{key}.pub" if pass_pub_suffix else str(key)
+    out = ssh_module._resolve_pubkey(arg)
     assert out == fake_pub
     args, _ = mock_run.call_args
     assert args[0][:3] == ["ssh-keygen", "-y", "-f"]
     assert args[0][3] == str(key)
 
 
-def test_resolve_pubkey_missing_identity_exits(tmp_path):
-    missing = tmp_path / "no-such-key"
+@pytest.mark.parametrize(
+    "arg_name", ["no-such-key", "no-such-key.pub"], ids=["priv", "pub"]
+)
+def test_resolve_pubkey_missing_identity_exits(tmp_path, arg_name):
+    missing = tmp_path / arg_name
     with pytest.raises(typer.Exit) as exc_info:
         ssh_module._resolve_pubkey(str(missing))
     assert exc_info.value.exit_code == 2
@@ -146,9 +191,7 @@ def test_resolve_pubkey_default_scan_key_order(
     if present:
         content = f"ssh-key-content-for-{present}\n"
         (ssh_dir / present).write_text(content)
-    monkeypatch.setattr(
-        "os.path.expanduser", lambda p: p.replace("~", str(fake_home))
-    )
+    monkeypatch.setattr("os.path.expanduser", lambda p: p.replace("~", str(fake_home)))
     if expect_found:
         assert ssh_module._resolve_pubkey(None) == content.strip()
     else:
@@ -182,23 +225,27 @@ def test_explain_handshake_failure_mapping(status, body, must_contain):
 
 _FALLBACK_429 = (
     "Already-active SSH session (HTTP 429): another `colab ssh` is "
-    "connected to this runtime. Disconnect it and retry."
+    "connected to this runtime. Disconnect it and retry. "
+    "If the previous client died, retry with `--force`."
 )
 _LIMIT_BODY_PREFIX = b'{"error":"already-active-session","limit":'
 _LIMIT_1_TEXT = (
     "SSH session limit reached (HTTP 429): 1 of 1 SSH sessions in use on "
     "this runtime. Close another `colab ssh` or IDE connection to it and "
-    "retry. The limit depends on your Colab plan."
+    "retry. If the previous client died, retry with `--force`. "
+    "The limit depends on your Colab plan."
 )
 _LIMIT_2_TEXT = (
     "SSH session limit reached (HTTP 429): 2 of 2 SSH sessions in use on "
     "this runtime. Close another `colab ssh` or IDE connection to it and "
-    "retry. The limit depends on your Colab plan."
+    "retry. If the previous client died, retry with `--force`. "
+    "The limit depends on your Colab plan."
 )
 _LIMIT_4_TEXT = (
     "SSH session limit reached (HTTP 429): 4 of 4 SSH sessions in use on "
     "this runtime. Close another `colab ssh` or IDE connection to it and "
-    "retry. The limit depends on your Colab plan."
+    "retry. If the previous client died, retry with `--force`. "
+    "The limit depends on your Colab plan."
 )
 
 
@@ -488,18 +535,14 @@ def test_ssh_proxy_mode_calls_websocket(mock_common_state, mocker):
     connect = mocker.patch.object(
         ssh_module, "_connect_websocket", return_value=fake_ws
     )
-    bridge = mocker.patch.object(
-        ssh_module, "_bridge_proxy_mode", return_value=0
-    )
+    bridge = mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
     ssh_subprocess = mocker.patch.object(ssh_module, "_run_interactive_ssh")
 
     result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
     assert result.exit_code == 0
     connect.assert_called_once()
     args, _ = connect.call_args
-    assert args[0].startswith(
-        "wss://abc-foo.colab.googleusercontent.com/colab/ssh"
-    )
+    assert args[0].startswith("wss://abc-foo.colab.googleusercontent.com/colab/ssh")
     assert args[1] == fake_pub
     bridge.assert_called_once_with(fake_ws)
     ssh_subprocess.assert_not_called()
@@ -546,9 +589,7 @@ def test_ssh_pubkey_passes_through_verbatim(mock_common_state, mocker):
         captured["url"] = url
         return MagicMock()
 
-    mocker.patch.object(
-        ssh_module, "_connect_websocket", side_effect=fake_connect
-    )
+    mocker.patch.object(ssh_module, "_connect_websocket", side_effect=fake_connect)
     mocker.patch.object(ssh_module, "_bridge_proxy_mode", return_value=0)
 
     runner.invoke(app, ["ssh", "--proxy-mode", "-s", "s1"])
@@ -575,9 +616,7 @@ def test_ssh_handshake_400_emits_actionable_message(
         ssh_module, "_resolve_pubkey", return_value="ssh-rsa AAAAfake u@h"
     )
 
-    err = websocket.WebSocketBadStatusException(
-        "Handshake status 400 Bad Request", 400
-    )
+    err = websocket.WebSocketBadStatusException("Handshake status 400 Bad Request", 400)
     err.status_code = 400
     err.resp_body = resp_body
     mocker.patch.object(websocket.WebSocket, "connect", side_effect=err)
@@ -621,3 +660,49 @@ def test_proxy_command_keeps_global_options(
         *[sys.executable, "-m", "colab_cli.cli", *global_args, "ssh"],
         *["--proxy-mode", "-s", "s", "--colab-internal-mode", "interactive"],
     ]
+
+
+# --- --force flag -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("argv", "kills"),
+    [
+        (["--force"], 1),
+        (["--proxy-mode", "--force"], 1),
+        (["--force", "--", "true"], 1),
+        ([], 0),
+    ],
+    ids=["interactive", "proxy-mode", "cmd", "no-force"],
+)
+def test_force_kills_stale_sshd(mock_common_state, mocker, argv, kills):
+    """--force calls _killStaleSshd; without it, the helper is skipped."""
+    sess = _make_session()
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_common_state.store.get.return_value = sess
+    mock_common_state.store.list.return_value = [sess]
+
+    killSshd = mocker.patch.object(ssh_module, "_killStaleSshd")
+    mocker.patch.object(ssh_module, "_run_interactive_ssh", return_value=0)
+    mocker.patch.object(ssh_module, "_run_proxy_bridge", return_value=0)
+    mocker.patch.object(ssh_module, "_run_remote_command", return_value=0)
+
+    result = runner.invoke(app, ["ssh", "-s", "s1", *argv])
+    assert result.exit_code == 0
+    assert killSshd.call_count == kills
+
+
+def test_kill_stale_sshd_body(mock_common_state, mocker):
+    """_killStaleSshd passes kernel_id and calls rt.stop()."""
+    sess = _make_session()
+    sess.kernel_id = "k123"
+    mockRt = MagicMock()
+    mockRt.execute_code.return_value = []
+    rtCls = mocker.patch("colab_cli.runtime.ColabRuntime", return_value=mockRt)
+    mocker.patch.object(ssh_module.time, "sleep")
+
+    ssh_module._killStaleSshd(sess)
+
+    rtCls.assert_called_once_with(sess.url, sess.token, kernel_id="k123")
+    mockRt.execute_code.assert_called_once()
+    mockRt.stop.assert_called_once()

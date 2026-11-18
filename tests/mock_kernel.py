@@ -21,7 +21,6 @@ tests can cover long runs and long silences without waiting.
 import itertools
 import queue
 import threading
-import time
 from unittest.mock import MagicMock
 
 from colab_cli import runtime as runtime_module
@@ -95,25 +94,12 @@ class MockKernelClient:
         return self._get(self.shell, timeout)
 
 
-class _SimulatedTime:
-    """The ``time`` module, with ``monotonic`` read from a MockKernelClient."""
-
-    def __init__(self, mock_kc):
-        self._mock_kc = mock_kc
-
-    def monotonic(self):
-        return self._mock_kc.now
-
-    def __getattr__(self, name):
-        return getattr(time, name)
-
-
 def connect_runtime(runtime, mock_kc, monkeypatch):
     """Make ``runtime`` use ``mock_kc``, and read its clock from ``mock_kc``.
 
     Only ``runtime``'s view of ``time.monotonic`` changes; everything else in
     ``time`` stays real.
     """
-    monkeypatch.setattr(runtime_module, "time", _SimulatedTime(mock_kc))
+    monkeypatch.setattr(runtime_module.time, "monotonic", lambda: mock_kc.now)
     runtime._kernel_client = MagicMock()
     runtime._kernel_client._manager.client = mock_kc

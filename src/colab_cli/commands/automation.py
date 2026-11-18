@@ -24,7 +24,7 @@ from typing_extensions import Annotated
 from colab_cli.runtime import ColabRuntime
 from colab_cli.contents import ContentsClient
 from colab_cli.auth import get_credentials
-from colab_cli.utils import get_status_code, render_display_data
+from colab_cli.utils import get_status_code, open_url_in_browser, render_display_data
 
 _console = Console()
 
@@ -100,6 +100,20 @@ def _send_colab_reply(wsclient, deserialize_msg, msg_id) -> None:
     if "header" in deserialize_msg:
         reply["parent_header"] = deserialize_msg["header"]
     wsclient.stdin_channel.send(reply)
+
+def show_drive_auth_url(uri: str) -> bool:
+    """Print the Drive consent URL and try to open it in the browser.
+
+    The URL is always printed so headless hosts can paste it elsewhere.
+    Returns ``True`` when a browser was launched.
+    """
+    typer.echo(
+        f"\n[colab] REQUIRED: Google Drive Authorization needed.\nPlease visit:\n\n{uri}\n"
+    )
+    if not open_url_in_browser(uri):
+        return False
+    typer.echo("[colab] Opened the authorization page in your default browser.")
+    return True
 
 
 def run_automation(
@@ -177,6 +191,7 @@ def run_automation(
                 typer.echo(
                     f"\n[colab] REQUIRED: Google Drive Authorization needed.\nPlease visit:\n\n{uri}\n"
                 )
+                show_drive_auth_url(uri)
                 state.history.log_event(s.name, "drive_auth_needed", {"uri": uri})
                 sys.stdout.write("Press Enter after you have granted access... ")
                 sys.stdout.flush()

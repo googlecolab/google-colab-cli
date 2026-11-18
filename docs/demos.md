@@ -8,7 +8,7 @@ Eleven scenarios that exercise common workflows, plus a final "bridging back to 
 **Methodology**
 - Auth: `--auth=adc`. To set up: `gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`.
 - Accelerator: every session uses **CPU**. Provisioning real accelerators is gated by per-account quota and would not work for most readers; the workflows themselves are accelerator-agnostic, so where a demo's narrative mentions a GPU or TPU the prose flags the substitution.
-- Interactive subcommands — `colab auth`, `colab drivemount`, and unpiped `colab repl` / `colab console` — are **not run** here because they require human interaction at a TTY. Demos that would normally use them include an inline note explaining what they do and the workflow continues with the non-interactive parts.
+- Interactive subcommands — `colab auth`, `colab drivemount`, interactive `colab ssh`, and unpiped `colab repl` — are **not run** here because they require human interaction at a TTY. Demos that would normally use them include an inline note explaining what they do and the workflow continues with the non-interactive parts.
 - `enable_update_check` is set to `false` in `~/.config/colab-cli/settings.json` for the duration of recording so the daily upgrade banner doesn't pollute output.
 - `PYTHONWARNINGS=ignore` is set in the environment to suppress the ADC quota-project warning that `google.auth` emits on every call from end-user credentials.
 
@@ -138,7 +138,7 @@ uv run colab --auth=adc stop -s trainer
 
 ## Demo 3: Interactive troubleshooting (piped)
 
-Both `colab console` and `colab repl` accept piped stdin and exit on EOF, so they compose well with shell pipelines and other CLI tools. This demo investigates remote disk usage with a one-shot shell command, lists `/content`, creates and removes a scratch file, and then queries free space from a one-shot REPL.
+`colab exec` and `colab repl` accept piped stdin and exit on EOF, so they compose well with shell pipelines and other CLI tools. This demo lists `/content`, creates and removes a scratch file, and then queries free space from a one-shot REPL.
 
 ```bash
 uv run colab --auth=adc new -s debug
@@ -149,15 +149,7 @@ uv run colab --auth=adc new -s debug
 [colab] Session READY.
 ```
 
-*Note:* `colab console` connects to a tmux-wrapped pty on the VM, so even when stdin is piped the raw stdout contains terminal-control bytes (cursor moves, status-line repaints, ANSI color). For programmatic consumption, pipe the output through `grep -a` (force binary-safe) and a regex matching the line(s) you care about, as shown below.
-
-```bash
-echo 'df -h /content' | uv run colab --auth=adc console -s debug 2>&1 | grep -aE 'overlay|/dev/'
-```
-
-```output
-overlay         108G   21G   87G  20% /
-```
+*Note:* for an interactive shell on the VM use `colab ssh -s debug` (interactive, so not run here); one-shot shell commands run with `colab ssh -s debug -- df -h /content`, or, where ssh can't work, piped to `colab exec` with IPython's `!` prefix, e.g. `echo '!df -h /content' | colab exec -s debug` (neither is part of this recording).
 
 ```bash
 uv run colab --auth=adc ls -s debug /content
@@ -272,7 +264,7 @@ uv run colab --auth=adc stop -s reporter
 
 ## Demo 5: Bulk data via GCS
 
-Pull a batch of objects down from a Google Cloud Storage bucket, transform them on the VM, and pull the results back. A full-fidelity workflow is `colab new --gpu L4` -> `colab auth` (so VM-side `gcloud` works) -> `gcloud storage cp gs://bucket/raw/*.jpg /content/images/` (via piped `colab console`) -> install pillow/torchvision -> process -> download. We skip the auth step here (interactive; the user has to click through OAuth) and substitute synthetic image generation in place of the GCS pull, which keeps the input -> install -> batch-process -> download shape intact.
+Pull a batch of objects down from a Google Cloud Storage bucket, transform them on the VM, and pull the results back. A full-fidelity workflow is `colab new --gpu L4` -> `colab auth` (so VM-side `gcloud` works) -> `gcloud storage cp gs://bucket/raw/*.jpg /content/images/` (as a `!`-prefixed shell command piped to `colab exec`) -> install pillow/torchvision -> process -> download. We skip the auth step here (interactive; the user has to click through OAuth) and substitute synthetic image generation in place of the GCS pull, which keeps the input -> install -> batch-process -> download shape intact.
 
 ```bash
 uv run colab --auth=adc new -s data-proc

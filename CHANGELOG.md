@@ -22,9 +22,28 @@ below corresponds to a tag of the same name.
 
 - **ssh:** `colab ssh [-s NAME] -- CMD` runs one command on an existing runtime and exits with its status. Output is byte-exact when piped (a PTY only when stdin and stdout are terminals), and it never creates a runtime. Its handshake is tagged `ssh-mode-cmd`.
 
+### Removed
+
+- **console:** **BREAKING:** Remove the `colab console` subcommand. Use
+  `colab ssh -s NAME` for an interactive shell on the runtime and
+  `colab ssh -s NAME -- CMD` for one-shot commands; where ssh can't work, pipe
+  `!`-prefixed shell commands to `colab exec -s NAME`. Each `!` line is its own
+  shell and IPython expands `{expr}` and `$name` in it, so start a multi-line
+  script with `%%bash` and keep untrusted text out of `!` lines. Breaking, so
+  it ships in a new major version.
+
 ### Fixed
 
 - **ssh:** `colab --config FILE ssh` and `colab --auth adc ssh` now keep those options in the ProxyCommand that `colab ssh` starts, so it uses the same sessions file and auth provider instead of the defaults.
+- **security:** Create the debug log (`~/.config/colab-cli/colab.log`),
+  `sessions.json`, `settings.json` and session history files readable only by
+  their owner, and tighten copies that older versions left readable by others
+  the next time the CLI uses them.
+- **security:** Stop writing access tokens, runtime proxy tokens, OAuth codes,
+  client secrets, auth headers and cookies to the debug log. Logs written by
+  older versions may contain credentials and can be deleted; if other users
+  could read an old log, revoke the CLI's access in your Google Account and
+  sign in again.
 
 ## [0.7.1] - 2026-09-14
 

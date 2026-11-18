@@ -1,7 +1,12 @@
 ---
 log:
+2026-11-13: `_get_adc_credentials` in `auth.py` now catches `DefaultCredentialsError` from `google.auth.default()` so missing local ADC prints the 4-scope `gcloud auth application-default login` command and exits 1 instead of surfacing `google-auth`'s stock unscoped setup message. Updated scope documentation to clarify that both `colaboratory` and `userinfo.email` are required by `colab.research.google.com`.
+2026-11-07: Optimized `_get_adc_credentials` in `auth.py` to stub `google.auth._cloud_sdk.get_project_id` around `google.auth.default()`. When ADC user credentials lack a `quota_project_id`, `google-auth` otherwise spawns `gcloud config get-value project` on every CLI invocation to resolve a `project_id` that `_get_adc_credentials` immediately discards (`_`).
+2026-11-04: `colab drivemount` now opens the Drive consent URL in the system browser (`utils.open_url_in_browser`, also used by `colab pay`/`colab url --open`) instead of only printing it. The URL is still printed first, and a missing browser opener (SSH, containers, CI) is treated as normal: the flow keeps waiting for the user exactly as before. The prompt moved into `commands/automation.py::show_drive_auth_url` so it can be unit-tested.
 2026-11-04: `colab drivemount` now handles credentials-propagation failures instead of dumping the HTTP body. Responses are parsed defensively (HTML/empty bodies no longer raise out of the websocket hook), an authentication prompt is only shown when the server actually returns an `unauthorized_redirect_uri`, and failures print the status plus the multi-account guidance (select the account from `colab whoami`) while logging the raw body to history. The intercepted kernel request is answered on failure too, so the command exits promptly instead of hanging until its 600s timeout.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to inspect the active Linux `SecretService` collection via `secretstorage` before `get_password`/`set_password`, warning immediately when the keyring is locked so users know why the CLI is waiting on an unlock prompt (and suggesting `--auth=adc`).
+2026-10-29: Session history files are created readable only by the owner (0600), and existing ones are tightened to 0600 whenever the history logger starts.
+2026-10-22: Added hidden `colab test-public-api` subcommand and `Client.check_api_access()` to probe both `colaboratory.googleapis.com/v1beta/runtimes` and `colab.research.google.com/tun/m/assignments`, caching `public_api_supported` and `tunnel_api_supported` in `Settings` for targeted HTTP 401/403 error hints.
 2026-10-21: Migrated OAuth2 token persistence in `auth.py` from `~/.config/colab-cli/token.json` to the OS native password storage via the `keyring` library (`KEYRING_SERVICE_NAME = "google-colab-cli"`, `KEYRING_USERNAME = "oauth_token"`). When the keyring is empty, locked, or inaccessible, `_run_remote_flow` is invoked; keyring read/write failures print a warning to stderr without failing the command. An existing `~/.config/colab-cli/token.json` (`LEGACY_TOKEN_PATH`) is used when the keyring has no token, copied into the keyring, and deleted only after the keyring write succeeds; it is also deleted when the keyring already holds a token.
 2026-09-25: Cleaned up references to keep-alive background daemon and pre-flight pings. VM liveness is automatically maintained by the Colab backend based on active kernel activity.
 2026-08-10: Added `colab usage` for account-level compute-unit rate/balance via `GET /tun/m/ccu-info` on the session backend (same bearer token as `colab new`).
@@ -73,15 +78,15 @@ allowing the core `Client` to remain authentication-agnostic — it only sees a
 ### Required Scopes
 
 The CLI talks to the Colab session backend at `colab.research.google.com`
-for assignment, unassignment, CCU info, and the contents API. The `userinfo.email` scope is
-sufficient for this host.
+for assignment, unassignment, CCU info, and the contents API. Both the
+`colaboratory` and `userinfo.email` scopes are required for this host.
 
-How each provider supplies the scope:
+How each provider supplies the scopes:
 
--   **`oauth2`**: `PUBLIC_SCOPES` already includes `colaboratory`, so the
-    InstalledAppFlow consent screen lists it. Existing cached tokens in the
-    keyring that were minted before a scope change must be cleared to trigger a
-    fresh consent flow.
+-   **`oauth2`**: `PUBLIC_SCOPES` includes both `colaboratory` and
+    `userinfo.email`, so the InstalledAppFlow consent screen lists them.
+    Existing cached tokens in the keyring that were minted before a scope
+    change must be cleared to trigger a fresh consent flow.
 -   **`adc`**: `google.auth.default(scopes=PUBLIC_SCOPES)` is called, and for
     credential subclasses that support `with_scopes` (service accounts,
     GCE/GKE metadata, impersonated) we re-apply via `creds.with_scopes(...)`.
@@ -89,20 +94,16 @@ How each provider supplies the scope:
     `scopes=` kwarg AND raise `NotImplementedError` on `with_scopes`; those
     users must explicitly re-authenticate:
 
-    ```
+    ```bash
     gcloud auth application-default login \
-        --scopes=openid,\
-    https://www.googleapis.com/auth/cloud-platform,\
-    https://www.googleapis.com/auth/userinfo.email,\
-    https://www.googleapis.com/auth/colaboratory
+        --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory
     ```
 
-    `userinfo.email` is required for the session backend at
-    `colab.research.google.com` (otherwise assign/unassign/sessions
-    return HTTP 401); `colaboratory` is retained for forward compatibility and
-    other Colab features; `openid` and `cloud-platform` are mandated by
-    `gcloud` itself (`gcloud auth application-default login` rejects scope
-    lists that omit `cloud-platform` with `Invalid value for [--scopes]`).
+    `colaboratory` and `userinfo.email` are required for the session backend at
+    `colab.research.google.com` (otherwise assign/unassign/sessions return HTTP
+    401); `openid` and `cloud-platform` are mandated by `gcloud` itself
+    (`gcloud auth application-default login` rejects scope lists that omit
+    `cloud-platform` with `Invalid value for [--scopes]`).
 
 ## Approach
 
@@ -137,7 +138,10 @@ How each provider supplies the scope:
     automatically interacts with the Colab backend
     (`/tun/m/credentials-propagation/`), prompts the user with the Google OAuth
     consent URL if needed, and dispatches the required `colab_reply` message to
-    the `stdin` channel to unlock the kernel thread.
+    the `stdin` channel to unlock the kernel thread. The consent URL is also
+    passed to `webbrowser.open` (see `utils.open_url_in_browser`); when no
+    browser opener is available (SSH, containers, CI) the URL stays on screen
+    and the flow continues to wait for the user, unchanged.
 -   **Timeout**: The kernel is silent (no iopub traffic) the entire time the
     user is OAuthing in their browser. To avoid the upstream 10s
     `jupyter_kernel_client` default raising `TimeoutError` mid-flow, this
@@ -159,7 +163,8 @@ How each provider supplies the scope:
 -   **Action**: Capture the session's command history and outputs.
 -   **Storage**: Maintain a local JSON-L file of all major operations,
     executions, and stdin interactions in
-    `~/.config/colab-cli/history/<session_name>.jsonl`.
+    `~/.config/colab-cli/history/<session_name>.jsonl`, readable only by the
+    owner (mode 0600).
 -   **Viewing**: `colab log list` and `colab log show <session>`.
 -   **Conversion (Planned)**: Future expansion to convert history logs to
     `.ipynb` or `.html`.
@@ -294,6 +299,14 @@ How each provider supplies the scope:
     -   If reading from resources fails (e.g. during development when not
         installed), it falls back to reading the files from the project root.
     -   Prints the content to stdout.
+
+### 11. Public & Tunnel API Probe (`colab test-public-api`)
+
+-   **Action**: Hidden diagnostic command (`hidden=True`, suppressed from auto-update banner) that runs `state.client.check_api_access()`.
+-   **Implementation**:
+    -   Issues read-only GET probes to `https://colaboratory.googleapis.com/v1beta/runtimes` and `https://colab.research.google.com/tun/m/assignments`.
+    -   Persists `public_api_supported` and `tunnel_api_supported` booleans in `~/.config/colab-cli/settings.json` and prints `OK` or `FAILED` for each backend.
+    -   When `Client._issue_request` receives HTTP 401/403, it updates the failed backend's cached flag and appends a targeted remediation hint (`--no-public-api` or `--public-api`) if the alternate backend is cached as supported.
 
 ## Implementation Details
 

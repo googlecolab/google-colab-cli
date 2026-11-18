@@ -31,9 +31,10 @@ connect), ``--gpu/--tpu`` pick the accelerator for that auto-created runtime,
 and ``--rm`` stops the runtime when you disconnect.
 
 ``--identity/-i`` overrides the default key order (``~/.ssh/id_ed25519`` ->
-``id_ecdsa``); the public key is derived via ``ssh-keygen -y -f`` and sent in
-the ``X-Colab-Ssh-Pubkey`` header. RSA keys are rejected by the server, so
-``id_rsa`` is not auto-selected.
+``id_ecdsa``); it accepts either a public key (``.pub``) or a private key path,
+reading the ``.pub`` file directly when present and falling back to
+``ssh-keygen -y -f`` to populate the ``X-Colab-Ssh-Pubkey`` header. RSA keys are
+rejected by the server, so ``id_rsa`` is not auto-selected.
 """
 
 import contextlib
@@ -102,9 +103,7 @@ def _pubkey_from_identity(identity: str) -> str:
         raise typer.Exit(code=2)
     pubkey = res.stdout.strip()
     if not pubkey:
-        typer.echo(
-            f"[colab] ssh-keygen produced no key for {identity}.", err=True
-        )
+        typer.echo(f"[colab] ssh-keygen produced no key for {identity}.", err=True)
         raise typer.Exit(code=2)
     return pubkey
 
@@ -112,11 +111,14 @@ def _pubkey_from_identity(identity: str) -> str:
 def _resolve_pubkey(identity: Optional[str]) -> str:
     """Returns the public key for the ``X-Colab-Ssh-Pubkey`` header.
 
-    With ``identity``, derives it from that private key; otherwise scans
-    ``~/.ssh`` for the first existing ``id_<type>.pub`` in preference order.
+    With ``identity``, reads the matching ``.pub`` file directly if present
+    (whether ``identity`` was passed with or without ``.pub``), falling back to
+    deriving it from the private key via ``_pubkey_from_identity``; otherwise
+    scans ``~/.ssh`` for the first existing ``id_<type>.pub`` in preference
+    order.
 
     Args:
-      identity: Path to a private key, or None to scan ``~/.ssh``.
+      identity: Path to a public or private key, or None to scan ``~/.ssh``.
 
     Returns:
       The public key text to send verbatim in the header.
@@ -125,7 +127,18 @@ def _resolve_pubkey(identity: Optional[str]) -> str:
       typer.Exit: If no usable key is found (exit code 2).
     """
     if identity:
-        return _pubkey_from_identity(identity)
+        expanded = Path(os.path.expanduser(identity))
+        if expanded.suffix == ".pub":
+            pub_path = expanded
+            priv_path = expanded.with_suffix("")
+        else:
+            priv_path = expanded
+            pub_path = expanded.with_suffix(".pub")
+        if pub_path.exists():
+            if pubkey := pub_path.read_text().strip():
+                return pubkey
+        target = str(priv_path) if priv_path.exists() else identity
+        return _pubkey_from_identity(target)
 
     ssh_dir = Path(os.path.expanduser("~/.ssh"))
     for name in _KEY_TYPES:
@@ -318,13 +331,15 @@ def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
             message = (
                 f"SSH session limit reached (HTTP 429): {limit} of {limit} "
                 "SSH sessions in use on this runtime. Close another "
-                "`colab ssh` or IDE connection to it and retry. The limit "
+                "`colab ssh` or IDE connection to it and retry. If the "
+                "previous client died, retry with `--force`. The limit "
                 "depends on your Colab plan."
             )
         case 429:
             message = (
                 "Already-active SSH session (HTTP 429): another `colab ssh` "
-                "is connected to this runtime. Disconnect it and retry."
+                "is connected to this runtime. Disconnect it and retry. "
+                "If the previous client died, retry with `--force`."
             )
         case 502:
             message = (
@@ -390,6 +405,23 @@ def _close_quietly(ws: websocket.WebSocket) -> None:
         ws.close()
     except Exception:  # Best-effort close.
         pass
+
+
+def _killStaleSshd(session: SessionState) -> None:
+    """Kills existing SSH sessions on the runtime via the kernel."""
+    from colab_cli.runtime import ColabRuntime
+
+    typer.echo("[colab] --force: killing stale SSH sessions...", err=True)
+    rt = ColabRuntime(session.url, session.token, kernel_id=session.kernel_id)
+    try:
+        rt.execute_code(
+            "import os; os.system('pkill -P $(pgrep -o -x sshd)')",
+            timeout=10.0,
+        )
+    except Exception as e:
+        typer.echo(f"[colab] --force: failed to kill sshd: {e}", err=True)
+    finally:
+        rt.stop()
 
 
 _DATA_OPCODES = (websocket.ABNF.OPCODE_BINARY, websocket.ABNF.OPCODE_TEXT)
@@ -476,7 +508,12 @@ def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:
         "LogLevel=ERROR",
     ]
     if identity:
-        args.extend(["-i", os.path.expanduser(identity)])
+        ssh_identity = os.path.expanduser(identity)
+        if ssh_identity.endswith(".pub"):
+            priv_path = ssh_identity.removesuffix(".pub")
+            if os.path.exists(priv_path):
+                ssh_identity = priv_path
+        args.extend(["-i", ssh_identity])
     return args
 
 
@@ -560,9 +597,7 @@ def _select_proxy_session(
     """
     if session and not _session_exists(session):
         with contextlib.redirect_stdout(sys.stderr):
-            return _auto_create_session(
-                gpu, tpu, name=session, high_mem=high_mem
-            ), True
+            return _auto_create_session(gpu, tpu, name=session, high_mem=high_mem), True
     return _resolve_session(session), False
 
 
@@ -720,9 +755,9 @@ def ssh(
             "--identity",
             "-i",
             help=(
-                "SSH private key whose public key is sent in the "
-                "X-Colab-Ssh-Pubkey header (default: first of "
-                "~/.ssh/id_ed25519, id_ecdsa)."
+                "SSH key (public `.pub` or private key path) whose public key "
+                "is sent in the X-Colab-Ssh-Pubkey header (default: first of "
+                "~/.ssh/id_ed25519.pub, id_ecdsa.pub)."
             ),
         ),
     ] = None,
@@ -769,6 +804,17 @@ def ssh(
             ),
         ),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help=(
+                "Kill all existing SSH sessions on the runtime before "
+                "connecting. Use when a dead client causes HTTP 429 on "
+                "reconnect."
+            ),
+        ),
+    ] = False,
     ssh_mode: Annotated[
         str, typer.Option("--colab-internal-mode", hidden=True)
     ] = _DEFAULT_SSH_MODE,
@@ -796,6 +842,8 @@ def ssh(
     if cmd:
         with contextlib.redirect_stdout(sys.stderr):
             s = _resolve_session(session)
+        if force:
+            _killStaleSshd(s)
         _warn_accelerator_ignored(gpu, tpu, False, high_mem=high_mem)
         if rm:
             typer.echo("[colab] --rm ignored with -- CMD.", err=True)
@@ -806,10 +854,14 @@ def ssh(
         raise typer.Exit(code=_run_proxy_bridge(s, identity, rm, ssh_mode))
     if proxy_mode:
         s, created = _select_proxy_session(session, gpu, tpu, high_mem=high_mem)
+        if force:
+            _killStaleSshd(s)
         _warn_accelerator_ignored(gpu, tpu, created, high_mem=high_mem)
         raise typer.Exit(code=_run_proxy_bridge(s, identity, rm, ssh_mode))
 
     s, created = _select_interactive_session(session, gpu, tpu, high_mem=high_mem)
+    if force:
+        _killStaleSshd(s)
     _warn_accelerator_ignored(gpu, tpu, created, high_mem=high_mem)
     raise typer.Exit(code=_run_interactive_shell(s, identity, created, rm))
 

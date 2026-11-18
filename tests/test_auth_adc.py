@@ -40,20 +40,29 @@ def test_get_credentials_adc_success(mocker):
     assert res == mock_session_cls.return_value
 
 
-def test_get_credentials_adc_default_error_propagates(mocker):
-    """If google.auth.default() raises (e.g. no ADC configured), the error
-    should propagate to the caller so they can run `gcloud auth
-    application-default login`."""
+def test_get_credentials_adc_default_error_prints_gcloud_and_exits(mocker, capsys):
+    """If google.auth.default() raises DefaultCredentialsError (e.g. no ADC
+    configured on a non-GCE host), print the scoped `gcloud auth
+    application-default login` command and exit non-zero."""
     from google.auth.exceptions import DefaultCredentialsError
 
     mocker.patch(
         "google.auth.default",
         side_effect=DefaultCredentialsError("No ADC found"),
     )
-    mocker.patch("colab_cli.auth.requests.AuthorizedSession")
+    mock_session_cls = mocker.patch("colab_cli.auth.requests.AuthorizedSession")
 
-    with pytest.raises(DefaultCredentialsError):
+    with pytest.raises(SystemExit) as exc_info:
         get_credentials(provider=AuthProvider.ADC)
+
+    assert exc_info.value.code == 1
+    mock_session_cls.assert_not_called()
+    err = capsys.readouterr().err
+    assert "No valid default credentials found." in err
+    assert "gcloud auth application-default login" in err
+    assert "https://www.googleapis.com/auth/cloud-platform" in err
+    assert "https://www.googleapis.com/auth/userinfo.email" in err
+    assert "https://www.googleapis.com/auth/colaboratory" in err
 
 
 def test_get_credentials_adc_does_not_invoke_other_providers(mocker):
@@ -200,3 +209,30 @@ def test_get_credentials_adc_does_not_suppress_unrelated_warnings(mocker, recwar
     assert len(matching) == 1, (
         "Unrelated UserWarnings from google.auth must NOT be suppressed."
     )
+
+
+def test_get_credentials_adc_skips_gcloud_project_subprocess(mocker):
+    """When ADC user credentials have no quota_project_id, google.auth.default()
+    normally calls google.auth._cloud_sdk.get_project_id(), spawning a slow
+    `gcloud config get-value project` subprocess on every CLI invocation for a
+    project_id that _get_adc_credentials discards. Verify that subprocess path
+    is bypassed during google.auth.default()."""
+    from google.auth import _cloud_sdk
+
+    mock_creds = MagicMock()
+    mock_creds.requires_scopes = False
+
+    observed_project_id = []
+
+    def fake_default(*args, **kwargs):
+        observed_project_id.append(_cloud_sdk.get_project_id())
+        return mock_creds, observed_project_id[-1]
+
+    mocker.patch("google.auth.default", side_effect=fake_default)
+    m_subproc = mocker.patch("subprocess.check_output")
+    mocker.patch("colab_cli.auth.requests.AuthorizedSession")
+
+    get_credentials(provider=AuthProvider.ADC)
+
+    assert observed_project_id == ["colab-cli"]
+    m_subproc.assert_not_called()

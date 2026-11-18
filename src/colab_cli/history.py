@@ -17,11 +17,15 @@ import json
 import os
 from typing import Any, Dict, List
 
+from colab_cli.state import make_private, private_opener
+
 
 class HistoryLogger:
     def __init__(self, log_dir: str = "~/.config/colab-cli/history"):
         self.log_dir = os.path.expanduser(log_dir)
         os.makedirs(self.log_dir, exist_ok=True)
+        for session_name in self.list_sessions():
+            make_private(self._get_log_path(session_name))
 
     def _get_log_path(self, session_name: str) -> str:
         return os.path.join(self.log_dir, f"{session_name}.jsonl")
@@ -44,7 +48,7 @@ class HistoryLogger:
             "event_type": event_type,
             **data,
         }
-        with open(log_path, "a", encoding="utf-8") as f:
+        with open(log_path, "a", encoding="utf-8", opener=private_opener) as f:
             f.write(json.dumps(event) + "\n")
 
     def list_sessions(self) -> List[str]:

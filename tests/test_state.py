@@ -134,16 +134,28 @@ def test_settings_store_defaults(temp_config):
     settings = store.load()
     assert settings.enable_update_check is True
     assert settings.last_check is None
+    assert settings.use_public_api is False
+    assert settings.public_api_supported is None
+    assert settings.tunnel_api_supported is None
 
 
 def test_settings_store_save_load(temp_config):
     store = SettingsStore(temp_config)
-    settings = Settings(enable_update_check=False, last_check=datetime(2026, 1, 1))
+    settings = Settings(
+        enable_update_check=False,
+        last_check=datetime(2026, 1, 1),
+        use_public_api=True,
+        public_api_supported=True,
+        tunnel_api_supported=False,
+    )
     store.save(settings)
 
     loaded = SettingsStore(temp_config).load()
     assert loaded.enable_update_check is False
     assert loaded.last_check == datetime(2026, 1, 1)
+    assert loaded.use_public_api is True
+    assert loaded.public_api_supported is True
+    assert loaded.tunnel_api_supported is False
 
 
 # --- Cross-platform locking (filelock ReadWriteLock) behavior ---------------

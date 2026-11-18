@@ -14,9 +14,11 @@
 
 import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
+import click
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from colab_cli.cli import app
@@ -108,6 +110,32 @@ def test_cli_new_gpu_variants(mock_client, mock_store, gpu_flag, expected_acc):
 
     added_state = mock_store.add.call_args[0][0]
     assert added_state.accelerator == expected_acc
+
+
+@pytest.mark.parametrize("gpu_flag", ["A10O", "foo", "V100", "t4x"])
+def test_cli_new_rejects_unknown_gpu(mock_client, mock_store, gpu_flag):
+    """A typo must not silently provision an A100."""
+    result = runner.invoke(app, ["new", "-s", "s", "--gpu", gpu_flag])
+
+    assert result.exit_code != 0
+    assert f"unsupported value {gpu_flag!r}" in result.output
+    # The full list is asserted in tests/test_runtime_options.py; the rich
+    # error panel wraps long lines, so only check that --gpu is named here.
+    assert "--gpu" in result.output
+    mock_client.assign.assert_not_called()
+    mock_store.add.assert_not_called()
+
+
+@pytest.mark.parametrize("tpu_flag", ["v4", "foo", "v5e"])
+def test_cli_new_rejects_unknown_tpu(mock_client, mock_store, tpu_flag):
+    """Only v5e1 and v6e1 exist; anything else used to become v6e1."""
+    result = runner.invoke(app, ["new", "-s", "s", "--tpu", tpu_flag])
+
+    assert result.exit_code != 0
+    assert f"unsupported value {tpu_flag!r}" in result.output
+    assert "--tpu" in result.output
+    mock_client.assign.assert_not_called()
+    mock_store.add.assert_not_called()
 
 
 def test_cli_sessions_unified_format(mock_client, mock_common_state):
@@ -317,6 +345,25 @@ def test_cli_stop(mock_client, mock_store, mock_common_state):
     mock_store.remove.assert_called_with("s1")
 
 
+def test_cli_stop_all(mock_client, mock_store, mock_common_state):
+    sessions = {"s1": MagicMock(endpoint="e1"), "s2": MagicMock(endpoint="e2")}
+    mock_common_state.sync_sessions.return_value = (sessions, [])
+
+    result = runner.invoke(app, ["stop", "--all"])
+    assert result.exit_code == 0
+    assert "Stopped 2 session(s)" in result.output
+    assert mock_client.unassign.call_args_list == [call("e1"), call("e2")]
+    assert mock_store.remove.call_args_list == [call("s1"), call("s2")]
+
+
+def test_cli_stop_all_no_sessions(mock_common_state):
+    mock_common_state.sync_sessions.return_value = ({}, [])
+
+    result = runner.invoke(app, ["stop", "--all"])
+    assert result.exit_code == 0
+    assert "No active sessions" in result.output
+
+
 def test_cli_sessions_prune(mock_common_state):
     mock_assignment = MagicMock()
     mock_session_state1 = MagicMock()
@@ -384,7 +431,7 @@ def _extract_command_names(help_output: str) -> list[str]:
     inside the `╭─ Commands ─...` rich box. Returns names in the order they
     appear.
     """
-    lines = help_output.splitlines()
+    lines = click.unstyle(help_output).splitlines()
     in_commands = False
     names = []
     for line in lines:
@@ -437,18 +484,19 @@ def test_cli_no_args():
     assert result.exit_code in [0, 2]
 
 
-def test_cli_console(mock_store, mock_common_state):
-    mock_session_state = MagicMock()
-    mock_session_state.name = "s1"
-    mock_session_state.token = "t1"
-    mock_session_state.url = "http://test.com"
-    mock_store.get.return_value = mock_session_state
+def test_cli_console_removed():
+    assert "console" not in typer.main.get_command(app).commands
 
-    mock_common_state.resolve_session.return_value = "s1"
-    with patch("colab_cli.commands.execution.connect_console") as mock_connect:
-        result = runner.invoke(app, ["console", "-s", "s1"])
-        assert result.exit_code == 0
-        mock_connect.assert_called_once_with(mock_session_state)
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0, result.output
+    names = _extract_command_names(result.output)
+    assert names, result.output
+    assert "ssh" in names, result.output
+    assert "console" not in names, result.output
+
+    result = runner.invoke(app, ["console"])
+    assert result.exit_code == click.UsageError.exit_code, result.output
+    assert "No such command" in result.output, result.output
 
 
 @patch("colab_cli.commands.files.ContentsClient")
@@ -657,3 +705,35 @@ def test_cli_new_412_without_accelerator_shows_friendly_error(mock_client, mock_
     assert result.exit_code != 0
     assert "precondition" in result.output.lower()
     mock_store.add.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "args,env,expected",
+    [
+        (["sessions"], {}, False),
+        (["--public-api", "sessions"], {}, True),
+        (["--no-public-api", "sessions"], {}, False),
+        (["sessions"], {"COLAB_CLI_PUBLIC_API": "1"}, True),
+        (["sessions"], {"COLAB_CLI_PUBLIC_API": "0"}, False),
+    ],
+)
+def test_cli_public_api_flag_and_env(args, env, expected):
+    from colab_cli import cli
+
+    result = runner.invoke(app, args, env=env)
+    assert result.exit_code == 0
+    assert cli.state.use_public_api is expected
+
+
+def test_cli_test_public_api_hidden_and_reports_status(mock_common_state):
+    help_res = runner.invoke(app, ["--help"])
+    assert "test-public-api" not in help_res.output
+
+    sub_help = runner.invoke(app, ["test-public-api", "--help"])
+    assert sub_help.exit_code == 0
+
+    mock_common_state.client.check_api_access.return_value = (False, True)
+    res = runner.invoke(app, ["test-public-api"])
+    assert res.exit_code == 0
+    assert "Public API" in res.output
+    assert "Tunnel API" in res.output

@@ -468,6 +468,30 @@ def test_run_with_gpu_flag(
     assert kwargs["accelerator"] is Accelerator.T4
 
 
+@pytest.mark.parametrize(
+    "flag,value",
+    [
+        ("--gpu", "A10O"),
+        ("--tpu", "v4"),
+    ],
+)
+def test_run_rejects_unknown_accelerator(
+    mock_client,
+    mock_store,
+    mock_runtime_class,
+    script_path,
+    flag,
+    value,
+):
+    """A typo must fail before allocating a VM, not become A100/v6e1."""
+    result = runner.invoke(app, ["run", flag, value, str(script_path)])
+
+    assert result.exit_code != 0
+    assert f"unsupported value {value!r}" in result.output
+    assert flag in result.output
+    mock_client.assign.assert_not_called()
+
+
 def test_run_with_tpu_flag(
     mock_client,
     mock_store,

@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+import urllib.parse
 from unittest.mock import MagicMock, mock_open, patch
 
 from keyring.errors import KeyringError
@@ -80,7 +82,7 @@ def test_get_credentials_valid_token(mock_deps):
         KEYRING_SERVICE_NAME, KEYRING_USERNAME
     )
     mock_deps["creds_cls"].from_authorized_user_info.assert_called_once_with(
-        {"token": "valid"}, PUBLIC_SCOPES
+        {"token": "valid"}
     )
     mock_deps["keyring"].set_password.assert_not_called()
     mock_deps["session"].assert_called_once_with(mock_creds)
@@ -326,7 +328,7 @@ def test_legacy_token_file_migrated_to_keyring(mock_deps, mocker):
         res = get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
 
     mock_deps["creds_cls"].from_authorized_user_file.assert_called_once_with(
-        LEGACY_TOKEN_PATH, PUBLIC_SCOPES
+        LEGACY_TOKEN_PATH
     )
     mock_deps["flow_cls"].from_client_config.assert_not_called()
     mock_deps["keyring"].set_password.assert_called_once_with(
@@ -657,3 +659,110 @@ def test_linux_keyring_lock_check_runs_under_timeout(mock_deps, mocker, capsys):
     assert "Operation 'set_password' timed out" in err
     mock_flow.fetch_token.assert_called_once_with(code="pasted-code")
     assert res == mock_deps["session"].return_value
+
+
+def test_remote_flow_partial_grant_persists_only_granted_scopes(
+    mocker, monkeypatch, capsys, tmp_path
+):
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(tmp_path / "none.json"))
+    config_path = tmp_path / "oauth.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "installed": {
+                    "client_id": "test-client",
+                    "client_secret": "test-secret",
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                }
+            }
+        )
+    )
+    granted = [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/colaboratory",
+    ]
+
+    m_keyring = mocker.patch("colab_cli.auth.keyring", create=True)
+    m_keyring.get_password.return_value = None
+    mocker.patch("colab_cli.auth.input", create=True, return_value="auth-code")
+
+    token_resp = MagicMock(
+        status_code=200,
+        headers={"Content-Type": "application/json"},
+        text=json.dumps(
+            {
+                "access_token": "test-access",
+                "refresh_token": "test-refresh",
+                "expires_in": 3600,
+                "scope": " ".join(granted),
+                "token_type": "Bearer",
+            }
+        ),
+    )
+    mocker.patch("requests_oauthlib.OAuth2Session.request", return_value=token_resp)
+
+    session = get_credentials(str(config_path), provider=AuthProvider.OAUTH2)
+
+    err_lines = [line.strip() for line in capsys.readouterr().err.splitlines()]
+    auth_url = next(line for line in err_lines if line.startswith("https://"))
+    requested = urllib.parse.parse_qs(urllib.parse.urlparse(auth_url).query)["scope"][
+        0
+    ].split()
+    assert requested == PUBLIC_SCOPES
+    assert session.credentials.scopes == granted
+    assert session.credentials.granted_scopes == granted
+    saved = json.loads(m_keyring.set_password.call_args.args[2])
+    assert saved["scopes"] == granted
+
+
+def test_partial_grant_token_refreshes_with_granted_scopes(
+    mocker, monkeypatch, tmp_path
+):
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(tmp_path / "none.json"))
+    config_path = tmp_path / "oauth.json"
+    config_path.write_text('{"installed":{"client_id":"test-client"}}')
+    granted = [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/colaboratory",
+    ]
+
+    m_keyring = mocker.patch("colab_cli.auth.keyring", create=True)
+    m_keyring.get_password.return_value = json.dumps(
+        {
+            "token": "expired-access",
+            "refresh_token": "test-refresh",
+            "client_id": "test-client",
+            "client_secret": "test-secret",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "scopes": granted,
+            "expiry": "2020-01-01T00:00:00Z",
+        }
+    )
+
+    transport = MagicMock(
+        return_value=MagicMock(
+            status=200,
+            data=json.dumps(
+                {
+                    "access_token": "refreshed-access",
+                    "expires_in": 3600,
+                    "scope": " ".join(granted),
+                    "token_type": "Bearer",
+                }
+            ).encode(),
+        )
+    )
+    mocker.patch("colab_cli.auth.Request", return_value=transport)
+
+    session = get_credentials(str(config_path), provider=AuthProvider.OAUTH2)
+
+    body = transport.call_args.kwargs["body"].decode()
+    sent_scopes = urllib.parse.parse_qs(body)["scope"][0].split()
+    assert sent_scopes == granted
+    assert session.credentials.token == "refreshed-access"
+    saved = json.loads(m_keyring.set_password.call_args.args[2])
+    assert saved["token"] == "refreshed-access"
+    assert saved["scopes"] == granted

@@ -26,7 +26,6 @@ from typing_extensions import Annotated
 
 from colab_cli.runtime import ColabRuntime
 from colab_cli.utils import handle_image, is_terminal_error, render_display_data
-from colab_cli.console import connect_console
 
 _console = Console()
 
@@ -378,35 +377,6 @@ def repl(
             state.store.add(s)
 
 
-def console(
-    session: Annotated[
-        Optional[str], typer.Option("-s", "--session", help="Session name")
-    ] = None,
-):
-    """Connect to raw TTY console"""
-    from colab_cli.common import state
-
-    name = state.resolve_session(session)
-    s = state.get_session(name)
-    state.history.log_event(s.name, "console_started", {})
-    s.running = "console"
-    state.store.add(s)
-    try:
-        connect_console(s)
-    except Exception as e:
-        if is_terminal_error(e):
-            typer.echo(
-                f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
-            )
-            state.prune_session(name)
-            raise typer.Exit(1)
-        raise e
-    finally:
-        s.running = None
-        state.store.add(s)
-
-
 def register(app: typer.Typer):
     app.command(name="exec")(exec_command)
     app.command()(repl)
-    app.command()(console)

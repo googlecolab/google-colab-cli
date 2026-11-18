@@ -1,6 +1,12 @@
 ---
 log:
+2026-11-13: Documented `--auth {oauth2,adc}` (default `oauth2`) and required ADC `gcloud` scopes under Global Flags.
+2026-11-04: `--gpu` and `--tpu` now reject unknown values instead of silently selecting `A100` (GPU) or `v6e1` (TPU). `resolve_runtime_options()` uses the new `GPU_ACCELERATORS` / `TPU_ACCELERATORS` maps and raises a `typer.BadParameter` that names the flag and the supported list; `--help` is generated from the same maps so it cannot drift. Validation runs before any assignment request, in both `colab new` and `colab run`.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to check if the active Linux `SecretService` keyring collection is locked via `secretstorage` before reading or writing OAuth tokens, logging and printing an immediate warning with the collection label, timeout, and `--auth=adc` hint while still attempting the keyring operation.
+2026-10-29: Removed the `colab console` subcommand; the long-lived connections that skip mid-session token refresh are now `repl` and `ssh`.
+2026-10-29: The debug log (`colab.log` and `--logtostderr`) masks access tokens, runtime proxy tokens, OAuth codes, client secrets, auth headers and cookies, including in percent-encoded URLs; `jupyter_kernel_client` logs at INFO so kernel stdin replies are not recorded.
+2026-10-29: `sessions.json`, `settings.json`, `colab.log` and session history files are created with mode 0600, and existing copies are tightened to 0600 the next time the CLI uses them (history files whenever the history logger starts).
+2026-10-22: Added global `--public-api/--no-public-api` toggle (`COLAB_CLI_PUBLIC_API`, `Settings.use_public_api`, default `False`), dual `Client.list_assignments()` dispatch (`/v1beta/runtimes` vs `/tun/m/assignments`), `Operation`/`Status` models, and cached auth capability hints on HTTP 401/403.
 2026-10-21: Stored OAuth2 credentials in the OS native keyring via the `keyring` library instead of `~/.config/colab-cli/token.json`, falling back to `_run_remote_flow` if keyring is inaccessible. Keyring failures are reported on stderr, and an existing `token.json` is migrated into the keyring and then deleted (or deleted outright if the keyring already has a token).
 2026-10-14: Added configurable HTTP request timeouts and bounded allocation retries. Uncertain allocation POSTs are reconciled by GET using the same notebook hash before resubmission.
 2026-09-25: Runtime proxy tokens are now refreshed before expiry. `SessionState` persists `token_expires_at`, and `State.get_session` re-fetches the token via `GET /tun/m/assignments` when it's within 5 minutes of expiring.
@@ -32,6 +38,7 @@ Defines the specific hardware model.
 - **GPU Accelerators**:
     - `T4`: NVIDIA T4 (standard free-tier GPU).
     - `L4`: NVIDIA L4 (cost-effective modern GPU).
+    - `G4`: NVIDIA G4 (entry-level datacenter GPU).
     - `A100`: NVIDIA A100 (high-performance GPU).
     - `H100`: NVIDIA H100 (latest-gen performance GPU).
 - **TPU Accelerators**:
@@ -53,6 +60,12 @@ The CLI maps user flags to these backend parameters:
 - `colab new my-session --tpu=v5e1` -> `variant=TPU`, `accelerator=V5E1`
 - `colab new my-session --high-mem` -> adds `shape=hm` (when supported)
 - `colab new my-session --gpu A100 --high-mem` -> `variant=GPU`, `accelerator=A100`, `shape=hm`
+
+`--gpu` accepts `T4`, `L4`, `G4`, `H100`, and `A100`; `--tpu` accepts `v5e1`
+and `v6e1` (case-insensitive). Anything else is rejected with the supported
+list before a VM is requested. Unknown values used to fall back silently to
+`A100`/`v6e1`, which turned a typo in an automation script into a real,
+billable allocation.
 
 ## Approach
 
@@ -88,7 +101,7 @@ end to end; mocked timeouts alone do not establish backend compatibility.
     - `nsa`: 1 (Standard flag observed in browser traces, typically for "next-gen session architecture").
     - `variant`: Selected from the list above.
     - `accelerator`: Selected from the list above.
-- **State Persistence**: The response contains a `token` and potentially a backend URL or identifier. We will store this in a local JSON file (default `~/.config/colab-cli/sessions.json`).
+- **State Persistence**: The response contains a `token` and potentially a backend URL or identifier. We will store this in a local JSON file (default `~/.config/colab-cli/sessions.json`), readable only by its owner (mode 0600).
     - Format: `{ "session_name": { "token": "...", "backend_url": "...", "hardware": "..." } }`
 
 ### 2. Session Status (`colab status`)
@@ -113,15 +126,16 @@ end to end; mocked timeouts alone do not establish backend compatibility.
 VM liveness is automatically maintained by the Colab backend based on active kernel executions and interactions. The CLI runs no keep-alive daemon. A session persists until explicitly terminated via `colab stop` or until the backend reclaims it due to inactivity.
 
 ### 6. Runtime Proxy Token Refresh
-The runtime proxy token (`runtimeProxyInfo.token`) authenticates every request to the VM and expires after `tokenExpiresInSeconds` (1 hour). `SessionState.token_expires_at` stores the absolute expiry, computed when the token is received. Commands that talk to the VM load their session through `State.get_session(name)`, which, when the token is missing an expiry or is within 5 minutes of it, calls `GET /tun/m/assignments`, takes the fresh token/URL for the matching endpoint, and persists it. If the endpoint is no longer assigned, the session is pruned. `sync_sessions` also writes back the fresh tokens it already fetches. Long-lived connections (`repl`, `console`, `ssh`) only present the token on initial connect and aren't refreshed mid-session.
+The runtime proxy token (`runtimeProxyInfo.token`) authenticates every request to the VM and expires after `tokenExpiresInSeconds` (1 hour). `SessionState.token_expires_at` stores the absolute expiry, computed when the token is received. Commands that talk to the VM load their session through `State.get_session(name)`, which, when the token is missing an expiry or is within 5 minutes of it, calls `GET /tun/m/assignments`, takes the fresh token/URL for the matching endpoint, and persists it. If the endpoint is no longer assigned, the session is pruned. `sync_sessions` also writes back the fresh tokens it already fetches. Long-lived connections (`repl`, `ssh`) only present the token on initial connect and aren't refreshed mid-session.
 
 ## TODO / Future Work
 - **Backend Sync**: Implement a way to reconcile the local `sessions.json` with the output of `colab sessions`.
 - **VM Resource Usage**: Add real-time resource usage (CPU/RAM/GPU) to the `status` output by executing a diagnostic snippet on the VM (distinct from account-level CU info, which is available via `colab usage`).
 
 ## Implementation Details
-- **Authentication**: Uses `google-auth-oauthlib` to perform a local server OAuth flow.
+- **Authentication**: Uses `google-auth-oauthlib` (`InstalledAppFlow` remote copy-paste flow, default `--auth oauth2`) or Application Default Credentials (`--auth adc`).
 - **Global Flags**:
+    - `--auth`: Authentication strategy (`oauth2` or `adc`, default: `oauth2`). User ADC credentials require `gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`.
     - `-c`, `--client-oauth-config`: Path to the client secrets JSON file (default: `~/.colab-cli-oauth-config.json`).
     - `--config`: Path to the session state JSON file (default: `~/.config/colab-cli/sessions.json`).
 - **Token Storage**: Credentials are persisted to the OS native keyring via the `keyring` library (`service_name="google-colab-cli"`, `username="oauth_token"`) after the initial flow. If the keyring is inaccessible or locked, `_run_remote_flow` is invoked for the current run and a warning is printed to stderr. A legacy `~/.config/colab-cli/token.json` is migrated into the keyring on first use and deleted after a successful keyring write, or immediately if the keyring already holds a token.

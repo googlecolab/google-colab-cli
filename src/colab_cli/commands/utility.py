@@ -387,6 +387,19 @@ def skill():
     _print_resource("SKILL.md")
 
 
+def test_public_api():
+    """Probe and cache whether active credentials can access the Public and Tunnel APIs."""
+    from colab_cli.common import state
+
+    pub_ok, tun_ok = state.client.check_api_access()
+    typer.echo(
+        f"Public API (colaboratory.googleapis.com): {'OK' if pub_ok else 'FAILED'}"
+    )
+    typer.echo(
+        f"Tunnel API (colab.research.google.com):   {'OK' if tun_ok else 'FAILED'}"
+    )
+
+
 def register(app: typer.Typer):
     app.command()(pay)
     app.command()(log)
@@ -396,6 +409,7 @@ def register(app: typer.Typer):
     # Developer-only debugging aid; hidden from `colab --help` but still
     # reachable via `colab whoami` / `colab whoami --help`.
     app.command(name="whoami", hidden=True)(whoami)
+    app.command(name="test-public-api", hidden=True)(test_public_api)
     app.command(name="readme")(readme)
     app.command(name="README", hidden=True)(readme)
     app.command(name="skill")(skill)

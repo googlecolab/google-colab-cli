@@ -43,6 +43,26 @@ class Settings(BaseModel):
     enable_update_check: bool = True
     # Highest version seen on the update source; cached for the banner.
     latest_version: Optional[str] = None
+    use_public_api: bool = False
+    public_api_supported: Optional[bool] = None
+    tunnel_api_supported: Optional[bool] = None
+
+
+_OWNER_ONLY_MODE = 0o600
+
+
+def private_opener(path: str, flags: int) -> int:
+    """Opens `path` for `open(opener=...)` and returns its file descriptor.
+
+    New files are created readable only by the owner.
+    """
+    return os.open(path, flags, _OWNER_ONLY_MODE)
+
+
+def make_private(path: str) -> None:
+    """Restricts an existing file to owner-only access, ignoring errors."""
+    with contextlib.suppress(OSError):
+        os.chmod(path, _OWNER_ONLY_MODE)
 
 
 class _LockedFileStore:
@@ -58,6 +78,7 @@ class _LockedFileStore:
         # lock. We want them to actually serialize via the underlying file lock.
         self._rwlock = filelock.ReadWriteLock(self.lock_path, is_singleton=False)
         self._ensure_dir()
+        make_private(self.path)
 
     def _ensure_dir(self):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -81,7 +102,7 @@ class _LockedFileStore:
     @contextlib.contextmanager
     def _lock_exclusive(self) -> Iterator[IO]:
         with self._rwlock.write_lock():
-            with open(self.path, "a+") as f:
+            with open(self.path, "a+", opener=private_opener) as f:
                 yield f
 
 

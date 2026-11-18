@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import base64
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -121,6 +122,42 @@ def test_download_file(mock_request, client, tmp_path):
     )
 
     assert local_file.read_bytes() == content_bytes
+
+
+@patch("colab_cli.contents.requests.request")
+def test_download_notebook_json_format(mock_request, client, tmp_path):
+    """Downloading a format=json payload serializes valid 2-space indented JSON."""
+    notebook_doc = {
+        "cells": [
+            {"cell_type": "markdown", "metadata": {}, "source": ["# Demo"]},
+            {
+                "cell_type": "code",
+                "execution_count": 1,
+                "metadata": {},
+                "outputs": [],
+                "source": ["x = 42\n", "print(x)"],
+            },
+        ],
+        "metadata": {"kernelspec": {"display_name": "Python 3", "name": "python3"}},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+    mock_resp = MagicMock(spec=Response)
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "name": "demo.ipynb",
+        "type": "notebook",
+        "format": "json",
+        "content": notebook_doc,
+    }
+    mock_request.return_value = mock_resp
+
+    local_file = tmp_path / "demo.ipynb"
+    client.download("content/demo.ipynb", str(local_file))
+
+    raw = local_file.read_text(encoding="utf-8")
+    assert json.loads(raw) == notebook_doc
+    assert raw == json.dumps(notebook_doc, indent=2)
 
 
 @patch("colab_cli.contents.requests.request")
