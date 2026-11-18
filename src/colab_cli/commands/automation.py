@@ -101,6 +101,7 @@ def _send_colab_reply(wsclient, deserialize_msg, msg_id) -> None:
         reply["parent_header"] = deserialize_msg["header"]
     wsclient.stdin_channel.send(reply)
 
+
 def show_drive_auth_url(uri: str) -> bool:
     """Print the Drive consent URL and try to open it in the browser.
 
@@ -188,9 +189,6 @@ def run_automation(
                     )
                     _send_colab_reply(wsclient, deserialize_msg, msg_id)
                     return True
-                typer.echo(
-                    f"\n[colab] REQUIRED: Google Drive Authorization needed.\nPlease visit:\n\n{uri}\n"
-                )
                 show_drive_auth_url(uri)
                 state.history.log_event(s.name, "drive_auth_needed", {"uri": uri})
                 sys.stdout.write("Press Enter after you have granted access... ")

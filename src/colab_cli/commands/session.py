@@ -397,4 +397,3 @@ def register(app: typer.Typer):
     app.command(name="restart-kernel")(restart_kernel)
     app.command()(status)
     app.command()(stop)
-
