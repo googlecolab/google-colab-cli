@@ -30,13 +30,14 @@
 
 import os
 
+# Keep training-library imports after the runtime dependency installation.
 os.system("pip install -q -U 'bitsandbytes>=0.46.1'")
 
-import torch
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from peft import LoraConfig, get_peft_model
-from trl import SFTConfig, SFTTrainer
+import torch  # noqa: E402
+from datasets import load_dataset  # noqa: E402
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig  # noqa: E402
+from peft import LoraConfig, get_peft_model  # noqa: E402
+from trl import SFTConfig, SFTTrainer  # noqa: E402
 
 MODEL_ID = "google/gemma-3-1b-it"
 NUM_SAMPLES = 200  # demo size; bump to 5000+ for a real run
