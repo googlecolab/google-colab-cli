@@ -331,13 +331,15 @@ def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
             message = (
                 f"SSH session limit reached (HTTP 429): {limit} of {limit} "
                 "SSH sessions in use on this runtime. Close another "
-                "`colab ssh` or IDE connection to it and retry. The limit "
+                "`colab ssh` or IDE connection to it and retry. If the "
+                "previous client died, retry with `--force`. The limit "
                 "depends on your Colab plan."
             )
         case 429:
             message = (
                 "Already-active SSH session (HTTP 429): another `colab ssh` "
-                "is connected to this runtime. Disconnect it and retry."
+                "is connected to this runtime. Disconnect it and retry. "
+                "If the previous client died, retry with `--force`."
             )
         case 502:
             message = (
@@ -403,6 +405,23 @@ def _close_quietly(ws: websocket.WebSocket) -> None:
         ws.close()
     except Exception:  # Best-effort close.
         pass
+
+
+def _killStaleSshd(session: SessionState) -> None:
+    """Kills existing SSH sessions on the runtime via the kernel."""
+    from colab_cli.runtime import ColabRuntime
+
+    typer.echo("[colab] --force: killing stale SSH sessions...", err=True)
+    rt = ColabRuntime(session.url, session.token, kernel_id=session.kernel_id)
+    try:
+        rt.execute_code(
+            "import os; os.system('pkill -P $(pgrep -o -x sshd)')",
+            timeout=10.0,
+        )
+    except Exception as e:
+        typer.echo(f"[colab] --force: failed to kill sshd: {e}", err=True)
+    finally:
+        rt.stop()
 
 
 _DATA_OPCODES = (websocket.ABNF.OPCODE_BINARY, websocket.ABNF.OPCODE_TEXT)
@@ -785,6 +804,17 @@ def ssh(
             ),
         ),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help=(
+                "Kill all existing SSH sessions on the runtime before "
+                "connecting. Use when a dead client causes HTTP 429 on "
+                "reconnect."
+            ),
+        ),
+    ] = False,
     ssh_mode: Annotated[
         str, typer.Option("--colab-internal-mode", hidden=True)
     ] = _DEFAULT_SSH_MODE,
@@ -812,6 +842,8 @@ def ssh(
     if cmd:
         with contextlib.redirect_stdout(sys.stderr):
             s = _resolve_session(session)
+        if force:
+            _killStaleSshd(s)
         _warn_accelerator_ignored(gpu, tpu, False, high_mem=high_mem)
         if rm:
             typer.echo("[colab] --rm ignored with -- CMD.", err=True)
@@ -822,10 +854,14 @@ def ssh(
         raise typer.Exit(code=_run_proxy_bridge(s, identity, rm, ssh_mode))
     if proxy_mode:
         s, created = _select_proxy_session(session, gpu, tpu, high_mem=high_mem)
+        if force:
+            _killStaleSshd(s)
         _warn_accelerator_ignored(gpu, tpu, created, high_mem=high_mem)
         raise typer.Exit(code=_run_proxy_bridge(s, identity, rm, ssh_mode))
 
     s, created = _select_interactive_session(session, gpu, tpu, high_mem=high_mem)
+    if force:
+        _killStaleSshd(s)
     _warn_accelerator_ignored(gpu, tpu, created, high_mem=high_mem)
     raise typer.Exit(code=_run_interactive_shell(s, identity, created, rm))
 
