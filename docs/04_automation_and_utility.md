@@ -3,6 +3,7 @@ log:
 2026-11-13: `_get_adc_credentials` in `auth.py` now catches `DefaultCredentialsError` from `google.auth.default()` so missing local ADC prints the 4-scope `gcloud auth application-default login` command and exits 1 instead of surfacing `google-auth`'s stock unscoped setup message. Updated scope documentation to clarify that both `colaboratory` and `userinfo.email` are required by `colab.research.google.com`.
 2026-11-07: Optimized `_get_adc_credentials` in `auth.py` to stub `google.auth._cloud_sdk.get_project_id` around `google.auth.default()`. When ADC user credentials lack a `quota_project_id`, `google-auth` otherwise spawns `gcloud config get-value project` on every CLI invocation to resolve a `project_id` that `_get_adc_credentials` immediately discards (`_`).
 2026-11-04: `colab drivemount` now opens the Drive consent URL in the system browser (`utils.open_url_in_browser`, also used by `colab pay`/`colab url --open`) instead of only printing it. The URL is still printed first, and a missing browser opener (SSH, containers, CI) is treated as normal: the flow keeps waiting for the user exactly as before. The prompt moved into `commands/automation.py::show_drive_auth_url` so it can be unit-tested.
+2026-11-04: `colab drivemount` now handles credentials-propagation failures instead of dumping the HTTP body. Responses are parsed defensively (HTML/empty bodies no longer raise out of the websocket hook), an authentication prompt is only shown when the server actually returns an `unauthorized_redirect_uri`, and failures print the status plus the multi-account guidance (select the account from `colab whoami`) while logging the raw body to history. The intercepted kernel request is answered on failure too, so the command exits promptly instead of hanging until its 600s timeout.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to inspect the active Linux `SecretService` collection via `secretstorage` before `get_password`/`set_password`, warning immediately when the keyring is locked so users know why the CLI is waiting on an unlock prompt (and suggesting `--auth=adc`).
 2026-10-29: Session history files are created readable only by the owner (0600), and existing ones are tightened to 0600 whenever the history logger starts.
 2026-10-22: Added hidden `colab test-public-api` subcommand and `Client.check_api_access()` to probe both `colaboratory.googleapis.com/v1beta/runtimes` and `colab.research.google.com/tun/m/assignments`, caching `public_api_supported` and `tunnel_api_supported` in `Settings` for targeted HTTP 401/403 error hints.
@@ -146,6 +147,16 @@ How each provider supplies the scopes:
     `jupyter_kernel_client` default raising `TimeoutError` mid-flow, this
     subcommand passes `timeout=INTERACTIVE_AUTOMATION_TIMEOUT_SEC` (600s) to
     `ColabRuntime.execute_code`. Same applies to `colab auth`.
+-   **Multi-account browsers**: Drive propagation is attributed to the Google
+    account that approves the consent page, which may not be the account the
+    CLI authenticated as. If the browser shows an account chooser, select the
+    account reported by `colab whoami`; approving with another account fails
+    with HTTP 400 even though the consent itself succeeded. A private window
+    only helps if it is already signed in to that account.
+-   **Failure reporting**: errors from the propagation endpoint never echo the
+    raw response body (often HTML). The CLI prints the status, points at
+    `colab whoami`, logs the body to the history file, and answers the waiting
+    kernel request so `drivemount` exits instead of hanging until its timeout.
 
 ### 4. Logging and Notebook Capture (`colab log`)
 
