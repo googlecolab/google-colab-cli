@@ -662,6 +662,25 @@ def test_proxy_command_keeps_global_options(
     ]
 
 
+def test_proxy_command_keeps_public_api_flag(mock_common_state, mocker):
+    mocker.patch.object(ssh_module.sys, "platform", "linux")
+    mock_common_state.use_public_api = True
+    session = _make_session(name="s")
+    argv = shlex.split(ssh_module._proxy_command(session, None, "interactive"))
+    assert argv == [
+        sys.executable,
+        "-m",
+        "colab_cli.cli",
+        "--public-api",
+        "ssh",
+        "--proxy-mode",
+        "-s",
+        "s",
+        "--colab-internal-mode",
+        "interactive",
+    ]
+
+
 # --- --force flag -----------------------------------------------------------
 
 

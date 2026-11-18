@@ -737,3 +737,31 @@ def test_cli_test_public_api_hidden_and_reports_status(mock_common_state):
     assert res.exit_code == 0
     assert "Public API" in res.output
     assert "Tunnel API" in res.output
+
+
+def test_cli_new_and_stop_forward_runtime_name(
+    mock_client, mock_store, mock_common_state
+):
+    mock_client.assign.return_value = PostAssignmentResponse(
+        accelerator="NONE",
+        endpoint="",
+        runtime_name="runtimes/r-abc",
+        variant=0,
+        runtimeProxyInfo={
+            "token": "t1",
+            "tokenExpiresInSeconds": 3600,
+            "url": "https://u1",
+        },
+    )
+
+    res = runner.invoke(app, ["--public-api", "new", "-s", "pub-sess"])
+    assert res.exit_code == 0
+    saved = mock_store.add.call_args[0][0]
+    assert saved.runtime_name == "runtimes/r-abc"
+    assert saved.endpoint == ""
+
+    mock_store.get.return_value = saved
+    mock_common_state.resolve_session.return_value = "pub-sess"
+    stop_res = runner.invoke(app, ["--public-api", "stop", "-s", "pub-sess"])
+    assert stop_res.exit_code == 0
+    mock_client.unassign.assert_called_with("", runtime_name="runtimes/r-abc")

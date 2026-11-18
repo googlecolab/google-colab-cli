@@ -108,6 +108,24 @@ def test_state_store_round_trips_token_expiry(temp_config):
     assert store.get("s").token_expires_at == expires_at
 
 
+def test_state_store_round_trips_runtime_name(temp_config):
+    store = StateStore(temp_config)
+    store.add(SessionState(name="legacy", token="t", url="u", endpoint="e"))
+    store.add(
+        SessionState(
+            name="pub",
+            token="t",
+            url="u",
+            endpoint="",
+            runtime_name="runtimes/r-123",
+        )
+    )
+
+    reloaded = StateStore(temp_config)
+    assert reloaded.get("legacy").runtime_name is None
+    assert reloaded.get("pub").runtime_name == "runtimes/r-123"
+
+
 def test_state_store_concurrency(temp_config):
     def add_sessions(start, count, path):
         store = StateStore(path)

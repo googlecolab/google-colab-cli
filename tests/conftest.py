@@ -43,6 +43,7 @@ def mock_common_state(mocker):
     mock_state.history = MagicMock()
     mock_state.auth_provider = AuthProvider.OAUTH2
     mock_state.config_path = None
+    mock_state.use_public_api = False
 
     # Token refresh is covered in test_common.py; elsewhere just read the store.
     def get_session(name, ignore_missing_session=False):

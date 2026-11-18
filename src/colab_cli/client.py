@@ -137,7 +137,10 @@ class RuntimeProxyInfo(BaseModel):
 
 class ListedAssignment(BaseModel):
     accelerator: Accelerator
-    endpoint: str
+    endpoint: str = ""
+    # Public API runtime resource name (e.g. "runtimes/<id>"); may be empty
+    # when listed via the legacy tunnel API.
+    name: str = ""
     variant: AssignmentVariant
     machine_shape: Shape = Field(..., alias="machineShape")
     runtime_proxy_info: RuntimeProxyInfo = Field(..., alias="runtimeProxyInfo")
@@ -201,6 +204,7 @@ class Operation(BaseModel):
 class PostAssignmentResponse(BaseModel):
     accelerator: Accelerator
     endpoint: str
+    runtime_name: Optional[str] = None
     runtime_proxy_info: RuntimeProxyInfo = Field(..., alias="runtimeProxyInfo")
     variant: AssignmentVariant
 
@@ -218,7 +222,22 @@ class GetUnassignRequest(BaseModel):
 
 class Assignment(BaseModel):
     endpoint: str
+    runtime_name: Optional[str] = None
     runtime_proxy_info: RuntimeProxyInfo = Field(..., alias="runtimeProxyInfo")
+
+
+def proxy_info_from_connection(conn: ConnectionInfo) -> RuntimeProxyInfo:
+    expires_in = 3600
+    try:
+        dt = datetime.fromisoformat(conn.expire_time.replace("Z", "+00:00"))
+        expires_in = max(0, int((dt - datetime.now(timezone.utc)).total_seconds()))
+    except Exception:
+        pass
+    return RuntimeProxyInfo(
+        token=conn.token,
+        tokenExpiresInSeconds=expires_in,
+        url=conn.url,
+    )
 
 
 XSSI_PREFIX = ")]}'\n"
@@ -367,6 +386,12 @@ class Client:
         resp = self._issue_request(url, schema=ListedAssignments)
         return resp.assignments if resp else []
 
+    def get_runtime(self, runtime_name: str) -> Runtime:
+        if not runtime_name.startswith("runtimes/"):
+            runtime_name = f"runtimes/{runtime_name}"
+        url = urljoin(self.colab_public_api, f"/v1beta/{runtime_name}")
+        return self._issue_request(url, schema=Runtime)
+
     def _list_assignments_public(self) -> List[ListedAssignment]:
         url = urljoin(self.colab_public_api, "/v1beta/runtimes")
         resp = self._issue_request(url, schema=ListRuntimesResponse)
@@ -392,35 +417,19 @@ class Client:
             except ValueError:
                 mapped_accelerator = Accelerator.NONE
 
-            expires_in = 3600
-            try:
-                dt = datetime.fromisoformat(
-                    r.connection_info.expire_time.replace("Z", "+00:00")
-                )
-                now = datetime.now(timezone.utc)
-                expires_in = max(0, int((dt - now).total_seconds()))
-            except Exception:
-                pass
-
-            proxy_info = RuntimeProxyInfo(
-                token=r.connection_info.token,
-                tokenExpiresInSeconds=expires_in,
-                url=r.connection_info.url,
-            )
-
             assignments.append(
                 ListedAssignment(
                     accelerator=mapped_accelerator,
-                    endpoint=r.connection_info.endpoint
-                    or r.name.removeprefix("runtimes/"),
+                    endpoint=r.connection_info.endpoint or "",
+                    name=r.name,
                     variant=mapped_variant,
                     machineShape=mapped_shape,
-                    runtimeProxyInfo=proxy_info,
+                    runtimeProxyInfo=proxy_info_from_connection(r.connection_info),
                 )
             )
         return assignments
 
-    def unassign(self, endpoint: str):
+    def unassign(self, endpoint: str, runtime_name: Optional[str] = None):
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/unassign/{endpoint}")
         resp = self._issue_request(url, schema=GetUnassignRequest)
         headers = {COLAB_XSRF_TOKEN_HEADER["key"]: resp.token}

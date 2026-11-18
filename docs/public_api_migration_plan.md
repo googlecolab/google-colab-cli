@@ -31,15 +31,15 @@ flowchart LR
 
 | Capability | Legacy Tunnel API (`/tun/m/...`) — **Default** | New Public API (`colaboratory.googleapis.com`) — `--public-api` | Key Adaptation Needed |
 | :--- | :--- | :--- | :--- |
-| **List Sessions** | `GET /tun/m/assignments` (XSSI-prefixed `ListedAssignments`) | `GET /v1beta/runtimes` (`ListRuntimesResponse`) | Map `Runtime` to `ListedAssignment`. Store `runtime.name` (`runtimes/{runtime_id}`) in addition to `endpoint`. |
+| **List Sessions** | `GET /tun/m/assignments` (XSSI-prefixed `ListedAssignments`) | `GET /v1beta/runtimes` (`ListRuntimesResponse`) | Map `Runtime` to `ListedAssignment`. Store `runtime.name` (`runtimes/{runtime_id}`) in `ListedAssignment.name` in addition to `endpoint`. |
 | **Create Session (`assign`)** | 2-step XSRF (`GET /tun/m/assign?nbh=<b64>` + `POST /tun/m/assign` with `X-Goog-Colab-Token`) | LRO: `POST /v1beta/runtimes?runtimeId=<id>&requestId=<uuid>` -> returns `Operation` (`operations/<op_id>`), followed by polling `GET /v1/{op_name}:wait` (or `GET /v1/{op_name}`) until `done: true` | Generate RFC-1034 `runtimeId` (`r-<uuid4>`) instead of 44-char base64 `nbh`. Unpack `Runtime` from `operation.response` and map LRO `operation.error` codes to `TooManyAssignmentsError` / `ColabRequestError`. |
 | **Delete Session (`unassign`)** | 2-step XSRF (`GET` + `POST /tun/m/unassign/{endpoint}`) | `DELETE /v1beta/{name=runtimes/*}?allowMissing=true` | **Critical**: `DeleteRuntime` takes `runtimes/{runtime_id}` (the `notebook_id_hash`), **not** `endpoint` (`m-s-...`). [`SessionState`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/state.py#L25-L38) must persist `runtime_name`. |
-| **Token Refresh** | `GET /tun/m/assignments` matched by `endpoint` | `GET /v1beta/runtimes` (or `GET /v1beta/{name=runtimes/*}`) | Refresh via `list_assignments()` (matching `runtime_name` or `endpoint`). |
+| **Token Refresh** | `GET /tun/m/assignments` matched by `endpoint` | `GET /v1beta/runtimes/{runtime_id}` (`GetRuntime`) | In Public API mode, refresh directly via `GET /v1beta/{runtime_name}` rather than listing all runtimes and matching `runtime_name` (retaining `list_assignments()` matched by `endpoint` for the tunnel API). |
 | **Usage Info (`colab usage`)** | `GET /tun/m/ccu-info` (CCU balance, burn rate, active count) | `GET /tun/m/ccu-info` | Calls `/tun/m/ccu-info` in both modes. |
 
 > [!IMPORTANT]
 > **`runtime_name` vs. `endpoint` Identity**:
-> On `colaboratory.googleapis.com`, a runtime's resource name is `runtimes/{runtime_id}` (where `{runtime_id}` is stored internally as `notebook_id_hash`), while `connectionInfo.endpoint` is the internal VM identifier (`m-s-...`) marked with `COLAB_INTERNAL` visibility. `DeleteRuntime` and `GetRuntime` look up assignments by `{runtime_id}`, **not** `endpoint`. Persisting `runtime_name: Optional[str] = None` on [`SessionState`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/state.py#L25-L38) and [`ListedAssignment`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/client.py#L138-L144) allows both APIs to coexist seamlessly.
+> On `colaboratory.googleapis.com`, a runtime's resource name is `runtimes/{runtime_id}` (where `{runtime_id}` is stored internally as `notebook_id_hash`), while `connectionInfo.endpoint` is the internal VM identifier (`m-s-...`) marked with `COLAB_INTERNAL` visibility. `DeleteRuntime` and `GetRuntime` look up assignments by `{runtime_id}`, **not** `endpoint`. Persisting `runtime_name: Optional[str] = None` on [`SessionState`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/state.py#L25-L38) and `name: str = ""` on [`ListedAssignment`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/client.py#L138-L147) allows both APIs to coexist seamlessly (after migration, `endpoint` can be removed and runtimes keyed off `name`).
 
 ---
 
@@ -85,17 +85,19 @@ flowchart LR
 ### Step 4: Update `SessionState` and `Client` Response Models for Cross-API Identity
 1. **Update [`SessionState`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/state.py#L25-L38)**:
    - Add `runtime_name: Optional[str] = None` (e.g., `"runtimes/r-..."`). Existing `sessions.json` entries without `runtime_name` deserialize cleanly with `None`.
-2. **Update [`ListedAssignment`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/client.py#L138-L144), [`PostAssignmentResponse`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/client.py#L187-L192), and [`Assignment`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/client.py#L205-L208)**:
-   - Add `runtime_name: Optional[str] = None` to each model.
-   - In Public API responses, populate `runtime_name = runtime.name` and `endpoint = runtime.connection_info.endpoint or runtime.name.removeprefix("runtimes/")`.
-3. **Update [`common.py`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/common.py#L86-L148) (`get_session` & `sync_sessions`), [`commands/session.py`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/commands/session.py), and [`commands/run.py`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/commands/run.py)**:
+2. **Update [`ListedAssignment`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/client.py#L138-L147), [`PostAssignmentResponse`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/client.py#L204-L209), and [`Assignment`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/client.py#L222-L225)**:
+   - Store `name: str = ""` on `ListedAssignment` (may be empty for legacy tunnel responses) and `runtime_name: Optional[str] = None` on `PostAssignmentResponse` / `Assignment`.
+   - In Public API responses, populate `name = runtime.name` (and `endpoint = runtime.connection_info.endpoint or ""` without falling back to `runtime.name`).
+3. **Update [`common.py`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/common.py#L105-L165) (`get_session` & `sync_sessions`), [`commands/session.py`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/commands/session.py), and [`commands/run.py`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/commands/run.py)**:
    - Persist `runtime_name=getattr(res, "runtime_name", None)` when creating sessions in `new()` and `run_command()`.
-   - In `get_session()` and `sync_sessions()`, match local sessions to server assignments by `endpoint` (or by `runtime_name` if `endpoint` doesn't match), and backfill `s.runtime_name = a.runtime_name` when present.
+   - In `get_session()`, when `use_public_api` is enabled and `s.runtime_name` is set, refresh the runtime proxy token directly via `GET /v1beta/{s.runtime_name}` (`GET /v1beta/runtimes/{runtime_id}`) instead of calling `list_assignments()` (pruning the session on HTTP 404).
+   - In `sync_sessions()`, match local sessions to server assignments by `runtime_name` (`a.name`) or `endpoint`, and backfill `s.runtime_name = a.name` when non-empty.
    - Pass `runtime_name=s.runtime_name` when calling `state.client.unassign(s.endpoint, runtime_name=s.runtime_name)` in `session.stop()` and `run.py`.
 
 ### Step 5: Implement Dual-Path Methods in `Client` (`src/colab_cli/client.py`)
-1. **`list_assignments()`**:
-   - Dispatch on `self.use_public_api` to `_list_assignments_public()` (`GET /v1beta/runtimes`) or `_list_assignments_tunnel()` (`GET /tun/m/assignments`).
+1. **`list_assignments()` & `get_runtime(runtime_name)`**:
+   - Dispatch `list_assignments()` on `self.use_public_api` to `_list_assignments_public()` (`GET /v1beta/runtimes`) or `_list_assignments_tunnel()` (`GET /tun/m/assignments`).
+   - Add `get_runtime(runtime_name)` (`GET /v1beta/{runtime_name}`) to fetch a single `Runtime` (and its refreshed `ConnectionInfo`) by resource name (`runtimes/{runtime_id}`).
 2. **`assign(notebook_hash, variant, accelerator, shape)`**:
    - Dispatch on `self.use_public_api` to `_assign_public(...)` or `_assign_tunnel(...)`.
    - **`_assign_tunnel()`**: Existing 2-step `GET`/`POST /tun/m/assign` with XSRF token and retry/backoff recovery.
@@ -124,7 +126,8 @@ flowchart LR
      - Restore `test_client_list_assignments` testing `GET /tun/m/assignments` with XSSI prefix.
      - Keep all existing `assign` (`_get_assignment` + `_post_assignment`, retries, 412, shape=hm) and `unassign` (`/tun/m/unassign/{endpoint}`) tests passing against default `Client(Prod(), mock_session)`.
    - **Public API (`use_public_api=True`) Suite**:
-     - `test_public_client_list_assignments`: `GET /v1beta/runtimes` mapping variants, shapes, accelerators, `expireTime`, `runtime_name`, and empty response `{}`.
+     - `test_public_client_list_assignments`: `GET /v1beta/runtimes` mapping variants, shapes, accelerators, `expireTime`, `ListedAssignment.name`, omitted `endpoint`, and empty response `{}`.
+     - `test_public_client_get_runtime`: `GET /v1beta/runtimes/{runtime_id}` for direct token refresh and single-runtime lookup.
      - `test_public_client_assign_immediate` & `test_public_client_assign_polls_until_done`: `POST /v1beta/runtimes` returning `Operation(done=False)` followed by `GET /v1/operations/...:wait` returning `Operation(done=True, response=Runtime)`.
      - `test_public_client_assign_failed_precondition_raises_too_many_assignments`: `Operation(done=True, error={"code": 9, ...})` raises `TooManyAssignmentsError`.
      - `test_public_client_assign_invalid_argument_raises_400`: `Operation(done=True, error={"code": 3, ...})` raises `ColabRequestError` with status 400 (verifying `colab new --gpu A100` entitlement error handling).

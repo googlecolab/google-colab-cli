@@ -146,3 +146,91 @@ def test_state_client_use_public_api_precedence(
     mocker.patch("colab_cli.common.get_credentials", return_value=MagicMock())
 
     assert st.client.use_public_api is expected
+
+
+def test_get_session_public_api_refreshes_via_get_runtime(real_state):
+    from colab_cli.client import Runtime
+
+    real_state.client.use_public_api = True
+    real_state.store.add(
+        SessionState(
+            name="s1",
+            token="old",
+            url="https://old",
+            endpoint="",
+            runtime_name="runtimes/r-1",
+            token_expires_at=None,
+        )
+    )
+    future_iso = (
+        (datetime.now(timezone.utc) + timedelta(hours=1))
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    real_state.client.get_runtime.return_value = Runtime.model_validate(
+        {
+            "name": "runtimes/r-1",
+            "connectionInfo": {
+                "expireTime": future_iso,
+                "url": "https://refreshed",
+                "token": "refreshed-tok",
+            },
+            "runtimeSpec": {
+                "variant": "VARIANT_CPU",
+                "accelerator": "NONE",
+                "shape": "SHAPE_STANDARD",
+            },
+        }
+    )
+
+    s = real_state.get_session("s1")
+
+    assert s.token == "refreshed-tok"
+    assert s.url == "https://refreshed"
+    real_state.client.get_runtime.assert_called_once_with("runtimes/r-1")
+    real_state.client.list_assignments.assert_not_called()
+
+
+def test_get_session_public_api_prunes_on_404(real_state):
+    from colab_cli.client import ColabRequestError
+
+    real_state.client.use_public_api = True
+    real_state.store.add(
+        SessionState(
+            name="s1",
+            token="old",
+            url="https://old",
+            endpoint="",
+            runtime_name="runtimes/r-1",
+            token_expires_at=None,
+        )
+    )
+    real_state.client.get_runtime.side_effect = ColabRequestError(
+        "not found", request=None, response=MagicMock(status_code=404)
+    )
+
+    assert real_state.get_session("s1", ignore_missing_session=True) is None
+    assert real_state.store.get("s1") is None
+
+
+def test_sync_sessions_matches_by_runtime_name_when_endpoint_empty(real_state):
+    real_state.store.add(
+        SessionState(
+            name="s1", token="old1", url="u", endpoint="", runtime_name="runtimes/r-1"
+        )
+    )
+    real_state.store.add(
+        SessionState(
+            name="s2", token="old2", url="u", endpoint="", runtime_name="runtimes/r-2"
+        )
+    )
+    a1 = _assignment("", "tok-1")
+    a1.name = "runtimes/r-1"
+    a2 = _assignment("", "tok-2")
+    a2.name = "runtimes/r-2"
+    real_state.client.list_assignments.return_value = [a1, a2]
+
+    sessions, _ = real_state.sync_sessions()
+
+    assert sessions["s1"].token == "tok-1"
+    assert sessions["s2"].token == "tok-2"

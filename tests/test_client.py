@@ -332,6 +332,7 @@ def test_client_list_assignments(client, mock_session):
 
     assert len(res) == 1
     assert res[0].endpoint == "e1"
+    assert res[0].name == ""
     assert "tun/m/assignments" in mock_session.request.call_args.args[1]
 
 
@@ -355,7 +356,20 @@ def test_public_client_list_assignments(mock_session):
                         "accelerator": "NONE",
                         "shape": "SHAPE_STANDARD",
                     },
-                }
+                },
+                {
+                    "name": "runtimes/r2",
+                    "connectionInfo": {
+                        "expireTime": "2026-09-24T19:00:00Z",
+                        "url": "u2",
+                        "token": "t2",
+                    },
+                    "runtimeSpec": {
+                        "variant": "VARIANT_GPU",
+                        "accelerator": "T4",
+                        "shape": "SHAPE_HIGHMEM",
+                    },
+                },
             ]
         }
     )
@@ -364,9 +378,41 @@ def test_public_client_list_assignments(mock_session):
 
     res = public_client.list_assignments()
 
-    assert len(res) == 1
+    assert len(res) == 2
     assert res[0].endpoint == "e1"
+    assert res[0].name == "runtimes/r1"
+    assert res[1].endpoint == ""
+    assert res[1].name == "runtimes/r2"
     assert "/v1beta/runtimes" in mock_session.request.call_args.args[1]
+
+
+def test_public_client_get_runtime(mock_session):
+    public_client = Client(Prod(), mock_session, use_public_api=True)
+    resp = MagicMock(
+        ok=True,
+        text=json.dumps(
+            {
+                "name": "runtimes/r1",
+                "connectionInfo": {
+                    "expireTime": "2026-09-24T19:00:00Z",
+                    "url": "https://rt-url",
+                    "token": "fresh-tok",
+                },
+                "runtimeSpec": {
+                    "variant": "VARIANT_CPU",
+                    "accelerator": "NONE",
+                    "shape": "SHAPE_STANDARD",
+                },
+            }
+        ),
+    )
+    mock_session.request.return_value = resp
+
+    rt = public_client.get_runtime("runtimes/r1")
+
+    assert rt.name == "runtimes/r1"
+    assert rt.connection_info.token == "fresh-tok"
+    assert mock_session.request.call_args.args[1].endswith("/v1beta/runtimes/r1")
 
 
 def test_client_assign_url_includes_shape_hm(client, mock_session):
