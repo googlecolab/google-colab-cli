@@ -46,7 +46,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 from typing import Callable, Optional
 from urllib.parse import urlparse
 import uuid
@@ -423,7 +422,6 @@ def _killStaleSshd(session: SessionState) -> None:
         typer.echo(f"[colab] --force: failed to kill sshd: {e}", err=True)
     finally:
         rt.stop()
-    time.sleep(2)
 
 
 _DATA_OPCODES = (websocket.ABNF.OPCODE_BINARY, websocket.ABNF.OPCODE_TEXT)
