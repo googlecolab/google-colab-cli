@@ -331,6 +331,7 @@ def test_cli_session_resolution(mock_store, mock_common_state):
 def test_cli_stop(mock_client, mock_store, mock_common_state):
     mock_session_state = MagicMock()
     mock_session_state.endpoint = "e1"
+    mock_session_state.runtime_name = None
     mock_session_state.name = "s1"
     mock_session_state.url = "http://url"
     mock_session_state.token = "token"
@@ -341,18 +342,24 @@ def test_cli_stop(mock_client, mock_store, mock_common_state):
     result = runner.invoke(app, ["stop", "-s", "s1"])
     assert result.exit_code == 0
 
-    mock_client.unassign.assert_called_with("e1")
+    mock_client.unassign.assert_called_with("e1", runtime_name=None)
     mock_store.remove.assert_called_with("s1")
 
 
 def test_cli_stop_all(mock_client, mock_store, mock_common_state):
-    sessions = {"s1": MagicMock(endpoint="e1"), "s2": MagicMock(endpoint="e2")}
+    sessions = {
+        "s1": MagicMock(endpoint="e1", runtime_name=None),
+        "s2": MagicMock(endpoint="e2", runtime_name=None),
+    }
     mock_common_state.sync_sessions.return_value = (sessions, [])
 
     result = runner.invoke(app, ["stop", "--all"])
     assert result.exit_code == 0
     assert "Stopped 2 session(s)" in result.output
-    assert mock_client.unassign.call_args_list == [call("e1"), call("e2")]
+    assert mock_client.unassign.call_args_list == [
+        call("e1", runtime_name=None),
+        call("e2", runtime_name=None),
+    ]
     assert mock_store.remove.call_args_list == [call("s1"), call("s2")]
 
 

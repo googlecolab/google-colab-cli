@@ -378,11 +378,7 @@ def _stopOne(name: str, s: SessionState) -> None:
         ColabRuntime(s.url, s.token, kernel_id=s.kernel_id).stop(shutdown_kernel=True)
     except Exception:
         pass
-    runtime_name = getattr(s, "runtime_name", None)
-    if isinstance(runtime_name, str) and runtime_name:
-        state.client.unassign(s.endpoint, runtime_name=runtime_name)
-    else:
-        state.client.unassign(s.endpoint)
+    state.client.unassign(s.endpoint, runtime_name=s.runtime_name)
     state.store.remove(name)
     state.history.log_event(name, "session_terminated", {"reason": "user_requested"})
 

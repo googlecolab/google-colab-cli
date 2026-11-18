@@ -494,10 +494,7 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
         pass
 
     try:
-        if isinstance(s.runtime_name, str) and s.runtime_name:
-            state.client.unassign(s.endpoint, runtime_name=s.runtime_name)
-        else:
-            state.client.unassign(s.endpoint)
+        state.client.unassign(s.endpoint, runtime_name=s.runtime_name)
     except Exception:
         pass
 
