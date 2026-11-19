@@ -400,9 +400,74 @@ def test_public_api():
     )
 
 
+def logout():
+    """Sign out by clearing the local OAuth2 token
+
+    Removes cached OAuth2 credentials and local runtime proxy tokens without
+    revoking the shared Google Cloud SDK OAuth grant or stopping running VMs.
+    """
+    import logging
+
+    from colab_cli.auth import AuthProvider, clear_oauth_token
+    from colab_cli.common import state
+
+    if state.auth_provider == AuthProvider.ADC:
+        typer.echo(
+            "[colab] Using --auth=adc. Run 'gcloud auth application-default "
+            "revoke' to sign out."
+        )
+        return
+
+    try:
+        removed = clear_oauth_token()
+    except Exception as e:
+        logging.getLogger(__name__).warning("Failed to clear OAuth token: %s", e)
+        typer.echo(
+            f"[colab] Failed to clear OAuth token ({e}).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    typer.echo("[colab] Logged out." if removed else "[colab] Already logged out.")
+
+    try:
+        settings = state.settings_store.load()
+        if (
+            settings.public_api_supported is not None
+            or settings.tunnel_api_supported is not None
+        ):
+            settings.public_api_supported = None
+            settings.tunnel_api_supported = None
+            state.settings_store.save(settings)
+    except Exception:
+        pass
+
+    try:
+        active = state.store.list()
+        for s in active.values():
+            if s.token or s.token_expires_at is not None:
+                s.token = ""
+                s.token_expires_at = None
+                state.store.add(s)
+    except Exception as e:
+        typer.echo(
+            f"[colab] Warning: Could not update local session cache ({e}).",
+            err=True,
+        )
+        return
+
+    if active:
+        typer.echo(
+            f"[colab] Warning: {len(active)} local session(s) may still be "
+            "running on the previous account.",
+            err=True,
+        )
+
+
 def register(app: typer.Typer):
     app.command()(pay)
     app.command()(log)
+    app.command()(logout)
     app.command(name="url")(url)
     app.command(name="version")(version_command)
     app.command(name="update")(update_command)

@@ -96,6 +96,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | Command | Description |
 | --- | --- |
 | `colab auth [-s NAME]` | Authenticate the VM for GCP services (BigQuery, GCS, etc.) |
+| `colab logout` | Clear local OAuth2 and cached runtime tokens to sign out or switch accounts |
 | `colab drivemount [-s NAME] [PATH]` | Mount Google Drive on the VM (default: `/content/drive`) |
 | `colab install [-s NAME] [-r FILE \| PKG...]` | Install packages on the VM using `uv` (falls back to `pip`) |
 | `colab log [-s NAME] [-n N] [-o FILE]` | View or export session history (`.ipynb`, `.md`, `.txt`, `.jsonl`) |

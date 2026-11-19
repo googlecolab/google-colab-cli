@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-19: Added `colab logout` to clear stored OAuth2 credentials across all chained OS keyring backends (disambiguating missing entries from real keychain/KWallet failures and warning on `NoKeyringError`) and legacy `~/.config/colab-cli/token.json` without revoking Google Cloud SDK's shared OAuth client grant. Under `--auth=adc`, prints `gcloud auth application-default revoke`. Also invalidates cached runtime proxy tokens in `sessions.json` (warning if local sessions remain), resets cached API capability flags in `settings.json`, and suppresses the daily auto-update banner.
 2026-11-13: `_get_adc_credentials` in `auth.py` now catches `DefaultCredentialsError` from `google.auth.default()` so missing local ADC prints the 4-scope `gcloud auth application-default login` command and exits 1 instead of surfacing `google-auth`'s stock unscoped setup message. Updated scope documentation to clarify that both `colaboratory` and `userinfo.email` are required by `colab.research.google.com`.
 2026-11-07: Optimized `_get_adc_credentials` in `auth.py` to stub `google.auth._cloud_sdk.get_project_id` around `google.auth.default()`. When ADC user credentials lack a `quota_project_id`, `google-auth` otherwise spawns `gcloud config get-value project` on every CLI invocation to resolve a `project_id` that `_get_adc_credentials` immediately discards (`_`).
 2026-11-04: `colab drivemount` now opens the Drive consent URL in the system browser (`utils.open_url_in_browser`, also used by `colab pay`/`colab url --open`) instead of only printing it. The URL is still printed first, and a missing browser opener (SSH, containers, CI) is treated as normal: the flow keeps waiting for the user exactly as before. The prompt moved into `commands/automation.py::show_drive_auth_url` so it can be unit-tested.
@@ -308,6 +309,15 @@ How each provider supplies the scopes:
     -   Persists `public_api_supported` and `tunnel_api_supported` booleans in `~/.config/colab-cli/settings.json` and prints `OK` or `FAILED` for each backend.
     -   When `Client._issue_request` receives HTTP 401/403, it updates the failed backend's cached flag and appends a targeted remediation hint (`--no-public-api` or `--public-api`) if the alternate backend is cached as supported.
 
+### 12. Sign Out (`colab logout`)
+
+-   **Action**: Clear locally cached OAuth2 credentials and cached runtime proxy tokens so the user can sign out or switch accounts on the next command.
+-   **Implementation**:
+    -   Under `--auth=oauth2` (default), deletes `(google-colab-cli, oauth_token)` across all chained keyring backends (disambiguating missing entries from real keychain/KWallet errors and warning on stderr on `NoKeyringError`) and removes any leftover `~/.config/colab-cli/token.json` via EAFP, attempting both stores even if one errors. Does not call Google's `/revoke` endpoint because the bundled OAuth client is shared with Google Cloud SDK.
+    -   Under `--auth=adc`, leaves local ADC untouched and directs the user to `gcloud auth application-default revoke`.
+    -   Blanks cached `token` and `token_expires_at` on local `sessions.json` entries (so `-s NAME` cannot bypass re-auth with stale proxy tokens), resets cached `public_api_supported`/`tunnel_api_supported` flags in `settings.json`, and warns on stderr if local sessions exist.
+    -   Suppressed from the daily auto-update banner (`_AUTO_UPDATE_SUPPRESSED`).
+
 ## Implementation Details
 
 -   **Code Injection**: Use a standard `run_code(session, code)` helper via
@@ -360,3 +370,8 @@ TDD is mandatory for all automation features.
 -   **Test Case**: Verify `colab AGENT` prints the same content.
 -   **Test Case**: Verify fallback to local `README.md` file when metadata is not available.
 -   **Test Case**: Verify error exit when both metadata and local file are unavailable.
+
+### 5. `logout` Account Sign-Out
+
+-   **Test Case**: Verify `clear_oauth_token()` removes both keyring entries (including across `ChainerBackend` backends) and `LEGACY_TOKEN_PATH`, handles concurrent `FileNotFoundError` and macOS `NotFound` cleanly, and re-raises locked/denied/cancelled `PasswordDeleteError` and `OSError` without skipping the remaining store.
+-   **Test Case**: Verify `colab logout` invalidates cached runtime tokens in `sessions.json`, resets cached capability flags in `settings.json`, suppresses auto-update checks, emits warnings/errors to stderr, and prints the `gcloud` hint under `--auth=adc`.
