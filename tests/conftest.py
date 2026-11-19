@@ -19,6 +19,7 @@ import typer
 from unittest.mock import MagicMock
 
 from colab_cli.auth import AuthProvider
+from colab_cli.common import State
 
 
 @pytest.fixture(autouse=True)
@@ -46,7 +47,7 @@ def mock_common_state(mocker, tmp_path):
     mock_state.config_path = None
 
     # Token refresh is covered in test_common.py; elsewhere just read the store.
-    def get_session(name, ignore_missing_session=False):
+    def get_session(name, ignore_missing_session=False, allow_attached=False):
         s = mock_state.store.get(name)
         if not s and not ignore_missing_session:
             typer.echo(f"[colab] Session '{name}' not found.")
@@ -54,6 +55,9 @@ def mock_common_state(mocker, tmp_path):
         return s
 
     mock_state.get_session.side_effect = get_session
+    mock_state.refuse_attached_name.side_effect = lambda name: (
+        State.refuse_attached_name(mock_state, name)
+    )
 
     # Default behavior for sync_sessions
     mock_state.sync_sessions.return_value = ({}, [])

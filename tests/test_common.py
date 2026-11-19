@@ -20,7 +20,7 @@ import pytest
 import typer
 
 from colab_cli.client import ListedAssignment
-from colab_cli.common import State, setup_logging
+from colab_cli.common import State, exit_ssh_only, setup_logging
 from colab_cli.state import SessionState, SettingsStore, StateStore
 
 
@@ -205,3 +205,11 @@ def test_setup_logging_uses_settings_store_directory(tmp_path, monkeypatch):
         root_logger.handlers[0].close()
 
     assert "hello-from-settings-dir" in (settings_dir / "colab.log").read_text()
+
+
+def test_exit_ssh_only_quotes_session_name(capsys):
+    with pytest.raises(typer.Exit) as exc:
+        exit_ssh_only("my run")
+
+    assert exc.value.exit_code == 1
+    assert "`colab ssh -s 'my run'`" in capsys.readouterr().err

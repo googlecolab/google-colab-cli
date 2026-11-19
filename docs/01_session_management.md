@@ -6,8 +6,9 @@ log:
   endpoints, `colab stop` (including `--all`) and `colab ssh --rm` remove
   attached sessions without stopping or unassigning their runtimes, `colab run`
   cleanup removes its non-attached record only once its runtime is released,
-  and `State.store` and `setup_logging` derive the default config directory
-  from `SettingsStore.path`.
+  `colab new -s` and `colab run -s` refuse an attached name before any
+  request, and `State.store` and `setup_logging` derive the default config
+  directory from `SettingsStore.path`.
 2026-11-13: Documented `--auth {oauth2,adc}` (default `oauth2`) and required ADC `gcloud` scopes under Global Flags.
 2026-11-04: `--gpu` and `--tpu` now reject unknown values instead of silently selecting `A100` (GPU) or `v6e1` (TPU). `resolve_runtime_options()` uses the new `GPU_ACCELERATORS` / `TPU_ACCELERATORS` maps and raises a `typer.BadParameter` that names the flag and the supported list; `--help` is generated from the same maps so it cannot drift. Validation runs before any assignment request, in both `colab new` and `colab run`.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to check if the active Linux `SecretService` keyring collection is locked via `secretstorage` before reading or writing OAuth tokens, logging and printing an immediate warning with the collection label, timeout, and `--auth=adc` hint while still attempting the keyring operation.
@@ -123,9 +124,10 @@ end to end; mocked timeouts alone do not establish backend compatibility.
   shutting down its kernel or unassigning its runtime, and print
   `[colab] '<name>' wasn't created by the cli and isn't stopped, only removed`
   `from sessions list`. `Client.unassign` refuses any endpoint the store holds
-  as attached, and `colab run` cleanup removes its non-attached record only
-  once its runtime is released (otherwise it keeps the record and prints a
-  `colab stop -s <name>` retry hint).
+  as attached, `colab run` cleanup removes its non-attached record only once
+  its runtime is released (otherwise it keeps the record and prints a
+  `colab stop -s <name>` retry hint), and `colab new -s` / `colab run -s`
+  refuse an attached name before any request.
 - **API**: `POST https://colab.sandbox.google.com/tun/m/unassign/<endpoint>` (based on `tpu-v5e1-unassign.har`).
 - **Flow**:
     1.  Perform a `GET` request to the unassign URL to obtain a fresh XSRF token.

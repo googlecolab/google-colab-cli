@@ -16,9 +16,10 @@ import contextlib
 import logging
 import os
 import re
+import shlex
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import NoReturn, Optional
 
 import typer
 
@@ -41,6 +42,15 @@ def _apply_proxy_info(s: SessionState, info: RuntimeProxyInfo):
     s.token = info.token
     s.url = info.url
     s.token_expires_at = info.expires_at()
+
+
+def exit_ssh_only(name: str, more: str = "") -> NoReturn:
+    typer.echo(
+        f"[colab] Error: Session '{name}' uses a runtime the CLI did not"
+        f" create. Use it with `colab ssh -s {shlex.quote(name)}`{more}.",
+        err=True,
+    )
+    raise typer.Exit(1)
 
 
 class State:
@@ -98,6 +108,12 @@ class State:
                 is_attached=lambda ep: self.store.is_attached_endpoint(ep),
             )
         return self._client
+
+    def refuse_attached_name(self, name: str) -> None:
+        record = self.store.get(name)
+        if record is not None and record.attached is True:
+            remove = f", remove it with `colab stop -s {shlex.quote(name)}`"
+            exit_ssh_only(name, f"{remove}, or pick another name")
 
     def prune_session(self, name: str):
         """Removes a session from local state."""

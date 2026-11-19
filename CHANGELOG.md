@@ -24,8 +24,10 @@ below corresponds to a tag of the same name.
 - **sessions:** Track sessions attached to runtimes the CLI did not create
   in `sessions.json`, refuse unassignment for attached endpoints, make
   `colab stop`, `colab stop --all`, and `colab ssh --rm` remove attached
-  sessions without stopping or unassigning their runtimes, and make
-  `colab run` cleanup keep its record until the runtime is released.
+  sessions without stopping or unassigning their runtimes, make `colab run`
+  cleanup keep its record until the runtime is released, and refuse an
+  attached `NAME` in `colab new -s NAME` and `colab run -s NAME` before any
+  request.
 
 ### Removed
 
