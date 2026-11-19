@@ -25,7 +25,6 @@ from colab_cli.client import (
     Shape,
     TooManyAssignmentsError,
     Variant,
-    normalize_proxy_url,
     resolve_assign_shape,
     shape_display_label,
 )
@@ -284,62 +283,17 @@ def restart_kernel(
 
 def sessions_command():
     """List all active sessions"""
-    from colab_cli.common import state
+    from colab_cli.common import index_sessions, match_session, state
 
     sessions, assignments = state.sync_sessions()
     if not assignments:
         typer.echo("[colab] No active sessions found on server.")
         return
 
-    name_by_runtime = {
-        s.runtime_name: s.name
-        for s in sessions.values()
-        if isinstance(getattr(s, "runtime_name", None), str) and s.runtime_name
-    }
-    name_by_endpoint = {
-        s.endpoint: s.name
-        for s in sessions.values()
-        if isinstance(getattr(s, "endpoint", None), str) and s.endpoint
-    }
-    by_url = {
-        u: s
-        for s in sessions.values()
-        if (u := normalize_proxy_url(getattr(s, "url", None)))
-    }
+    session_index = index_sessions(sessions.values())
     for a in assignments:
-        a_name = getattr(a, "name", None)
-        a_ep = getattr(a, "endpoint", None)
-        a_url = normalize_proxy_url(
-            getattr(getattr(a, "runtime_proxy_info", None), "url", None)
-        )
-        url_match = by_url.get(a_url) if a_url else None
-        if url_match is not None:
-            s_rt = getattr(url_match, "runtime_name", None)
-            s_ep = getattr(url_match, "endpoint", None)
-            if (
-                isinstance(s_rt, str)
-                and s_rt
-                and isinstance(a_name, str)
-                and a_name
-                and s_rt != a_name
-            ) or (
-                isinstance(s_ep, str)
-                and s_ep
-                and isinstance(a_ep, str)
-                and a_ep
-                and s_ep != a_ep
-            ):
-                url_match = None
-        name = (
-            (
-                name_by_runtime.get(a_name)
-                if isinstance(a_name, str) and a_name
-                else None
-            )
-            or (name_by_endpoint.get(a_ep) if isinstance(a_ep, str) and a_ep else None)
-            or (url_match.name if url_match is not None else None)
-            or "?"
-        )
+        matched = match_session(a, session_index)
+        name = matched.name if matched is not None else "?"
         # `a.variant` is an int-valued AssignmentVariant (DEFAULT=0/GPU=1/TPU=2);
         # its `.name` matches the user-facing string Variant enum, which is what
         # `status` shows for locally-tracked sessions.

@@ -384,3 +384,43 @@ def test_get_session_cross_api_backfills_via_by_url_even_when_token_fresh(real_s
 
     assert s2.endpoint == "ep-2"
     assert real_state.store.get("pub-sess").endpoint == "ep-2"
+
+
+def test_match_session_matches_and_rejects_conflicts():
+    from colab_cli.common import index_sessions, match_session
+
+    s_pub = SessionState(
+        name="pub",
+        token="t",
+        url="https://vm-1.colab.dev/",
+        endpoint="",
+        runtime_name="runtimes/r-1",
+    )
+    s_tun = SessionState(
+        name="tun",
+        token="t",
+        url="https://vm-2.colab.dev",
+        endpoint="ep-2",
+        runtime_name=None,
+    )
+    idx = index_sessions([s_pub, s_tun])
+
+    a_by_rt = _assignment("", "t", url="https://other.colab.dev")
+    a_by_rt.name = "runtimes/r-1"
+    assert match_session(a_by_rt, idx) == s_pub
+
+    a_by_ep = _assignment("ep-2", "t", url="https://other.colab.dev")
+    assert match_session(a_by_ep, idx) == s_tun
+
+    a_by_url = _assignment("ep-backfill", "t", url="https://vm-1.colab.dev")
+    assert match_session(a_by_url, idx) == s_pub
+
+    a_conflict_rt = _assignment("", "t", url="https://vm-1.colab.dev")
+    a_conflict_rt.name = "runtimes/r-other"
+    assert match_session(a_conflict_rt, idx) is None
+
+    a_conflict_ep = _assignment("ep-other", "t", url="https://vm-2.colab.dev")
+    assert match_session(a_conflict_ep, idx) is None
+
+    a_unmatched = _assignment("", "t", url="")
+    assert match_session(a_unmatched, idx) is None

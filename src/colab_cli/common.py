@@ -51,33 +51,69 @@ def _apply_proxy_info(s: SessionState, info: RuntimeProxyInfo):
     s.token_expires_at = info.expires_at()
 
 
-def _index_assignments(assignments):
-    by_runtime = {a.name: a for a in assignments if a.name}
-    by_endpoint = {a.endpoint: a for a in assignments if a.endpoint}
-    by_url = {
-        u: a
-        for a in assignments
-        if (u := normalize_proxy_url(a.runtime_proxy_info.url))
-    }
-    return by_runtime, by_endpoint, by_url
+def _update_session_from_assignment(s: SessionState, matched) -> None:
+    if matched.name and not s.runtime_name:
+        s.runtime_name = matched.name
+    if matched.endpoint and not s.endpoint:
+        s.endpoint = matched.endpoint
+    _apply_proxy_info(s, matched.runtime_proxy_info)
 
 
-def _match_assignment(
-    s: SessionState, by_runtime: dict, by_endpoint: dict, by_url: dict
-):
-    if s.runtime_name and s.runtime_name in by_runtime:
-        return by_runtime[s.runtime_name]
-    if s.endpoint and s.endpoint in by_endpoint:
-        return by_endpoint[s.endpoint]
-    s_url = normalize_proxy_url(s.url)
-    a = by_url.get(s_url) if s_url else None
-    if a is None:
+def _str_field(obj: object, attr: str) -> str:
+    val = getattr(obj, attr, None)
+    return val if isinstance(val, str) else ""
+
+
+def _session_keys(s: object) -> tuple[str, str, str]:
+    return (
+        _str_field(s, "runtime_name"),
+        _str_field(s, "endpoint"),
+        normalize_proxy_url(getattr(s, "url", None)),
+    )
+
+
+def _assignment_keys(a: object) -> tuple[str, str, str]:
+    proxy = getattr(a, "runtime_proxy_info", None)
+    return (
+        _str_field(a, "name"),
+        _str_field(a, "endpoint"),
+        normalize_proxy_url(getattr(proxy, "url", None)),
+    )
+
+
+def _index_by_keys(items, key_fn):
+    by_runtime, by_endpoint, by_url = {}, {}, {}
+    for item in items:
+        rt, ep, url = key_fn(item)
+        if rt:
+            by_runtime[rt] = item
+        if ep:
+            by_endpoint[ep] = item
+        if url:
+            by_url[url] = item
+    return by_runtime, by_endpoint, by_url, key_fn
+
+
+def _match_by_keys(keys: tuple[str, str, str], index):
+    rt, ep, url = keys
+    by_runtime, by_endpoint, by_url, item_key_fn = index
+    if matched := by_runtime.get(rt) or by_endpoint.get(ep):
+        return matched
+    matched = by_url.get(url)
+    if matched is None:
         return None
-    if s.runtime_name and a.name and s.runtime_name != a.name:
+    m_rt, m_ep, _ = item_key_fn(matched)
+    if (rt and m_rt and rt != m_rt) or (ep and m_ep and ep != m_ep):
         return None
-    if s.endpoint and a.endpoint and s.endpoint != a.endpoint:
-        return None
-    return a
+    return matched
+
+
+def index_sessions(sessions):
+    return _index_by_keys(sessions, _session_keys)
+
+
+def match_session(assignment, index):
+    return _match_by_keys(_assignment_keys(assignment), index)
 
 
 class State:
@@ -187,16 +223,12 @@ class State:
                         )
                         self.store.add(s)
                 else:
-                    by_runtime, by_endpoint, by_url = _index_assignments(
-                        self.client.list_assignments()
+                    assignment_index = _index_by_keys(
+                        self.client.list_assignments(), _assignment_keys
                     )
-                    matched = _match_assignment(s, by_runtime, by_endpoint, by_url)
+                    matched = _match_by_keys(_session_keys(s), assignment_index)
                     if matched is not None:
-                        if matched.name and not s.runtime_name:
-                            s.runtime_name = matched.name
-                        if matched.endpoint and not s.endpoint:
-                            s.endpoint = matched.endpoint
-                        _apply_proxy_info(s, matched.runtime_proxy_info)
+                        _update_session_from_assignment(s, matched)
                         self.store.add(s)
                     else:
                         self.prune_session(name)
@@ -226,21 +258,17 @@ class State:
             return self._sessions, assignments
 
         assignments = self.client.list_assignments()
-        by_runtime, by_endpoint, by_url = _index_assignments(assignments)
+        assignment_index = _index_by_keys(assignments, _assignment_keys)
 
         self._sessions = local_sessions
         pruned = 0
         for name, s in list(self._sessions.items()):
-            matched = _match_assignment(s, by_runtime, by_endpoint, by_url)
+            matched = _match_by_keys(_session_keys(s), assignment_index)
             if matched is None:
                 self.prune_session(name)
                 pruned += 1
             else:
-                if matched.name and not s.runtime_name:
-                    s.runtime_name = matched.name
-                if matched.endpoint and not s.endpoint:
-                    s.endpoint = matched.endpoint
-                _apply_proxy_info(s, matched.runtime_proxy_info)
+                _update_session_from_assignment(s, matched)
                 self.store.add(s)
 
         if pruned > 0:

@@ -507,9 +507,7 @@ class Client:
                     for a in assignments
                     if a.name and (u := normalize_proxy_url(a.runtime_proxy_info.url))
                 }
-                target = (by_endpoint.get(endpoint) if endpoint else None) or (
-                    by_url.get(norm_url) if norm_url else None
-                )
+                target = by_endpoint.get(endpoint) or by_url.get(norm_url)
                 if not target:
                     if norm_url:
                         return None
