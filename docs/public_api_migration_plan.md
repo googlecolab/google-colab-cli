@@ -34,7 +34,7 @@ flowchart LR
 | **List Sessions** | `GET /tun/m/assignments` (XSSI-prefixed `ListedAssignments`) | `GET /v1beta/runtimes` (`ListRuntimesResponse`) | Map `Runtime` to `ListedAssignment`. Store `runtime.name` (`runtimes/{runtime_id}`) in `ListedAssignment.name` in addition to `endpoint`. |
 | **Create Session (`assign`)** | 2-step XSRF (`GET /tun/m/assign?nbh=<b64>` + `POST /tun/m/assign` with `X-Goog-Colab-Token`) | LRO: `POST /v1beta/runtimes?runtimeId=<id>&requestId=<uuid>` -> returns `Operation` (`operations/<op_id>`), followed by polling `GET /v1/{op_name}:wait` (or `GET /v1/{op_name}`) until `done: true` | Generate RFC-1034 `runtimeId` (`r-<uuid4>`) instead of 44-char base64 `nbh`. Unpack `Runtime` from `operation.response` and map LRO `operation.error` codes to `TooManyAssignmentsError` / `ColabRequestError`. |
 | **Delete Session (`unassign`)** | 2-step XSRF (`GET` + `POST /tun/m/unassign/{endpoint}`) | `DELETE /v1beta/{name=runtimes/*}?allowMissing=true` | **Critical**: `DeleteRuntime` takes `runtimes/{runtime_id}` (the `notebook_id_hash`), **not** `endpoint` (`m-s-...`). [`SessionState`](../src/colab_cli/state.py#L25-L38) must persist `runtime_name`. |
-| **Token Refresh** | `GET /tun/m/assignments` matched by `endpoint` | `GET /v1beta/runtimes/{runtime_id}` (`GetRuntime`) | In Public API mode, refresh directly via `GET /v1beta/{runtime_name}` rather than listing all runtimes and matching `runtime_name` (retaining `list_assignments()` matched by `endpoint` for the tunnel API). |
+| **Token Refresh** | `GET /tun/m/assignments` matched by `endpoint` or proxy `url` (`by_url`) | `GET /v1beta/runtimes/{runtime_id}` (`GetRuntime`) | In Public API mode, refresh directly via `GET /v1beta/{runtime_name}` when `runtime_name` is known; otherwise fall back to `list_assignments()` matched by `runtime_name`, `endpoint`, or normalized proxy `url` (`by_url`) so cross-API sessions reconcile and backfill cleanly. |
 | **Usage Info (`colab usage`)** | `GET /tun/m/ccu-info` (CCU balance, burn rate, active count) | `GET /tun/m/ccu-info` | Calls `/tun/m/ccu-info` in both modes. |
 
 > [!IMPORTANT]
@@ -57,7 +57,7 @@ flowchart LR
 2. **Add global `--public-api / --no-public-api` option in [`src/colab_cli/cli.py`](../src/colab_cli/cli.py#L58-L96)**:
    - Add `public_api: Annotated[Optional[bool], typer.Option("--public-api/--no-public-api", envvar="COLAB_CLI_PUBLIC_API", help="Use the Colab Public API (colaboratory.googleapis.com) instead of the legacy tunnel API.")] = None`.
    - Store `state.use_public_api = public_api` (`Optional[bool]`, where `None` means "defer to `settings.json`").
-3. **Resolve precedence in [`State.client`](../src/colab_cli/common.py#L70-L77) (`src/colab_cli/common.py`)**:
+3. **Resolve precedence in [`State.effective_use_public_api`](../src/colab_cli/common.py#L117-L122) and [`State.client`](../src/colab_cli/common.py#L125-L136) (`src/colab_cli/common.py`)**:
    - Resolution order:
      1. Explicit `--public-api` / `--no-public-api` CLI flag or `COLAB_CLI_PUBLIC_API` env var (`if self.use_public_api is not None`).
      2. Persistent `self.settings_store.load().use_public_api` (defaults to `False`).
@@ -90,7 +90,7 @@ flowchart LR
    - In Public API responses, populate `name = runtime.name` (and `endpoint = runtime.connection_info.endpoint or ""` without falling back to `runtime.name`).
 3. **Update [`common.py`](../src/colab_cli/common.py#L105-L165) (`get_session` & `sync_sessions`), [`commands/session.py`](../src/colab_cli/commands/session.py), and [`commands/run.py`](../src/colab_cli/commands/run.py)**:
    - Persist `runtime_name=getattr(res, "runtime_name", None)` when creating sessions in `new()` and `run_command()`.
-   - In `get_session()`, when `use_public_api` is enabled and `s.runtime_name` is set, refresh the runtime proxy token directly via `GET /v1beta/{s.runtime_name}` (`GET /v1beta/runtimes/{runtime_id}`) instead of calling `list_assignments()` (pruning the session on HTTP 404).
+   - In `get_session()`, return the cached `SessionState` without initializing `State.client` when the proxy token is fresh and `require_backend_id=False`. When refreshing or reconciling (`require_backend_id=True` in `stop`, `url`, and `drivemount`), refresh directly via `GET /v1beta/{s.runtime_name}` (`GET /v1beta/runtimes/{runtime_id}`) in Public API mode when `s.runtime_name` is set (pruning on HTTP 404).
    - In `sync_sessions()` and `get_session()` fallback listing, match local sessions to server assignments by `runtime_name` (`a.name`), `endpoint`, or normalized proxy `url` (`by_url`), and backfill `s.runtime_name` / `s.endpoint` when non-empty.
    - Pass `runtime_name=s.runtime_name, url=s.url` when calling `state.client.unassign(s.endpoint, runtime_name=s.runtime_name, url=s.url)` in `session._stopOne()` (used by both `stop` and `stop --all`) and `run._teardown()`.
 
@@ -108,7 +108,7 @@ flowchart LR
      - Poll `GET /v1/{operation.name}:wait?timeout=30s` (or `GET /v1/{operation.name}`) until `operation.done` is `True`, honoring `COLAB_CLI_ASSIGN_RETRIES` and `COLAB_CLI_RETRY_BACKOFF` on transient HTTP/timeout errors.
      - Handle `operation.error`:
        - `code == 9` (`FAILED_PRECONDITION`) -> raise `TooManyAssignmentsError` (including `operation.error.message`).
-       - `code == 6` (`ALREADY_EXISTS`) -> call `_get_runtime_public(f"runtimes/{runtime_id}")` (`GET /v1beta/runtimes/{runtime_id}`) and return `Assignment`.
+       - `code == 6` (`ALREADY_EXISTS`) -> call `get_runtime(f"runtimes/{runtime_id}")` (`GET /v1beta/runtimes/{runtime_id}`) and return `Assignment`.
        - `code in (3, 7)` (`INVALID_ARGUMENT`, `PERMISSION_DENIED`) -> raise `ColabRequestError` with mapped HTTP status (400 / 403) so caller entitlement handlers in `session.py` / `run.py` work unchanged.
      - Parse `Runtime` from `operation.response` and return `PostAssignmentResponse`.
 3. **`unassign(endpoint, runtime_name=None, url=None)`**:
@@ -140,7 +140,7 @@ flowchart LR
      - Hidden from `colab --help`, reachable via `colab test-public-api --help`.
      - Probes both `colaboratory.googleapis.com/v1beta/runtimes` and `colab.research.google.com/tun/m/assignments`, prints status for each, and persists `public_api_supported` and `tunnel_api_supported` in `SettingsStore`.
    - Verify `SessionState` round-trip persistence with `runtime_name` and backward-compatible loading when `runtime_name` is absent.
-   - Verify `session.stop` and `run` forward `runtime_name` to `client.unassign`.
+   - Verify `session._stopOne` and `run._teardown` forward `runtime_name` and `url` to `client.unassign`.
 3. **Live End-to-End Integration Testing (`integration/`)**:
    - Add `integration/repro_public_api/test.sh` exercising `colab test-public-api`, `colab --public-api new`, `colab --public-api sessions`, `colab --public-api status`, `colab --public-api exec`, and `colab --public-api stop`, plus verifying no orphaned sessions remain via `colab sessions`.
 

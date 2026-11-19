@@ -22,7 +22,7 @@
 #   3. `colab --public-api sessions` and `status` list the session.
 #   4. `colab --public-api exec` refreshes an expired token via `GetRuntime`
 #      (`GET /v1beta/runtimes/{runtime_id}`) and executes Python on the kernel.
-#   5. `colab --public-api usage` fetches CCU info.
+#   5. `colab --public-api usage` fetches CCU info (when Tunnel API is available).
 #   6. `colab --public-api stop` deletes the runtime (`DeleteRuntime`) and leaves
 #      zero active/orphaned assignments on both Public and Tunnel APIs.
 
@@ -121,12 +121,16 @@ if [ $RC -ne 0 ] || ! echo "$EXEC_OUT" | grep -qx "42"; then
 fi
 
 echo "[*] Step 4: colab --public-api usage"
-USAGE_OUT=$(uv run colab $AUTH_FLAGS --public-api usage 2>&1)
-RC=$?
-echo "$USAGE_OUT"
-if [ $RC -ne 0 ] || ! echo "$USAGE_OUT" | grep -q "Current balance:"; then
-    echo "[FAILURE] colab --public-api usage failed (rc=$RC)"
-    exit 1
+if [ "$TUNNEL_OK" -eq 1 ]; then
+    USAGE_OUT=$(uv run colab $AUTH_FLAGS --public-api usage 2>&1)
+    RC=$?
+    echo "$USAGE_OUT"
+    if [ $RC -ne 0 ] || ! echo "$USAGE_OUT" | grep -q "Current balance:"; then
+        echo "[FAILURE] colab --public-api usage failed (rc=$RC)"
+        exit 1
+    fi
+else
+    echo "[SKIP] Tunnel API unavailable; skipping colab usage (/tun/m/ccu-info)."
 fi
 
 if [ "$TUNNEL_OK" -eq 1 ] && [ -z "$ENDPOINT" ]; then
