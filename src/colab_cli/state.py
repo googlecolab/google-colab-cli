@@ -27,6 +27,7 @@ class SessionState(BaseModel):
     token: str
     url: str
     endpoint: str
+    runtime_name: Optional[str] = None
     token_expires_at: Optional[datetime] = None
     variant: str = "DEFAULT"
     accelerator: str = "NONE"

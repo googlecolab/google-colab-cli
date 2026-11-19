@@ -137,7 +137,10 @@ class RuntimeProxyInfo(BaseModel):
 
 class ListedAssignment(BaseModel):
     accelerator: Accelerator
-    endpoint: str
+    endpoint: str = ""
+    # Public API runtime resource name (e.g. "runtimes/<id>"); may be empty
+    # when listed via the legacy tunnel API.
+    name: str = ""
     variant: AssignmentVariant
     machine_shape: Shape = Field(..., alias="machineShape")
     runtime_proxy_info: RuntimeProxyInfo = Field(..., alias="runtimeProxyInfo")
@@ -201,6 +204,7 @@ class Operation(BaseModel):
 class PostAssignmentResponse(BaseModel):
     accelerator: Accelerator
     endpoint: str
+    runtime_name: Optional[str] = None
     runtime_proxy_info: RuntimeProxyInfo = Field(..., alias="runtimeProxyInfo")
     variant: AssignmentVariant
 
@@ -218,7 +222,57 @@ class GetUnassignRequest(BaseModel):
 
 class Assignment(BaseModel):
     endpoint: str
+    runtime_name: Optional[str] = None
     runtime_proxy_info: RuntimeProxyInfo = Field(..., alias="runtimeProxyInfo")
+
+
+def normalize_proxy_url(url: object) -> str:
+    return url.rstrip("/") if isinstance(url, str) else ""
+
+
+def proxy_info_from_connection(conn: ConnectionInfo) -> RuntimeProxyInfo:
+    expires_in = 3600
+    try:
+        dt = datetime.fromisoformat(conn.expire_time.replace("Z", "+00:00"))
+        expires_in = max(0, int((dt - datetime.now(timezone.utc)).total_seconds()))
+    except Exception:
+        pass
+    return RuntimeProxyInfo(
+        token=conn.token,
+        tokenExpiresInSeconds=expires_in,
+        url=conn.url,
+    )
+
+
+def _map_public_runtime_spec(
+    spec: RuntimeSpecKey,
+) -> tuple[AssignmentVariant, Accelerator, Shape]:
+    shape = (
+        Shape.HIGH_RAM if spec.shape == PublicShape.SHAPE_HIGHMEM else Shape.STANDARD
+    )
+    if spec.variant == PublicVariant.VARIANT_GPU:
+        variant = AssignmentVariant.GPU
+    elif spec.variant == PublicVariant.VARIANT_TPU:
+        variant = AssignmentVariant.TPU
+    else:
+        variant = AssignmentVariant.DEFAULT
+    try:
+        accelerator = Accelerator(spec.accelerator)
+    except ValueError:
+        accelerator = Accelerator.NONE
+    return variant, accelerator, shape
+
+
+_GRPC_TO_HTTP_STATUS = {
+    3: 400,
+    4: 504,
+    5: 404,
+    6: 409,
+    7: 403,
+    8: 429,
+    9: 412,
+    16: 401,
+}
 
 
 XSSI_PREFIX = ")]}'\n"
@@ -367,6 +421,12 @@ class Client:
         resp = self._issue_request(url, schema=ListedAssignments)
         return resp.assignments if resp else []
 
+    def get_runtime(self, runtime_name: str) -> Runtime:
+        if not runtime_name.startswith("runtimes/"):
+            runtime_name = f"runtimes/{runtime_name}"
+        url = urljoin(self.colab_public_api, f"/v1beta/{runtime_name}")
+        return self._issue_request(url, schema=Runtime)
+
     def _list_assignments_public(self) -> List[ListedAssignment]:
         url = urljoin(self.colab_public_api, "/v1beta/runtimes")
         resp = self._issue_request(url, schema=ListRuntimesResponse)
@@ -375,60 +435,218 @@ class Client:
 
         assignments = []
         for r in resp.runtimes:
-            if r.runtime_spec.shape == PublicShape.SHAPE_HIGHMEM:
-                mapped_shape = Shape.HIGH_RAM
-            else:
-                mapped_shape = Shape.STANDARD
-
-            if r.runtime_spec.variant == PublicVariant.VARIANT_GPU:
-                mapped_variant = AssignmentVariant.GPU
-            elif r.runtime_spec.variant == PublicVariant.VARIANT_TPU:
-                mapped_variant = AssignmentVariant.TPU
-            else:
-                mapped_variant = AssignmentVariant.DEFAULT
-
-            try:
-                mapped_accelerator = Accelerator(r.runtime_spec.accelerator)
-            except ValueError:
-                mapped_accelerator = Accelerator.NONE
-
-            expires_in = 3600
-            try:
-                dt = datetime.fromisoformat(
-                    r.connection_info.expire_time.replace("Z", "+00:00")
-                )
-                now = datetime.now(timezone.utc)
-                expires_in = max(0, int((dt - now).total_seconds()))
-            except Exception:
-                pass
-
-            proxy_info = RuntimeProxyInfo(
-                token=r.connection_info.token,
-                tokenExpiresInSeconds=expires_in,
-                url=r.connection_info.url,
+            mapped_variant, mapped_accelerator, mapped_shape = _map_public_runtime_spec(
+                r.runtime_spec
             )
-
             assignments.append(
                 ListedAssignment(
                     accelerator=mapped_accelerator,
-                    endpoint=r.connection_info.endpoint
-                    or r.name.removeprefix("runtimes/"),
+                    endpoint=r.connection_info.endpoint or "",
+                    name=r.name,
                     variant=mapped_variant,
                     machineShape=mapped_shape,
-                    runtimeProxyInfo=proxy_info,
+                    runtimeProxyInfo=proxy_info_from_connection(r.connection_info),
                 )
             )
         return assignments
 
-    def unassign(self, endpoint: str):
-        url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/unassign/{endpoint}")
-        resp = self._issue_request(url, schema=GetUnassignRequest)
+    def unassign(
+        self,
+        endpoint: str,
+        runtime_name: Optional[str] = None,
+        url: Optional[str] = None,
+    ):
+        if self.use_public_api:
+            return self._unassign_public(endpoint, runtime_name=runtime_name, url=url)
+        return self._unassign_tunnel(endpoint, url=url)
+
+    def _unassign_tunnel(self, endpoint: str, url: Optional[str] = None):
+        norm_url = normalize_proxy_url(url)
+        if not endpoint and norm_url:
+            by_url = {
+                u: a.endpoint
+                for a in self._list_assignments_tunnel()
+                if a.endpoint and (u := normalize_proxy_url(a.runtime_proxy_info.url))
+            }
+            endpoint = by_url.get(norm_url, "")
+            if not endpoint:
+                return None
+        if not endpoint:
+            raise ColabRequestError(
+                "Cannot unassign tunnel runtime without endpoint or proxy url",
+                request=None,
+                response=None,
+            )
+        req_url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/unassign/{endpoint}")
+        resp = self._issue_request(req_url, schema=GetUnassignRequest)
         headers = {COLAB_XSRF_TOKEN_HEADER["key"]: resp.token}
         return self._issue_request(
-            url, method="POST", headers=headers, schema=BaseModel
+            req_url, method="POST", headers=headers, schema=BaseModel
         )
 
+    def _unassign_public(
+        self,
+        endpoint: str,
+        runtime_name: Optional[str] = None,
+        url: Optional[str] = None,
+    ):
+        target = runtime_name
+        norm_url = normalize_proxy_url(url)
+        if not target:
+            if endpoint.startswith("runtimes/"):
+                target = endpoint
+            elif endpoint.startswith("r-"):
+                target = f"runtimes/{endpoint}"
+            elif endpoint or norm_url:
+                assignments = self._list_assignments_public()
+                by_endpoint = {
+                    a.endpoint: a.name for a in assignments if a.endpoint and a.name
+                }
+                by_url = {
+                    u: a.name
+                    for a in assignments
+                    if a.name and (u := normalize_proxy_url(a.runtime_proxy_info.url))
+                }
+                target = by_endpoint.get(endpoint) or by_url.get(norm_url)
+                if not target:
+                    if norm_url:
+                        return None
+                    raise ColabRequestError(
+                        f"Could not resolve runtime name for endpoint '{endpoint}'; pass url or runtime_name",
+                        request=None,
+                        response=None,
+                    )
+        if not target:
+            raise ColabRequestError(
+                "Cannot unassign Public API runtime without runtime_name, endpoint, or proxy url",
+                request=None,
+                response=None,
+            )
+        if not target.startswith("runtimes/"):
+            target = f"runtimes/{target}"
+        req_url = urljoin(self.colab_public_api, f"/v1beta/{target}")
+        return self._issue_request(
+            req_url, method="DELETE", params={"allowMissing": "true"}, schema=None
+        )
+
+    def _call_with_assign_retries(self, fn):
+        retries = max(0, int(os.getenv("COLAB_CLI_ASSIGN_RETRIES", "3")))
+        backoff = max(0.0, float(os.getenv("COLAB_CLI_RETRY_BACKOFF", "10")))
+        for attempt in range(retries + 1):
+            try:
+                return fn()
+            except (ColabRequestError, requests.exceptions.ReadTimeout) as e:
+                status = (
+                    get_status_code(e) if isinstance(e, ColabRequestError) else None
+                )
+                retryable = isinstance(
+                    e, requests.exceptions.ReadTimeout
+                ) or status in (502, 503, 504)
+                if not retryable or attempt >= retries:
+                    raise
+                delay = backoff * (2**attempt)
+                self.logger.warning(
+                    "Assignment request failed; retrying in %.0fs", delay
+                )
+                time.sleep(delay)
+
     def assign(
+        self,
+        notebook_hash: uuid.UUID,
+        variant: Optional[Variant] = None,
+        accelerator: Optional[Accelerator] = None,
+        shape: Optional[Shape] = None,
+    ) -> Union[PostAssignmentResponse, Assignment]:
+        if self.use_public_api:
+            return self._assign_public(notebook_hash, variant, accelerator, shape)
+        return self._assign_tunnel(notebook_hash, variant, accelerator, shape)
+
+    def _assign_public(
+        self,
+        notebook_hash: uuid.UUID,
+        variant: Optional[Variant] = None,
+        accelerator: Optional[Accelerator] = None,
+        shape: Optional[Shape] = None,
+    ) -> Union[PostAssignmentResponse, Assignment]:
+        runtime_id = f"r-{notebook_hash}"
+        request_id = str(uuid.uuid4())
+        if variant == Variant.GPU:
+            pub_variant = PublicVariant.VARIANT_GPU.value
+        elif variant == Variant.TPU:
+            pub_variant = PublicVariant.VARIANT_TPU.value
+        else:
+            pub_variant = PublicVariant.VARIANT_CPU.value
+        pub_acc = accelerator.value if accelerator else Accelerator.NONE.value
+        pub_shape = (
+            PublicShape.SHAPE_HIGHMEM.value
+            if shape == Shape.HIGH_RAM
+            else PublicShape.SHAPE_STANDARD.value
+        )
+        create_url = urljoin(self.colab_public_api, "/v1beta/runtimes")
+        op = self._call_with_assign_retries(
+            lambda: self._issue_request(
+                create_url,
+                method="POST",
+                params={"runtimeId": runtime_id, "requestId": request_id},
+                json={
+                    "runtimeSpec": {
+                        "variant": pub_variant,
+                        "accelerator": pub_acc,
+                        "shape": pub_shape,
+                    }
+                },
+                schema=Operation,
+            )
+        )
+
+        max_polls = max(1, int(os.getenv("COLAB_CLI_PUBLIC_WAIT_POLLS", "10")))
+        polls = 0
+        while not op.done:
+            if polls >= max_polls:
+                raise TimeoutError(
+                    f"Timed out waiting for runtime creation operation {op.name}"
+                )
+            polls += 1
+            wait_url = urljoin(self.colab_public_api, f"/v1/{op.name}:wait")
+            op = self._call_with_assign_retries(
+                lambda: self._issue_request(
+                    wait_url, params={"timeout": "30s"}, schema=Operation
+                )
+            )
+
+        if op.error is not None:
+            code = op.error.code
+            msg = op.error.message or "Runtime creation failed"
+            if code == 9:
+                raise TooManyAssignmentsError(msg)
+            if code == 6:
+                rt = self.get_runtime(f"runtimes/{runtime_id}")
+                return Assignment(
+                    endpoint=rt.connection_info.endpoint or "",
+                    runtime_name=rt.name,
+                    runtimeProxyInfo=proxy_info_from_connection(rt.connection_info),
+                )
+            fake_resp = requests.Response()
+            fake_resp.status_code = _GRPC_TO_HTTP_STATUS.get(code, 500)
+            fake_resp.reason = msg
+            raise ColabRequestError(
+                msg,
+                request=None,
+                response=fake_resp,
+                response_body=op.model_dump_json(),
+            )
+
+        rt = Runtime.model_validate(op.response)
+        mapped_variant, mapped_acc, _ = _map_public_runtime_spec(rt.runtime_spec)
+        return PostAssignmentResponse(
+            accelerator=mapped_acc,
+            endpoint=rt.connection_info.endpoint or "",
+            runtime_name=rt.name,
+            runtimeProxyInfo=proxy_info_from_connection(rt.connection_info),
+            variant=mapped_variant,
+        )
+
+    def _assign_tunnel(
         self,
         notebook_hash: uuid.UUID,
         variant: Optional[Variant] = None,

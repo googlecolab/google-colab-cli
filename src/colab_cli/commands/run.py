@@ -356,11 +356,15 @@ def run_command(
         url = res.runtime_proxy_info.url if hasattr(res, "runtime_proxy_info") else ""
         endpoint = res.endpoint
 
+    raw_runtime_name = getattr(res, "runtime_name", None)
+    runtime_name = raw_runtime_name if isinstance(raw_runtime_name, str) else None
+
     s = SessionState(
         name=name,
         token=token,
         url=url,
         endpoint=endpoint,
+        runtime_name=runtime_name,
         token_expires_at=(
             res.runtime_proxy_info.expires_at()
             if hasattr(res, "runtime_proxy_info")
@@ -490,7 +494,7 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
         pass
 
     try:
-        state.client.unassign(s.endpoint)
+        state.client.unassign(s.endpoint, runtime_name=s.runtime_name, url=s.url)
     except Exception:
         pass
 

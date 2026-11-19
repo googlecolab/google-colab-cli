@@ -43,9 +43,10 @@ def mock_common_state(mocker):
     mock_state.history = MagicMock()
     mock_state.auth_provider = AuthProvider.OAUTH2
     mock_state.config_path = None
+    mock_state.use_public_api = None
 
     # Token refresh is covered in test_common.py; elsewhere just read the store.
-    def get_session(name, ignore_missing_session=False):
+    def get_session(name, ignore_missing_session=False, *, require_backend_id=False):
         s = mock_state.store.get(name)
         if not s and not ignore_missing_session:
             typer.echo(f"[colab] Session '{name}' not found.")

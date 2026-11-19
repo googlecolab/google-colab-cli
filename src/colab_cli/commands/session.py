@@ -212,11 +212,15 @@ def new(
 
     # Importing locally to avoid a top-level circular import via auth.
 
+    raw_runtime_name = getattr(res, "runtime_name", None)
+    runtime_name = raw_runtime_name if isinstance(raw_runtime_name, str) else None
+
     s = SessionState(
         name=name,
         token=token,
         url=url,
         endpoint=endpoint,
+        runtime_name=runtime_name,
         token_expires_at=(
             res.runtime_proxy_info.expires_at()
             if hasattr(res, "runtime_proxy_info")
@@ -279,24 +283,24 @@ def restart_kernel(
 
 def sessions_command():
     """List all active sessions"""
-    from colab_cli.common import state
+    from colab_cli.common import index_sessions, match_session, state
 
     sessions, assignments = state.sync_sessions()
     if not assignments:
         typer.echo("[colab] No active sessions found on server.")
         return
 
-    # Build endpoint -> local-name lookup so we can lead with the friendly name.
-    name_by_endpoint = {s.endpoint: s.name for s in sessions.values()}
+    session_index = index_sessions(sessions.values())
     for a in assignments:
-        name = name_by_endpoint.get(a.endpoint, "?")
+        matched = match_session(a, session_index)
+        name = matched.name if matched is not None else "?"
         # `a.variant` is an int-valued AssignmentVariant (DEFAULT=0/GPU=1/TPU=2);
         # its `.name` matches the user-facing string Variant enum, which is what
         # `status` shows for locally-tracked sessions.
         typer.echo(
             _format_session_line(
                 name=name,
-                endpoint=a.endpoint,
+                endpoint=a.endpoint or getattr(a, "name", ""),
                 accelerator=a.accelerator.value,
                 variant=a.variant.name,
                 machine_shape=a.machine_shape.name,
@@ -310,7 +314,7 @@ def _print_status_for(s: SessionState) -> None:
     typer.echo(
         _format_session_line(
             name=s.name,
-            endpoint=s.endpoint,
+            endpoint=s.endpoint or getattr(s, "runtime_name", None) or "",
             accelerator=s.accelerator,
             variant=s.variant,
             status=status,
@@ -356,7 +360,7 @@ def _stopOne(name: str, s: SessionState) -> None:
         ColabRuntime(s.url, s.token, kernel_id=s.kernel_id).stop(shutdown_kernel=True)
     except Exception:
         pass
-    state.client.unassign(s.endpoint)
+    state.client.unassign(s.endpoint, runtime_name=s.runtime_name, url=s.url)
     state.store.remove(name)
     state.history.log_event(name, "session_terminated", {"reason": "user_requested"})
 
@@ -383,7 +387,7 @@ def stop(
         return
 
     name = state.resolve_session(session)
-    s = state.get_session(name, ignore_missing_session=True)
+    s = state.get_session(name, ignore_missing_session=True, require_backend_id=True)
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.")
         return

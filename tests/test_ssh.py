@@ -662,6 +662,35 @@ def test_proxy_command_keeps_global_options(
     ]
 
 
+@pytest.mark.parametrize(
+    ("use_public_api", "expected_flag"),
+    [
+        (None, []),
+        (True, ["--public-api"]),
+        (False, ["--no-public-api"]),
+    ],
+)
+def test_proxy_command_keeps_public_api_flag(
+    mock_common_state, mocker, use_public_api, expected_flag
+):
+    mocker.patch.object(ssh_module.sys, "platform", "linux")
+    mock_common_state.use_public_api = use_public_api
+    session = _make_session(name="s")
+    argv = shlex.split(ssh_module._proxy_command(session, None, "interactive"))
+    assert argv == [
+        sys.executable,
+        "-m",
+        "colab_cli.cli",
+        *expected_flag,
+        "ssh",
+        "--proxy-mode",
+        "-s",
+        "s",
+        "--colab-internal-mode",
+        "interactive",
+    ]
+
+
 # --- --force flag -----------------------------------------------------------
 
 

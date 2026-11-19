@@ -331,6 +331,7 @@ def test_cli_session_resolution(mock_store, mock_common_state):
 def test_cli_stop(mock_client, mock_store, mock_common_state):
     mock_session_state = MagicMock()
     mock_session_state.endpoint = "e1"
+    mock_session_state.runtime_name = None
     mock_session_state.name = "s1"
     mock_session_state.url = "http://url"
     mock_session_state.token = "token"
@@ -341,18 +342,27 @@ def test_cli_stop(mock_client, mock_store, mock_common_state):
     result = runner.invoke(app, ["stop", "-s", "s1"])
     assert result.exit_code == 0
 
-    mock_client.unassign.assert_called_with("e1")
+    mock_common_state.get_session.assert_called_once_with(
+        "s1", ignore_missing_session=True, require_backend_id=True
+    )
+    mock_client.unassign.assert_called_with("e1", runtime_name=None, url="http://url")
     mock_store.remove.assert_called_with("s1")
 
 
 def test_cli_stop_all(mock_client, mock_store, mock_common_state):
-    sessions = {"s1": MagicMock(endpoint="e1"), "s2": MagicMock(endpoint="e2")}
+    sessions = {
+        "s1": MagicMock(endpoint="e1", runtime_name=None, url="http://u1"),
+        "s2": MagicMock(endpoint="e2", runtime_name=None, url="http://u2"),
+    }
     mock_common_state.sync_sessions.return_value = (sessions, [])
 
     result = runner.invoke(app, ["stop", "--all"])
     assert result.exit_code == 0
     assert "Stopped 2 session(s)" in result.output
-    assert mock_client.unassign.call_args_list == [call("e1"), call("e2")]
+    assert mock_client.unassign.call_args_list == [
+        call("e1", runtime_name=None, url="http://u1"),
+        call("e2", runtime_name=None, url="http://u2"),
+    ]
     assert mock_store.remove.call_args_list == [call("s1"), call("s2")]
 
 
@@ -710,11 +720,12 @@ def test_cli_new_412_without_accelerator_shows_friendly_error(mock_client, mock_
 @pytest.mark.parametrize(
     "args,env,expected",
     [
-        (["sessions"], {}, False),
+        (["sessions"], {}, None),
         (["--public-api", "sessions"], {}, True),
         (["--no-public-api", "sessions"], {}, False),
         (["sessions"], {"COLAB_CLI_PUBLIC_API": "1"}, True),
         (["sessions"], {"COLAB_CLI_PUBLIC_API": "0"}, False),
+        (["--no-public-api", "sessions"], {"COLAB_CLI_PUBLIC_API": "1"}, False),
     ],
 )
 def test_cli_public_api_flag_and_env(args, env, expected):
@@ -723,6 +734,36 @@ def test_cli_public_api_flag_and_env(args, env, expected):
     result = runner.invoke(app, args, env=env)
     assert result.exit_code == 0
     assert cli.state.use_public_api is expected
+
+
+def test_cli_defers_to_settings_use_public_api_when_flag_omitted(tmp_path, mocker):
+    from colab_cli import cli
+    from colab_cli.common import State
+    from colab_cli.state import Settings, SettingsStore, StateStore
+
+    real_st = State()
+    real_st._store = StateStore(str(tmp_path / "sessions.json"))
+    real_st._settings_store = SettingsStore(str(tmp_path / "settings.json"))
+    real_st._settings_store.save(Settings(use_public_api=True))
+    mock_sess = MagicMock()
+    mock_sess.request.return_value = MagicMock(ok=True, text="{}")
+    mocker.patch("colab_cli.auto_update.run_background_check")
+    mocker.patch("colab_cli.common.get_credentials", return_value=mock_sess)
+    mocker.patch.object(cli, "state", real_st)
+    mocker.patch("colab_cli.common.state", real_st)
+
+    res = runner.invoke(app, ["sessions"])
+    assert res.exit_code == 0
+    assert real_st.client.use_public_api is True
+
+    real_st._client = None
+    real_st._sessions = None
+    mock_sess.request.return_value = MagicMock(
+        ok=True, text=')]}\'\n{"assignments": []}'
+    )
+    res_no = runner.invoke(app, ["--no-public-api", "sessions"])
+    assert res_no.exit_code == 0
+    assert real_st.client.use_public_api is False
 
 
 def test_cli_test_public_api_hidden_and_reports_status(mock_common_state):
@@ -737,3 +778,68 @@ def test_cli_test_public_api_hidden_and_reports_status(mock_common_state):
     assert res.exit_code == 0
     assert "Public API" in res.output
     assert "Tunnel API" in res.output
+
+
+def test_cli_new_and_stop_forward_runtime_name(
+    mock_client, mock_store, mock_common_state
+):
+    mock_client.assign.return_value = PostAssignmentResponse(
+        accelerator="NONE",
+        endpoint="",
+        runtime_name="runtimes/r-abc",
+        variant=0,
+        runtimeProxyInfo={
+            "token": "t1",
+            "tokenExpiresInSeconds": 3600,
+            "url": "https://u1",
+        },
+    )
+
+    res = runner.invoke(app, ["--public-api", "new", "-s", "pub-sess"])
+    assert res.exit_code == 0
+    saved = mock_store.add.call_args[0][0]
+    assert saved.runtime_name == "runtimes/r-abc"
+    assert saved.endpoint == ""
+
+    mock_store.get.return_value = saved
+    mock_common_state.resolve_session.return_value = "pub-sess"
+    stop_res = runner.invoke(app, ["--public-api", "stop", "-s", "pub-sess"])
+    assert stop_res.exit_code == 0
+    mock_client.unassign.assert_called_with(
+        "", runtime_name="runtimes/r-abc", url="https://u1"
+    )
+
+
+def test_cli_sessions_matches_name_by_url_when_endpoint_stripped(mock_common_state):
+    from colab_cli.client import ListedAssignment
+    from colab_cli.state import SessionState
+
+    s1 = SessionState(
+        name="s1",
+        token="t",
+        url="https://vm-1.colab.dev/",
+        endpoint="ep-1",
+        runtime_name=None,
+    )
+    a1 = ListedAssignment.model_validate(
+        {
+            "accelerator": "NONE",
+            "endpoint": "",
+            "name": "runtimes/r-1",
+            "variant": 0,
+            "machineShape": 0,
+            "runtimeProxyInfo": {
+                "token": "t2",
+                "tokenExpiresInSeconds": 3600,
+                "url": "https://vm-1.colab.dev",
+            },
+        }
+    )
+    mock_common_state.sync_sessions.return_value = ({"s1": s1}, [a1])
+
+    result = runner.invoke(app, ["--public-api", "sessions"])
+
+    assert result.exit_code == 0
+    assert "[s1] runtimes/r-1 | Hardware: CPU | Shape: Standard | Variant: DEFAULT" in (
+        result.output
+    )

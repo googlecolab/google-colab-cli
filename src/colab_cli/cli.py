@@ -86,13 +86,13 @@ def callback(
         ),
     ] = AuthProvider.OAUTH2,
     public_api: Annotated[
-        bool,
+        Optional[bool],
         typer.Option(
             "--public-api/--no-public-api",
             envvar="COLAB_CLI_PUBLIC_API",
             help="Use the Colab Public API (colaboratory.googleapis.com) instead of the legacy tunnel API.",
         ),
-    ] = False,
+    ] = None,
 ):
     """
     Colab CLI global configuration.

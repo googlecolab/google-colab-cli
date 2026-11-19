@@ -304,6 +304,14 @@ def drivemount(
     from colab_cli.common import state
 
     name = state.resolve_session(session)
+    s = state.get_session(name, require_backend_id=True)
+    if not s.endpoint:
+        typer.echo(
+            "[colab] 'colab drivemount' requires a tunnel endpoint, which is "
+            "not exposed by the Public API. Re-run with --no-public-api.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     code = f"from google.colab import drive\ndrive.mount('{path}')"
     typer.echo(f"[colab] Mounting Google Drive to '{path}' on {name}...")
     run_automation(

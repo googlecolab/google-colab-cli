@@ -332,6 +332,7 @@ def test_client_list_assignments(client, mock_session):
 
     assert len(res) == 1
     assert res[0].endpoint == "e1"
+    assert res[0].name == ""
     assert "tun/m/assignments" in mock_session.request.call_args.args[1]
 
 
@@ -355,7 +356,20 @@ def test_public_client_list_assignments(mock_session):
                         "accelerator": "NONE",
                         "shape": "SHAPE_STANDARD",
                     },
-                }
+                },
+                {
+                    "name": "runtimes/r2",
+                    "connectionInfo": {
+                        "expireTime": "2026-09-24T19:00:00Z",
+                        "url": "u2",
+                        "token": "t2",
+                    },
+                    "runtimeSpec": {
+                        "variant": "VARIANT_GPU",
+                        "accelerator": "T4",
+                        "shape": "SHAPE_HIGHMEM",
+                    },
+                },
             ]
         }
     )
@@ -364,9 +378,41 @@ def test_public_client_list_assignments(mock_session):
 
     res = public_client.list_assignments()
 
-    assert len(res) == 1
+    assert len(res) == 2
     assert res[0].endpoint == "e1"
+    assert res[0].name == "runtimes/r1"
+    assert res[1].endpoint == ""
+    assert res[1].name == "runtimes/r2"
     assert "/v1beta/runtimes" in mock_session.request.call_args.args[1]
+
+
+def test_public_client_get_runtime(mock_session):
+    public_client = Client(Prod(), mock_session, use_public_api=True)
+    resp = MagicMock(
+        ok=True,
+        text=json.dumps(
+            {
+                "name": "runtimes/r1",
+                "connectionInfo": {
+                    "expireTime": "2026-09-24T19:00:00Z",
+                    "url": "https://rt-url",
+                    "token": "fresh-tok",
+                },
+                "runtimeSpec": {
+                    "variant": "VARIANT_CPU",
+                    "accelerator": "NONE",
+                    "shape": "SHAPE_STANDARD",
+                },
+            }
+        ),
+    )
+    mock_session.request.return_value = resp
+
+    rt = public_client.get_runtime("runtimes/r1")
+
+    assert rt.name == "runtimes/r1"
+    assert rt.connection_info.token == "fresh-tok"
+    assert mock_session.request.call_args.args[1].endswith("/v1beta/runtimes/r1")
 
 
 def test_client_assign_url_includes_shape_hm(client, mock_session):
@@ -507,3 +553,354 @@ def test_issue_request_auth_error_uses_cached_support_for_hint(tmp_path, mock_se
 
     assert "--public-api" in str(exc2.value)
     assert store.load().tunnel_api_supported is False
+
+
+def _public_runtime_dict(
+    name="runtimes/r-1",
+    endpoint="e1",
+    variant="VARIANT_CPU",
+    accelerator="NONE",
+    shape="SHAPE_STANDARD",
+):
+    conn = {"expireTime": "2099-01-01T00:00:00Z", "url": "https://u1", "token": "t1"}
+    if endpoint is not None:
+        conn["endpoint"] = endpoint
+    return {
+        "@type": "type.googleapis.com/google.colab.v1beta.Runtime",
+        "name": name,
+        "connectionInfo": conn,
+        "runtimeSpec": {
+            "variant": variant,
+            "accelerator": accelerator,
+            "shape": shape,
+        },
+    }
+
+
+def test_public_client_assign_immediate(mock_session):
+    c = Client(Prod(), mock_session, use_public_api=True)
+    nb = uuid.uuid4()
+    rt_name = f"runtimes/r-{nb}"
+    mock_session.request.return_value = MagicMock(
+        ok=True,
+        text=json.dumps(
+            {
+                "name": "operations/op-1",
+                "done": True,
+                "response": _public_runtime_dict(name=rt_name, endpoint=None),
+            }
+        ),
+    )
+
+    res = c.assign(nb)
+
+    assert isinstance(res, PostAssignmentResponse)
+    assert res.runtime_name == rt_name
+    assert res.endpoint == ""
+    assert res.runtime_proxy_info.token == "t1"
+    call = mock_session.request.call_args
+    assert call.args[0] == "POST"
+    assert call.args[1].endswith("/v1beta/runtimes")
+    assert call.kwargs["params"]["runtimeId"] == f"r-{nb}"
+    assert uuid.UUID(call.kwargs["params"]["requestId"])
+    assert call.kwargs["json"] == {
+        "runtimeSpec": {
+            "variant": "VARIANT_CPU",
+            "accelerator": "NONE",
+            "shape": "SHAPE_STANDARD",
+        }
+    }
+
+
+def test_public_client_assign_polls_until_done(mock_session):
+    c = Client(Prod(), mock_session, use_public_api=True)
+    nb = uuid.uuid4()
+    rt_name = f"runtimes/r-{nb}"
+    mock_session.request.side_effect = [
+        MagicMock(ok=True, text=json.dumps({"name": "operations/op-1"})),
+        MagicMock(ok=True, text=json.dumps({"name": "operations/op-1", "done": False})),
+        MagicMock(
+            ok=True,
+            text=json.dumps(
+                {
+                    "name": "operations/op-1",
+                    "done": True,
+                    "response": _public_runtime_dict(
+                        name=rt_name,
+                        endpoint="ep-gpu",
+                        variant="VARIANT_GPU",
+                        accelerator="A100",
+                        shape="SHAPE_HIGHMEM",
+                    ),
+                }
+            ),
+        ),
+    ]
+
+    res = c.assign(
+        nb,
+        variant=Variant.GPU,
+        accelerator=Accelerator.A100,
+        shape=Shape.HIGH_RAM,
+    )
+
+    assert isinstance(res, PostAssignmentResponse)
+    assert res.runtime_name == rt_name
+    assert res.endpoint == "ep-gpu"
+    assert mock_session.request.call_count == 3
+    post_call = mock_session.request.call_args_list[0]
+    assert post_call.kwargs["json"] == {
+        "runtimeSpec": {
+            "variant": "VARIANT_GPU",
+            "accelerator": "A100",
+            "shape": "SHAPE_HIGHMEM",
+        }
+    }
+    wait_call = mock_session.request.call_args_list[1]
+    assert wait_call.args[0] == "GET"
+    assert wait_call.args[1].endswith("/v1/operations/op-1:wait")
+    assert wait_call.kwargs["params"]["timeout"] == "30s"
+
+
+def test_public_client_assign_failed_precondition_raises_too_many_assignments(
+    mock_session,
+):
+    c = Client(Prod(), mock_session, use_public_api=True)
+    mock_session.request.return_value = MagicMock(
+        ok=True,
+        text=json.dumps(
+            {
+                "name": "operations/op-1",
+                "done": True,
+                "error": {"code": 9, "message": "too many active runtimes"},
+            }
+        ),
+    )
+
+    with pytest.raises(TooManyAssignmentsError, match="too many active runtimes"):
+        c.assign(uuid.uuid4())
+
+
+def test_public_client_assign_invalid_argument_raises_400(mock_session):
+    from colab_cli.utils import get_status_code
+
+    c = Client(Prod(), mock_session, use_public_api=True)
+    mock_session.request.return_value = MagicMock(
+        ok=True,
+        text=json.dumps(
+            {
+                "name": "operations/op-1",
+                "done": True,
+                "error": {"code": 3, "message": "ineligible accelerator"},
+            }
+        ),
+    )
+
+    with pytest.raises(ColabRequestError) as exc:
+        c.assign(uuid.uuid4(), variant=Variant.GPU, accelerator=Accelerator.A100)
+
+    assert get_status_code(exc.value) == 400
+
+
+def test_public_client_assign_already_exists_recovers(mock_session):
+    c = Client(Prod(), mock_session, use_public_api=True)
+    nb = uuid.uuid4()
+    rt_name = f"runtimes/r-{nb}"
+    mock_session.request.side_effect = [
+        MagicMock(
+            ok=True,
+            text=json.dumps(
+                {
+                    "name": "operations/op-1",
+                    "done": True,
+                    "error": {"code": 6, "message": "already exists"},
+                }
+            ),
+        ),
+        MagicMock(
+            ok=True,
+            text=json.dumps(_public_runtime_dict(name=rt_name, endpoint="ep-existing")),
+        ),
+    ]
+
+    res = c.assign(nb)
+
+    assert isinstance(res, Assignment)
+    assert res.runtime_name == rt_name
+    assert res.endpoint == "ep-existing"
+    assert mock_session.request.call_args_list[1].args[1].endswith(f"/v1beta/{rt_name}")
+
+
+def test_public_client_assign_retries_transient_wait_errors(
+    mock_session, mocker, monkeypatch
+):
+    monkeypatch.setenv("COLAB_CLI_ASSIGN_RETRIES", "2")
+    monkeypatch.setenv("COLAB_CLI_RETRY_BACKOFF", "5")
+    sleep = mocker.patch("time.sleep")
+    c = Client(Prod(), mock_session, use_public_api=True)
+    nb = uuid.uuid4()
+    rt_name = f"runtimes/r-{nb}"
+    mock_session.request.side_effect = [
+        MagicMock(ok=True, text=json.dumps({"name": "operations/op-1"})),
+        requests.exceptions.ReadTimeout("wait timed out"),
+        MagicMock(
+            ok=True,
+            text=json.dumps(
+                {
+                    "name": "operations/op-1",
+                    "done": True,
+                    "response": _public_runtime_dict(name=rt_name),
+                }
+            ),
+        ),
+    ]
+
+    res = c.assign(nb)
+
+    assert res.runtime_name == rt_name
+    sleep.assert_called_once_with(5)
+
+
+def test_public_client_unassign_with_runtime_name(mock_session):
+    c = Client(Prod(), mock_session, use_public_api=True)
+    mock_session.request.return_value = MagicMock(ok=True, text="{}")
+
+    c.unassign("", runtime_name="runtimes/r-123")
+
+    mock_session.request.assert_called_once()
+    call = mock_session.request.call_args
+    assert call.args[0] == "DELETE"
+    assert call.args[1].endswith("/v1beta/runtimes/r-123")
+    assert call.kwargs["params"] == {"allowMissing": "true"}
+
+
+def test_public_client_unassign_resolves_endpoint(mock_session):
+    c = Client(Prod(), mock_session, use_public_api=True)
+    mock_session.request.side_effect = [
+        MagicMock(
+            ok=True,
+            text=json.dumps(
+                {
+                    "runtimes": [
+                        _public_runtime_dict(name="runtimes/r-found", endpoint="ep-99")
+                    ]
+                }
+            ),
+        ),
+        MagicMock(ok=True, text="{}"),
+    ]
+
+    c.unassign("ep-99")
+
+    assert mock_session.request.call_count == 2
+    del_call = mock_session.request.call_args_list[1]
+    assert del_call.args[0] == "DELETE"
+    assert del_call.args[1].endswith("/v1beta/runtimes/r-found")
+    assert del_call.kwargs["params"] == {"allowMissing": "true"}
+
+
+def test_public_client_unassign_resolves_by_url_when_endpoint_stripped(mock_session):
+    c = Client(Prod(), mock_session, use_public_api=True)
+    rt = _public_runtime_dict(name="runtimes/r-found", endpoint=None)
+    rt["connectionInfo"]["url"] = "https://vm-99.colab.dev/"
+    mock_session.request.side_effect = [
+        MagicMock(ok=True, text=json.dumps({"runtimes": [rt]})),
+        MagicMock(ok=True, text="{}"),
+    ]
+
+    c.unassign("ep-99", url="https://vm-99.colab.dev")
+
+    assert mock_session.request.call_count == 2
+    del_call = mock_session.request.call_args_list[1]
+    assert del_call.args[0] == "DELETE"
+    assert del_call.args[1].endswith("/v1beta/runtimes/r-found")
+    assert del_call.kwargs["params"] == {"allowMissing": "true"}
+
+
+def test_tunnel_client_unassign_resolves_by_url_when_endpoint_empty(
+    client, mock_session
+):
+    list_resp = MagicMock(
+        ok=True,
+        text=")]}'\n"
+        + json.dumps(
+            {
+                "assignments": [
+                    {
+                        "accelerator": "NONE",
+                        "endpoint": "ep-99",
+                        "variant": 0,
+                        "machineShape": 0,
+                        "runtimeProxyInfo": {
+                            "token": "t1",
+                            "tokenExpiresInSeconds": 3600,
+                            "url": "https://vm-99.colab.dev",
+                        },
+                    }
+                ]
+            }
+        ),
+    )
+    get_resp = MagicMock(
+        ok=True, text=")]}'\n" + json.dumps({"token": "unassign_xsrf_token"})
+    )
+    post_resp = MagicMock(ok=True, text="")
+    mock_session.request.side_effect = [list_resp, get_resp, post_resp]
+
+    client.unassign("", url="https://vm-99.colab.dev/")
+
+    assert mock_session.request.call_count == 3
+    post_call = mock_session.request.call_args_list[2]
+    assert "unassign/ep-99" in post_call.args[1]
+
+
+def test_tunnel_client_unassign_returns_none_when_url_not_found(client, mock_session):
+    list_resp = MagicMock(
+        ok=True,
+        text=")]}'\n" + json.dumps({"assignments": []}),
+    )
+    mock_session.request.return_value = list_resp
+
+    assert client.unassign("", url="https://gone.colab.dev") is None
+    mock_session.request.assert_called_once()
+    assert mock_session.request.call_args.args[1].endswith("/tun/m/assignments")
+
+
+def test_tunnel_client_unassign_raises_without_endpoint_or_url(client, mock_session):
+    with pytest.raises(ColabRequestError, match="endpoint or proxy url"):
+        client.unassign("")
+
+    mock_session.request.assert_not_called()
+
+
+def test_public_client_unassign_returns_none_when_url_not_found(mock_session):
+    c = Client(Prod(), mock_session, use_public_api=True)
+    mock_session.request.return_value = MagicMock(ok=True, text="{}")
+
+    assert c.unassign("ep-99", url="https://gone.colab.dev") is None
+    mock_session.request.assert_called_once()
+    assert mock_session.request.call_args.args[1].endswith("/v1beta/runtimes")
+
+
+def test_public_client_unassign_raises_when_endpoint_unresolved_without_url(
+    mock_session,
+):
+    c = Client(Prod(), mock_session, use_public_api=True)
+    rt = _public_runtime_dict(name="runtimes/r-live", endpoint=None)
+    mock_session.request.return_value = MagicMock(
+        ok=True, text=json.dumps({"runtimes": [rt]})
+    )
+
+    with pytest.raises(ColabRequestError, match="ep-99"):
+        c.unassign("ep-99")
+
+    mock_session.request.assert_called_once()
+
+
+def test_public_client_unassign_raises_without_any_identifier(mock_session):
+    c = Client(Prod(), mock_session, use_public_api=True)
+
+    with pytest.raises(ColabRequestError, match="runtime_name, endpoint, or proxy url"):
+        c.unassign("")
+
+    mock_session.request.assert_not_called()

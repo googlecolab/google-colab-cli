@@ -330,3 +330,36 @@ def test_url_output_is_pipeable(mock_common_state):
         f"URL line should not be prefixed with '[colab]' so it's pipeable: "
         f"{url_lines[0]!r}"
     )
+
+
+def test_url_public_api_empty_endpoint_errors_with_no_public_api_hint(
+    mock_common_state,
+):
+    s = _make_session(name="pub-sess", endpoint="")
+    mock_common_state.store.get.return_value = s
+    mock_common_state.resolve_session.return_value = "pub-sess"
+
+    with patch("webbrowser.open") as mock_open:
+        result = runner.invoke(app, ["--public-api", "url", "-s", "pub-sess", "--open"])
+
+    assert result.exit_code == 1
+    assert "--no-public-api" in result.output
+    assert "dbu=" not in result.output
+    mock_open.assert_not_called()
+
+
+def test_url_backfills_missing_endpoint_via_get_session(mock_common_state):
+    stale = _make_session(name="pub-sess", endpoint="")
+    backfilled = _make_session(name="pub-sess", endpoint="ep-backfilled")
+    mock_common_state.store.get.return_value = stale
+    mock_common_state.get_session.side_effect = None
+    mock_common_state.get_session.return_value = backfilled
+    mock_common_state.resolve_session.return_value = "pub-sess"
+
+    result = runner.invoke(app, ["--no-public-api", "url", "-s", "pub-sess"])
+
+    assert result.exit_code == 0, result.output
+    assert "%2Ftun%2Fm%2Fep-backfilled" in result.output
+    mock_common_state.get_session.assert_called_once_with(
+        "pub-sess", ignore_missing_session=True, require_backend_id=True
+    )
