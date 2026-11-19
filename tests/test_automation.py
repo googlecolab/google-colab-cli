@@ -121,6 +121,28 @@ def test_cli_drivemount(mock_state, mock_runtime_class, mock_session):
 
 @patch("colab_cli.commands.automation.ColabRuntime")
 @patch("colab_cli.common.state")
+def test_cli_drivemount_rejects_empty_endpoint_with_no_public_api_hint(
+    mock_state, mock_runtime_class
+):
+    pub_session = SessionState(
+        name="pub-session",
+        token="test-token",
+        url="https://test.url",
+        endpoint="",
+        runtime_name="runtimes/r-1",
+    )
+    mock_state.get_session.return_value = pub_session
+    mock_state.resolve_session.return_value = "pub-session"
+
+    result = runner.invoke(app, ["--public-api", "drivemount", "-s", "pub-session"])
+
+    assert result.exit_code == 1
+    assert "--no-public-api" in result.output
+    mock_runtime_class.assert_not_called()
+
+
+@patch("colab_cli.commands.automation.ColabRuntime")
+@patch("colab_cli.common.state")
 def test_cli_auth_uses_long_timeout(mock_state, mock_runtime_class, mock_session):
     """`colab auth` walks the user through a paste-the-code flow that
     routinely takes >10s, so it must pass a generous timeout to

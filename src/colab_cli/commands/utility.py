@@ -91,8 +91,17 @@ def url(
 
     name = state.resolve_session(session)
     s = state.store.get(name)
+    if s and not s.endpoint:
+        s = state.get_session(name, ignore_missing_session=True)
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.", err=True)
+        raise typer.Exit(code=1)
+    if not s.endpoint:
+        typer.echo(
+            "[colab] 'colab url' requires a tunnel endpoint, which is not "
+            "exposed by the Public API. Re-run with --no-public-api.",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     # Strip a trailing slash so we don't produce `https://host//notebooks/...`
