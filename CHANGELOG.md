@@ -34,6 +34,10 @@ below corresponds to a tag of the same name.
   including `colab url`; commands that load an existing session and `colab url`
   also refuse a CLI session whose runtime is attached and point to
   `colab stop -s NAME`.
+- **sessions:** Without `-s`, the unique-session pick skips attached sessions,
+  and when only attached sessions are stored (or remain after stale ones are
+  pruned) it refuses and names `colab ssh -s NAME` and `colab stop -s NAME`, so
+  bare `colab stop` never acts on an attached runtime.
 
 ### Removed
 

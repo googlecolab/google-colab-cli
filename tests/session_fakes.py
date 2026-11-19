@@ -14,12 +14,14 @@
 
 """Session records, fake HTTP sessions and store helpers shared by tests."""
 
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from colab_cli.state import SessionState
 
 ATT = ("att", "att-ep", True)
+ATT2 = ("att2", "att2-ep", True)
 CLI = ("cli", "cli-ep", False)
 SHARED = ("cli2", "att-ep", False)
 
@@ -44,6 +46,32 @@ class UnassignSession(RecordingSession):
         self.requests.append((method, url))
         body = '{"token": "xsrf"}' if method == "GET" else ""
         return MagicMock(ok=True, status_code=200, reason="OK", text=body)
+
+
+class AssignmentsSession(UnassignSession):
+    """Records requests, lists `endpoints` as assigned and accepts unassign."""
+
+    def __init__(self, *endpoints: str):
+        super().__init__()
+        self.endpoints = endpoints
+
+    def request(self, method, url, **kwargs):
+        if not url.endswith("/tun/m/assignments"):
+            return super().request(method, url, **kwargs)
+        self.requests.append((method, url))
+        info = {"token": "t", "tokenExpiresInSeconds": 3600}
+        listed = [
+            {
+                "accelerator": "NONE",
+                "endpoint": ep,
+                "variant": 0,
+                "machineShape": 0,
+                "runtimeProxyInfo": dict(info, url=f"https://{ep}"),
+            }
+            for ep in self.endpoints
+        ]
+        text = json.dumps({"assignments": listed})
+        return MagicMock(ok=True, status_code=200, reason="OK", text=text)
 
 
 def fresh_session(name: str, endpoint: str, attached: bool) -> SessionState:

@@ -7,8 +7,10 @@ log:
   attached sessions without stopping or unassigning their runtimes, `colab run`
   cleanup removes its non-attached record only once its runtime is released,
   `colab new -s` / `colab run -s`, `State.get_session` and `colab url` keep
-  attached sessions ssh-only before any request, and `State.store` and
-  `setup_logging` derive the default config directory from `SettingsStore.path`.
+  attached sessions ssh-only before any request, `State.resolve_session` skips
+  attached sessions in the unique pick outside `colab ssh`, and `State.store`
+  and `setup_logging` derive the default config directory from
+  `SettingsStore.path`.
 2026-11-13: Documented `--auth {oauth2,adc}` (default `oauth2`) and required ADC `gcloud` scopes under Global Flags.
 2026-11-04: `--gpu` and `--tpu` now reject unknown values instead of silently selecting `A100` (GPU) or `v6e1` (TPU). `resolve_runtime_options()` uses the new `GPU_ACCELERATORS` / `TPU_ACCELERATORS` maps and raises a `typer.BadParameter` that names the flag and the supported list; `--help` is generated from the same maps so it cannot drift. Validation runs before any assignment request, in both `colab new` and `colab run`.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to check if the active Linux `SecretService` keyring collection is locked via `secretstorage` before reading or writing OAuth tokens, logging and printing an immediate warning with the collection label, timeout, and `--auth=adc` hint while still attempting the keyring operation.
@@ -175,7 +177,12 @@ The runtime proxy token (`runtimeProxyInfo.token`) authenticates every request t
   `colab ssh -s <attached>` and `colab stop -s NAME`, before any token refresh
   unless the caller passes `allow_attached=True` (`colab ssh`, `colab stop` and
   `run` cleanup). `colab url` refuses both as well, while `colab sessions` and
-  `colab status` still list attached records.
+  `colab status` still list attached records. Without `-s`,
+  `State.resolve_session` skips attached records; when only attached records
+  remain, before or after stale CLI records are pruned, it refuses and names
+  `colab ssh -s NAME` and `colab stop -s NAME`. Bare `colab ssh` may pick an
+  attached session, and refuses as ambiguous with both a CLI and an attached
+  session.
 - **Cross-platform locking**: Locking uses the [`filelock`](https://pypi.org/project/filelock/) library rather than `fcntl.flock`. `fcntl` is POSIX-only and is unavailable on Windows, so the original implementation crashed on import there. `filelock` provides the same advisory cross-process locking on Linux, macOS, and Windows.
 - **Shared vs. exclusive**: Each store owns a `filelock.ReadWriteLock` bound to a sidecar file (`<path>.lock`). Reads acquire `read_lock()` (shared — multiple concurrent readers allowed) and writes acquire `write_lock()` (exclusive). This preserves the `LOCK_SH`/`LOCK_EX` distinction of the previous `fcntl` implementation.
 - **`is_singleton=False`**: The `ReadWriteLock` is created with `is_singleton=False`. With `filelock`'s default (`True`), two `ReadWriteLock` objects for the same path *within a single process* are deduplicated into one reentrant lock; its reentrancy guard then raises `RuntimeError` when two threads each construct their own `StateStore` and contend for the write lock. Disabling the singleton registry makes each store's lock independent so they serialize via the underlying file lock instead.

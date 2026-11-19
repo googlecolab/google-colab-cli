@@ -19,7 +19,7 @@ import re
 import shlex
 import sys
 from datetime import datetime, timedelta, timezone
-from typing import NoReturn, Optional
+from typing import Dict, NoReturn, Optional
 
 import typer
 
@@ -63,6 +63,20 @@ def exit_attached_runtime(name: str, attached_name: str) -> NoReturn:
         err=True,
     )
     raise typer.Exit(1)
+
+
+def _exit_only_attached(sessions: Dict[str, SessionState]) -> NoReturn:
+    attached = [n for n, s in sessions.items() if s.attached is True]
+    first, *others = sorted(attached or sessions)
+    also = f" (also attached: {', '.join(others)})" if others else ""
+    remove = f", or remove it with `colab stop -s {shlex.quote(first)}`"
+    exit_ssh_only(first, remove + also)
+
+
+def _is_attached_session(store, s: SessionState) -> bool:
+    return s.attached is True or isinstance(
+        store.attached_name_for_endpoint(s.endpoint), str
+    )
 
 
 class State:
@@ -207,7 +221,9 @@ class State:
 
         return self._sessions, assignments
 
-    def resolve_session(self, session_name: Optional[str]) -> str:
+    def resolve_session(
+        self, session_name: Optional[str], allow_attached: bool = False
+    ) -> str:
         if session_name:
             return session_name
 
@@ -218,26 +234,35 @@ class State:
                 "[colab] Error: No active sessions found. Create one with 'colab new'."
             )
             raise typer.Exit(1)
+        if not allow_attached and all(
+            _is_attached_session(self.store, s) for s in local_sessions.values()
+        ):
+            _exit_only_attached(local_sessions)
 
         # If we have local sessions, we need to sync to make sure they are still valid.
         # This will trigger auth if valid credentials are not present.
         sessions, _ = self.sync_sessions()
-        active_names = list(sessions.keys())
+        active_names = [
+            n
+            for n, s in sessions.items()
+            if allow_attached or not _is_attached_session(self.store, s)
+        ]
 
         if len(active_names) == 1:
             name = active_names[0]
             typer.echo(f"[colab] Using unique session '{name}'.")
             return name
-        elif len(active_names) > 1:
+        if len(active_names) > 1:
             typer.echo(
                 f"[colab] Error: Multiple active sessions found. Specify one with -s: {', '.join(active_names)}"
             )
             raise typer.Exit(1)
-        else:
-            typer.echo(
-                "[colab] Error: No active sessions found. Create one with 'colab new'."
-            )
-            raise typer.Exit(1)
+        if sessions and not allow_attached:
+            _exit_only_attached(sessions)
+        typer.echo(
+            "[colab] Error: No active sessions found. Create one with 'colab new'."
+        )
+        raise typer.Exit(1)
 
 
 state = State()
