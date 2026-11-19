@@ -111,7 +111,9 @@ def test_run_basic_flow(
         f"Script body never sent to runtime. Calls: {code_calls}"
     )
     # Cleanup happened
-    mock_client.unassign.assert_called_once_with("ep-123", runtime_name=None)
+    mock_client.unassign.assert_called_once_with(
+        "ep-123", runtime_name=None, url="http://runtime"
+    )
 
 
 def test_run_high_mem_passes_shape_to_assign(
@@ -183,7 +185,9 @@ def test_run_teardown_uses_refreshed_token(
     teardown_call = mock_runtime_class.call_args_list[-1]
     assert teardown_call.args[:2] == ("http://fresh", "fresh-tok")
     mock_runtime_class.return_value.stop.assert_called_with(shutdown_kernel=True)
-    mock_client.unassign.assert_called_once_with("ep-123", runtime_name=None)
+    mock_client.unassign.assert_called_once_with(
+        "ep-123", runtime_name=None, url="http://runtime"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +418,9 @@ def test_run_propagates_error_exit_code(
     result = runner.invoke(app, ["run", str(script_path)])
     assert result.exit_code != 0
     # Cleanup MUST happen even on script failure.
-    mock_client.unassign.assert_called_once_with("ep-123", runtime_name=None)
+    mock_client.unassign.assert_called_once_with(
+        "ep-123", runtime_name=None, url="http://runtime"
+    )
 
 
 def test_run_unassign_called_on_exception_during_execute(
@@ -436,7 +442,9 @@ def test_run_unassign_called_on_exception_during_execute(
 
     result = runner.invoke(app, ["run", str(script_path)])
     assert result.exit_code != 0
-    mock_client.unassign.assert_called_once_with("ep-123", runtime_name=None)
+    mock_client.unassign.assert_called_once_with(
+        "ep-123", runtime_name=None, url="http://runtime"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -602,7 +610,9 @@ def test_run_systemexit_zero_treated_as_success(
         result.output + result.stderr + captured.out + captured.err
     )
     # Cleanup still happened.
-    mock_client.unassign.assert_called_once_with("ep-123", runtime_name=None)
+    mock_client.unassign.assert_called_once_with(
+        "ep-123", runtime_name=None, url="http://runtime"
+    )
 
 
 def test_run_systemexit_nonzero_propagates_code(
@@ -632,7 +642,9 @@ def test_run_systemexit_nonzero_propagates_code(
 
     result = runner.invoke(app, ["run", str(script_path)])
     assert result.exit_code == 7
-    mock_client.unassign.assert_called_once_with("ep-123", runtime_name=None)
+    mock_client.unassign.assert_called_once_with(
+        "ep-123", runtime_name=None, url="http://runtime"
+    )
 
 
 def test_run_systemexit_string_message_exits_one(
@@ -663,7 +675,9 @@ def test_run_systemexit_string_message_exits_one(
 
     result = runner.invoke(app, ["run", str(script_path)])
     assert result.exit_code == 1
-    mock_client.unassign.assert_called_once_with("ep-123", runtime_name=None)
+    mock_client.unassign.assert_called_once_with(
+        "ep-123", runtime_name=None, url="http://runtime"
+    )
 
 
 def test_run_prelude_suppresses_ipython_exit_warning(

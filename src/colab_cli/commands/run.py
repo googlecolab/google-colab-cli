@@ -494,7 +494,7 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
         pass
 
     try:
-        state.client.unassign(s.endpoint, runtime_name=s.runtime_name)
+        state.client.unassign(s.endpoint, runtime_name=s.runtime_name, url=s.url)
     except Exception:
         pass
 

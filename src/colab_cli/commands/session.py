@@ -406,7 +406,7 @@ def _stopOne(name: str, s: SessionState) -> None:
         ColabRuntime(s.url, s.token, kernel_id=s.kernel_id).stop(shutdown_kernel=True)
     except Exception:
         pass
-    state.client.unassign(s.endpoint, runtime_name=s.runtime_name)
+    state.client.unassign(s.endpoint, runtime_name=s.runtime_name, url=s.url)
     state.store.remove(name)
     state.history.log_event(name, "session_terminated", {"reason": "user_requested"})
 

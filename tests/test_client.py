@@ -852,3 +852,55 @@ def test_tunnel_client_unassign_resolves_by_url_when_endpoint_empty(
     assert mock_session.request.call_count == 3
     post_call = mock_session.request.call_args_list[2]
     assert "unassign/ep-99" in post_call.args[1]
+
+
+def test_tunnel_client_unassign_returns_none_when_url_not_found(client, mock_session):
+    list_resp = MagicMock(
+        ok=True,
+        text=")]}'\n" + json.dumps({"assignments": []}),
+    )
+    mock_session.request.return_value = list_resp
+
+    assert client.unassign("", url="https://gone.colab.dev") is None
+    mock_session.request.assert_called_once()
+    assert mock_session.request.call_args.args[1].endswith("/tun/m/assignments")
+
+
+def test_tunnel_client_unassign_raises_without_endpoint_or_url(client, mock_session):
+    with pytest.raises(ColabRequestError, match="endpoint or proxy url"):
+        client.unassign("")
+
+    mock_session.request.assert_not_called()
+
+
+def test_public_client_unassign_returns_none_when_url_not_found(mock_session):
+    c = Client(Prod(), mock_session, use_public_api=True)
+    mock_session.request.return_value = MagicMock(ok=True, text="{}")
+
+    assert c.unassign("ep-99", url="https://gone.colab.dev") is None
+    mock_session.request.assert_called_once()
+    assert mock_session.request.call_args.args[1].endswith("/v1beta/runtimes")
+
+
+def test_public_client_unassign_raises_when_endpoint_unresolved_without_url(
+    mock_session,
+):
+    c = Client(Prod(), mock_session, use_public_api=True)
+    rt = _public_runtime_dict(name="runtimes/r-live", endpoint=None)
+    mock_session.request.return_value = MagicMock(
+        ok=True, text=json.dumps({"runtimes": [rt]})
+    )
+
+    with pytest.raises(ColabRequestError, match="ep-99"):
+        c.unassign("ep-99")
+
+    mock_session.request.assert_called_once()
+
+
+def test_public_client_unassign_raises_without_any_identifier(mock_session):
+    c = Client(Prod(), mock_session, use_public_api=True)
+
+    with pytest.raises(ColabRequestError, match="runtime_name, endpoint, or proxy url"):
+        c.unassign("")
+
+    mock_session.request.assert_not_called()

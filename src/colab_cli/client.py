@@ -461,13 +461,22 @@ class Client:
         return self._unassign_tunnel(endpoint, url=url)
 
     def _unassign_tunnel(self, endpoint: str, url: Optional[str] = None):
-        if not endpoint and url:
+        norm_url = normalize_proxy_url(url)
+        if not endpoint and norm_url:
             by_url = {
                 u: a.endpoint
                 for a in self._list_assignments_tunnel()
                 if a.endpoint and (u := normalize_proxy_url(a.runtime_proxy_info.url))
             }
-            endpoint = by_url.get(normalize_proxy_url(url), "")
+            endpoint = by_url.get(norm_url, "")
+            if not endpoint:
+                return None
+        if not endpoint:
+            raise ColabRequestError(
+                "Cannot unassign tunnel runtime without endpoint or proxy url",
+                request=None,
+                response=None,
+            )
         req_url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/unassign/{endpoint}")
         resp = self._issue_request(req_url, schema=GetUnassignRequest)
         headers = {COLAB_XSRF_TOKEN_HEADER["key"]: resp.token}
@@ -482,12 +491,13 @@ class Client:
         url: Optional[str] = None,
     ):
         target = runtime_name
+        norm_url = normalize_proxy_url(url)
         if not target:
             if endpoint.startswith("runtimes/"):
                 target = endpoint
             elif endpoint.startswith("r-"):
                 target = f"runtimes/{endpoint}"
-            elif endpoint or url:
+            elif endpoint or norm_url:
                 assignments = self._list_assignments_public()
                 by_endpoint = {
                     a.endpoint: a.name for a in assignments if a.endpoint and a.name
@@ -497,12 +507,23 @@ class Client:
                     for a in assignments
                     if a.name and (u := normalize_proxy_url(a.runtime_proxy_info.url))
                 }
-                norm_url = normalize_proxy_url(url)
                 target = (by_endpoint.get(endpoint) if endpoint else None) or (
                     by_url.get(norm_url) if norm_url else None
                 )
+                if not target:
+                    if norm_url:
+                        return None
+                    raise ColabRequestError(
+                        f"Could not resolve runtime name for endpoint '{endpoint}'; pass url or runtime_name",
+                        request=None,
+                        response=None,
+                    )
         if not target:
-            return None
+            raise ColabRequestError(
+                "Cannot unassign Public API runtime without runtime_name, endpoint, or proxy url",
+                request=None,
+                response=None,
+            )
         if not target.startswith("runtimes/"):
             target = f"runtimes/{target}"
         req_url = urljoin(self.colab_public_api, f"/v1beta/{target}")

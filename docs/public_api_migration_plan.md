@@ -92,7 +92,7 @@ flowchart LR
    - Persist `runtime_name=getattr(res, "runtime_name", None)` when creating sessions in `new()` and `run_command()`.
    - In `get_session()`, when `use_public_api` is enabled and `s.runtime_name` is set, refresh the runtime proxy token directly via `GET /v1beta/{s.runtime_name}` (`GET /v1beta/runtimes/{runtime_id}`) instead of calling `list_assignments()` (pruning the session on HTTP 404).
    - In `sync_sessions()` and `get_session()` fallback listing, match local sessions to server assignments by `runtime_name` (`a.name`), `endpoint`, or normalized proxy `url` (`by_url`), and backfill `s.runtime_name` / `s.endpoint` when non-empty.
-   - Pass `runtime_name=s.runtime_name` when calling `state.client.unassign(s.endpoint, runtime_name=s.runtime_name)` in `session.stop()` and `run.py`.
+   - Pass `runtime_name=s.runtime_name, url=s.url` when calling `state.client.unassign(s.endpoint, runtime_name=s.runtime_name, url=s.url)` in `session._stopOne()` (used by both `stop` and `stop --all`) and `run._teardown()`.
 
 ### Step 5: Implement Dual-Path Methods in `Client` (`src/colab_cli/client.py`)
 1. **`list_assignments()` & `get_runtime(runtime_name)`**:
@@ -111,11 +111,11 @@ flowchart LR
        - `code == 6` (`ALREADY_EXISTS`) -> call `_get_runtime_public(f"runtimes/{runtime_id}")` (`GET /v1beta/runtimes/{runtime_id}`) and return `Assignment`.
        - `code in (3, 7)` (`INVALID_ARGUMENT`, `PERMISSION_DENIED`) -> raise `ColabRequestError` with mapped HTTP status (400 / 403) so caller entitlement handlers in `session.py` / `run.py` work unchanged.
      - Parse `Runtime` from `operation.response` and return `PostAssignmentResponse`.
-3. **`unassign(endpoint, runtime_name=None)`**:
-   - Dispatch on `self.use_public_api` to `_unassign_public(endpoint, runtime_name=runtime_name)` or `_unassign_tunnel(endpoint)`.
-   - **`_unassign_tunnel(endpoint)`**: Existing `GET` + `POST /tun/m/unassign/{endpoint}` with `X-Goog-Colab-Token`.
-   - **`_unassign_public(endpoint, runtime_name=None)`**:
-     - Resolve `runtime_name`: if not provided, check if `endpoint` starts with `runtimes/` or `r-`; otherwise query `_list_assignments_public()` to find the runtime whose `endpoint` matches.
+3. **`unassign(endpoint, runtime_name=None, url=None)`**:
+   - Dispatch on `self.use_public_api` to `_unassign_public(endpoint, runtime_name=runtime_name, url=url)` or `_unassign_tunnel(endpoint, url=url)`.
+   - **`_unassign_tunnel(endpoint, url=None)`**: Resolve `endpoint` via normalized `url` in `_list_assignments_tunnel()` when `endpoint` is empty (returning `None` if already absent on the server, or raising `ColabRequestError` if neither `endpoint` nor `url` was provided), then issue `GET` + `POST /tun/m/unassign/{endpoint}` with `X-Goog-Colab-Token`.
+   - **`_unassign_public(endpoint, runtime_name=None, url=None)`**:
+     - Resolve `runtime_name`: if not provided, check if `endpoint` starts with `runtimes/` or `r-`; otherwise query `_list_assignments_public()` to match by `endpoint` or normalized `url` (returning `None` when `url` was searched and is already absent, or raising `ColabRequestError` when an identifier is missing or an `endpoint`-only lookup cannot resolve a runtime name).
      - Issue `DELETE /v1beta/{runtime_name}?allowMissing=true` with `schema=None`.
 4. **`get_consumption_user_info()`**:
    - Remains on `GET /tun/m/ccu-info` in both modes.
