@@ -20,7 +20,6 @@ tests can cover long runs and long silences without waiting.
 
 import itertools
 import queue
-import threading
 from unittest.mock import MagicMock
 
 from colab_cli import runtime as runtime_module
