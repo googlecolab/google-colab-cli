@@ -25,6 +25,10 @@ import requests
 _WAIT_SLICE_SEC = 1.0
 # Kernel states that end any execution in progress.
 _KERNEL_GONE = frozenset({"dead", "restarting"})
+# How often (seconds) the WebSocket library retries after a drop.
+_RECONNECT_INTERVAL_SEC = 5
+# How long to wait for the WebSocket to come back before giving up.
+_RECONNECT_TIMEOUT_SEC = 30
 
 
 class ColabRuntime:
@@ -105,6 +109,7 @@ class ColabRuntime:
                     client_kwargs = {
                         "subprotocol": jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
                         "extra_params": {"colab-runtime-proxy-token": self.token},
+                        "reconnect_interval": _RECONNECT_INTERVAL_SEC,
                     }
                     if self.session_id:
                         # WSSession (Session) expects 'session' for the ID
@@ -298,11 +303,23 @@ class ColabRuntime:
         client = self.kernel_client._manager.client
         msg_id = client.execute(code, allow_stdin=False)
 
+        def _waitForReconnect():
+            """Block until the WebSocket reconnects or the timeout expires."""
+            logging.warning("WebSocket connection lost, waiting for reconnect...")
+            if client.connection_ready.wait(timeout=_RECONNECT_TIMEOUT_SEC):
+                logging.warning("WebSocket reconnected.")
+                return True
+            return False
+
         def next_message(get_msg, waiting_for):
             deadline = (time.monotonic() + timeout) if timeout is not None else None
             while True:
                 if not client.connection_ready.is_set():
-                    raise RuntimeError("Connection was lost.")
+                    if not _waitForReconnect():
+                        raise RuntimeError(
+                            "Connection lost and could not reconnect within "
+                            f"{_RECONNECT_TIMEOUT_SEC}s."
+                        )
                 wait = _WAIT_SLICE_SEC
                 if deadline is not None:
                     left = deadline - time.monotonic()
