@@ -28,6 +28,10 @@ below corresponds to a tag of the same name.
   cleanup keep its record until the runtime is released, and refuse an
   attached `NAME` in `colab new -s NAME` and `colab run -s NAME` before any
   request.
+- **sessions:** Attached sessions are ssh-only: commands other than
+  `colab ssh`, `colab stop`, `colab sessions` and `colab status` refuse an
+  attached session before any request and point to `colab ssh -s NAME`,
+  including `colab url`.
 
 ### Removed
 

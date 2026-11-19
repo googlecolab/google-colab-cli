@@ -123,7 +123,10 @@ class State:
         self.history.log_event(name, "session_terminated", {"reason": "pruned"})
 
     def get_session(
-        self, name: str, ignore_missing_session: bool = False
+        self,
+        name: str,
+        ignore_missing_session: bool = False,
+        allow_attached: bool = False,
     ) -> Optional[SessionState]:
         """Load a session, refreshing its runtime proxy token if it's near expiry.
 
@@ -133,6 +136,8 @@ class State:
         returns None.
         """
         s = self.store.get(name)
+        if s and not allow_attached and s.attached is True:
+            exit_ssh_only(name)
         if s and (
             not s.token_expires_at
             or s.token_expires_at - datetime.now(timezone.utc) <= TOKEN_REFRESH_MARGIN

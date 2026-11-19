@@ -70,3 +70,27 @@ def mock_common_state(mocker, tmp_path):
     mocker.patch("colab_cli.commands.run.ColabRuntime")
 
     return mock_state
+
+
+@pytest.fixture
+def real_state(tmp_path, monkeypatch, mocker):
+    from session_fakes import RecordingSession
+
+    from colab_cli.client import Client, Prod
+    from colab_cli.state import SettingsStore, StateStore
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    mocker.patch("colab_cli.cli.auto_update.run_background_check")
+    local_state = State()
+    local_state._settings_store = SettingsStore(str(tmp_path / "settings.json"))
+    local_state._store = StateStore(str(tmp_path / "sessions.json"))
+    local_state._client = Client(
+        Prod(),
+        RecordingSession(),
+        settings_store=local_state._settings_store,
+        is_attached=local_state._store.is_attached_endpoint,
+    )
+    local_state._history = MagicMock()
+    mocker.patch("colab_cli.common.state", local_state)
+    mocker.patch("colab_cli.cli.state", local_state)
+    return local_state

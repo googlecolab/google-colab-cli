@@ -423,7 +423,9 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
     typer.echo(f"[colab] Stopping session '{name}'...", err=True)
     try:
         # The script may have outlived the proxy token.
-        fresh = state.get_session(name, ignore_missing_session=True)
+        fresh = state.get_session(
+            name, ignore_missing_session=True, allow_attached=True
+        )
         if (
             fresh
             and fresh.attached is not True

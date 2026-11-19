@@ -155,7 +155,7 @@ def test_get_session_refresh_preserves_attached_flag(real_state):
     real_state.store.add(attached_session)
     real_state.client.list_assignments.return_value = [_assignment("ep1", "new-token")]
 
-    refreshed = real_state.get_session("s1")
+    refreshed = real_state.get_session("s1", allow_attached=True)
 
     assert refreshed is not None and refreshed.attached is True
     assert refreshed.token == "new-token"
