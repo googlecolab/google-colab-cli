@@ -510,7 +510,7 @@ def test_resolve_session(mock_common_state, found):
 def test_stop_session_error_handling(mocker, capsys, exc, expect_raises):
     """A failed `colab stop` during --rm must not crash the shell, except that
     a `typer.Exit` (a deliberate exit) is allowed to propagate."""
-    mocker.patch("colab_cli.commands.session.stop", side_effect=exc)
+    mocker.patch("colab_cli.commands.session.stop_session", side_effect=exc)
     if expect_raises:
         with pytest.raises(typer.Exit):
             ssh_module._stop_session("s1")

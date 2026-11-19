@@ -228,18 +228,9 @@ def _auto_create_session(
 def _stop_session(name: str) -> None:
     """Best-effort ``colab stop`` for a session (used by ``--rm``)."""
     from colab_cli.commands import session as session_cmd
-    from colab_cli.common import state
 
     try:
-        record = state.store.get(name)
-        if record is not None and (
-            record.attached is True
-            or state.store.is_attached_endpoint(record.endpoint) is True
-        ):
-            state.store.remove(name)
-            typer.echo(session_cmd.attached_not_stopped_message(name))
-            return
-        session_cmd.stop(session=name)
+        session_cmd.stop_session(name)
     except typer.Exit:
         raise
     except Exception as e:  # Cleanup must not mask the shell's own exit.
