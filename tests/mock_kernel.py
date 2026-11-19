@@ -20,6 +20,7 @@ tests can cover long runs and long silences without waiting.
 
 import itertools
 import queue
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from colab_cli import runtime as runtime_module
@@ -50,41 +51,6 @@ def reply_message(status="ok", parent=REQUEST, **content):
     return kernel_message("execute_reply", {"status": status, **content}, parent)
 
 
-class _SimulatedEvent:
-    """A threading.Event stand-in that respects the mock's simulated clock.
-
-    When the connection drops (``is_set`` returns False), ``wait(timeout)``
-    checks whether ``reconnect_at`` falls within the timeout window.  If so it
-    advances the clock and re-sets the flag, simulating the WebSocket library's
-    automatic reconnect.
-    """
-
-    def __init__(self, mock_client):
-        self._mock = mock_client
-        self._flag = True
-
-    def is_set(self):
-        return self._flag
-
-    def set(self):
-        self._flag = True
-
-    def clear(self):
-        self._flag = False
-
-    def wait(self, timeout=None):
-        if self._flag:
-            return True
-        ra = self._mock.reconnect_at
-        if ra is not None and ra <= self._mock.now + (timeout or 0):
-            self._mock.now = max(self._mock.now, ra)
-            self._flag = True
-            return True
-        if timeout is not None:
-            self._mock.now += timeout
-        return False
-
-
 class MockKernelClient:
     """The websocket client's methods that ColabRuntime uses, on a simulated clock.
 
@@ -104,8 +70,15 @@ class MockKernelClient:
         self.disconnect_at = disconnect_at
         self.reconnect_at = reconnect_at
         self.waits = []
-        self.connection_ready = _SimulatedEvent(self)
-        self.connection_ready.set()
+
+    @property
+    def kernel_socket(self):
+        down = (
+            self.disconnect_at is not None
+            and self.now >= self.disconnect_at
+            and (self.reconnect_at is None or self.now < self.reconnect_at)
+        )
+        return SimpleNamespace(sock=SimpleNamespace(connected=not down))
 
     def execute(self, code, **kwargs):
         self.code, self.execute_kwargs = code, kwargs
@@ -119,8 +92,6 @@ class MockKernelClient:
             self.now = max(self.now, at)
             return msg
         self.now += timeout
-        if self.disconnect_at is not None and self.now >= self.disconnect_at:
-            self.connection_ready.clear()
         raise queue.Empty
 
     def get_iopub_msg(self, timeout=None):

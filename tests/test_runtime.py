@@ -24,7 +24,7 @@ from mock_kernel import (
     stdout_message,
 )
 
-from colab_cli.runtime import ColabRuntime
+from colab_cli.runtime import ColabRuntime, ConnectionLostError
 
 
 def test_colab_runtime_kernel_client():
@@ -224,8 +224,8 @@ def test_reconnect_recovers_after_transient_drop(monkeypatch):
 
 
 def test_connection_lost_permanently_raises(monkeypatch):
-    """When the WebSocket drops and does not reconnect, the runtime raises
-    with a descriptive message instead of the old 'Connection was lost.'."""
+    """A permanent WebSocket drop raises ConnectionLostError within the
+    reconnect timeout window."""
     runtime = ColabRuntime("http://url", "token123")
     mock_kc = MockKernelClient(
         [(100.0, status_message("idle"))],
@@ -233,7 +233,7 @@ def test_connection_lost_permanently_raises(monkeypatch):
         reconnect_at=None,
     )
     connect_runtime(runtime, mock_kc, monkeypatch)
-    with pytest.raises(RuntimeError, match="could not reconnect"):
+    with pytest.raises(ConnectionLostError, match="could not reconnect"):
         runtime.execute_code("import time; time.sleep(999)")
 
 

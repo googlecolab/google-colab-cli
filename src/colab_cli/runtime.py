@@ -31,6 +31,10 @@ _RECONNECT_INTERVAL_SEC = 5
 _RECONNECT_TIMEOUT_SEC = 30
 
 
+class ConnectionLostError(RuntimeError):
+    """The kernel WebSocket dropped and did not come back in time."""
+
+
 class ColabRuntime:
     def __init__(
         self,
@@ -303,22 +307,28 @@ class ColabRuntime:
         client = self.kernel_client._manager.client
         msg_id = client.execute(code, allow_stdin=False)
 
-        def _waitForReconnect():
-            """Block until the WebSocket reconnects or the timeout expires."""
-            logging.warning("WebSocket connection lost, waiting for reconnect...")
-            if client.connection_ready.wait(timeout=_RECONNECT_TIMEOUT_SEC):
-                logging.warning("WebSocket reconnected.")
-                return True
-            return False
+        def _isConnected():
+            sock = getattr(client.kernel_socket, "sock", None)
+            return bool(sock and sock.connected)
 
         def next_message(get_msg, waiting_for):
             deadline = (time.monotonic() + timeout) if timeout is not None else None
+            lostAt = None
             while True:
-                if not client.connection_ready.is_set():
-                    if not _waitForReconnect():
-                        raise RuntimeError(
-                            "Connection lost and could not reconnect within "
-                            f"{_RECONNECT_TIMEOUT_SEC}s."
+                if _isConnected():
+                    if lostAt is not None:
+                        logging.info("WebSocket reconnected.")
+                    lostAt = None
+                else:
+                    if lostAt is None:
+                        lostAt = time.monotonic()
+                        logging.warning(
+                            "WebSocket connection lost, waiting for reconnect..."
+                        )
+                    if time.monotonic() - lostAt >= _RECONNECT_TIMEOUT_SEC:
+                        raise ConnectionLostError(
+                            "Connection lost and could not reconnect "
+                            f"within {_RECONNECT_TIMEOUT_SEC}s."
                         )
                 wait = _WAIT_SLICE_SEC
                 if deadline is not None:

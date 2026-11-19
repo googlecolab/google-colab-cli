@@ -21,7 +21,7 @@ from mock_kernel import (
     stdout_message,
 )
 
-from colab_cli.runtime import ColabRuntime
+from colab_cli.runtime import ColabRuntime, ConnectionLostError
 
 
 @pytest.fixture
@@ -146,7 +146,7 @@ def test_a_lost_connection_stops_the_wait(run):
     mock_kc = MockKernelClient(
         [(5, stdout_message("x\n")), (100, status_message("idle"))], disconnect_at=10
     )
-    with pytest.raises(RuntimeError, match="could not reconnect"):
+    with pytest.raises(ConnectionLostError, match="could not reconnect"):
         run(mock_kc, timeout=None)
 
 

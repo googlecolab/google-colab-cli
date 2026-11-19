@@ -52,7 +52,7 @@ from colab_cli.commands.session import (
     TPU_ACCELERATORS,
     resolve_runtime_options,
 )
-from colab_cli.runtime import ColabRuntime
+from colab_cli.runtime import ColabRuntime, ConnectionLostError
 from colab_cli.state import SessionState
 from colab_cli.utils import get_status_code, is_terminal_error
 
@@ -438,21 +438,14 @@ def run_command(
             outputs = runtime.execute_code(
                 payload, output_hook=_make_run_output_hook(), timeout=timeout
             )
-        except RuntimeError as e:
-            if "reconnect" in str(e).lower():
-                # Connection was lost and recovery failed.  Keep the session
-                # alive so the user can inspect the runtime later.
-                typer.echo(
-                    f"[colab] {e}  Session '{name}' preserved for inspection.",
-                    err=True,
-                )
-                exit_code = 1
-                cleanup_reason = "connection_lost"
-                keep = True
-                raise
+        except ConnectionLostError as e:
+            typer.echo(
+                f"[colab] {e} Session '{name}' kept for inspection.",
+                err=True,
+            )
             exit_code = 1
-            cleanup_reason = "run_failed"
-            raise
+            cleanup_reason = "connection_lost"
+            keep = True
         except Exception:
             exit_code = 1
             cleanup_reason = "run_failed"
