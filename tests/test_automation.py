@@ -138,6 +138,9 @@ def test_cli_drivemount_rejects_empty_endpoint_with_no_public_api_hint(
 
     assert result.exit_code == 1
     assert "--no-public-api" in result.output
+    mock_state.get_session.assert_called_once_with(
+        "pub-session", require_backend_id=True
+    )
     mock_runtime_class.assert_not_called()
 
 
@@ -313,6 +316,8 @@ def test_drivefs_hook_replies_after_successful_propagation(
     out = capsys.readouterr().out
     assert "Credentials propagated" in out
     wsclient.stdin_channel.send.assert_called_once()
+
+
 @patch("colab_cli.commands.automation.open_url_in_browser", return_value=True)
 def test_show_drive_auth_url_opens_browser(mock_open, capsys):
     """The consent URL is printed and handed to the browser opener."""

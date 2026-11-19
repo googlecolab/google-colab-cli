@@ -114,20 +114,23 @@ class State:
         return self._history
 
     @property
+    def effective_use_public_api(self) -> bool:
+        if self._client is not None:
+            return self._client.use_public_api is True
+        if self.use_public_api is not None:
+            return self.use_public_api
+        return self.settings_store.load().use_public_api
+
+    @property
     def client(self):
         if self._client is None:
             creds = get_credentials(
                 self.client_oauth_config, provider=self.auth_provider
             )
-            use_public = (
-                self.use_public_api
-                if self.use_public_api is not None
-                else self.settings_store.load().use_public_api
-            )
             self._client = Client(
                 Prod(),
                 creds,
-                use_public_api=use_public,
+                use_public_api=self.effective_use_public_api,
                 settings_store=self.settings_store,
             )
         return self._client
@@ -140,14 +143,20 @@ class State:
         self.history.log_event(name, "session_terminated", {"reason": "pruned"})
 
     def get_session(
-        self, name: str, ignore_missing_session: bool = False
+        self,
+        name: str,
+        ignore_missing_session: bool = False,
+        *,
+        require_backend_id: bool = False,
     ) -> Optional[SessionState]:
         """Load a session, refreshing its runtime proxy token if it's near expiry.
 
         A session is missing if it's unknown locally or its assignment is gone
         server-side (in which case it's pruned). Missing sessions print an error
         and exit, unless ignore_missing_session is set, in which case this
-        returns None.
+        returns None. When require_backend_id is set, also reconciles against
+        the active backend if the session lacks that backend's identifier
+        (runtime_name vs. endpoint) even when the cached proxy token is fresh.
         """
         s = self.store.get(name)
         if s:
@@ -156,11 +165,12 @@ class State:
                 or s.token_expires_at - datetime.now(timezone.utc)
                 <= TOKEN_REFRESH_MARGIN
             )
-            missing_backend_id = (
-                self.client.use_public_api is True and not s.runtime_name
-            ) or (self.client.use_public_api is not True and not s.endpoint)
+            missing_backend_id = require_backend_id and (
+                (self.effective_use_public_api and not s.runtime_name)
+                or (not self.effective_use_public_api and not s.endpoint)
+            )
             if needs_refresh or missing_backend_id:
-                if self.client.use_public_api is True and s.runtime_name:
+                if self.effective_use_public_api and s.runtime_name:
                     try:
                         rt = self.client.get_runtime(s.runtime_name)
                     except ColabRequestError as e:

@@ -361,5 +361,5 @@ def test_url_backfills_missing_endpoint_via_get_session(mock_common_state):
     assert result.exit_code == 0, result.output
     assert "%2Ftun%2Fm%2Fep-backfilled" in result.output
     mock_common_state.get_session.assert_called_once_with(
-        "pub-sess", ignore_missing_session=True
+        "pub-sess", ignore_missing_session=True, require_backend_id=True
     )

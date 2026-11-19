@@ -298,6 +298,49 @@ def test_sync_sessions_by_url_rejects_conflicting_endpoint(real_state):
     assert real_state.store.get("s1") is None
 
 
+def test_get_session_fresh_token_does_not_touch_credentials(tmp_path, mocker):
+    from colab_cli.state import Settings, SettingsStore
+
+    get_creds = mocker.patch("colab_cli.common.get_credentials")
+    st = State()
+    st._store = StateStore(str(tmp_path / "sessions.json"))
+    st._settings_store = SettingsStore(str(tmp_path / "settings.json"))
+    st._settings_store.save(Settings(use_public_api=False))
+    fresh_expiry = datetime.now(timezone.utc) + timedelta(minutes=45)
+
+    st.store.add(
+        SessionState(
+            name="pub",
+            token="t",
+            url="https://vm-1.colab.dev",
+            endpoint="",
+            runtime_name="runtimes/r-1",
+            token_expires_at=fresh_expiry,
+        )
+    )
+    st.store.add(
+        SessionState(
+            name="tun",
+            token="t",
+            url="https://vm-2.colab.dev",
+            endpoint="ep-2",
+            runtime_name=None,
+            token_expires_at=fresh_expiry,
+        )
+    )
+
+    st.use_public_api = False
+    assert st.get_session("pub").runtime_name == "runtimes/r-1"
+    assert st.get_session("tun", require_backend_id=True).endpoint == "ep-2"
+
+    st.use_public_api = True
+    assert st.get_session("tun").endpoint == "ep-2"
+    assert st.get_session("pub", require_backend_id=True).runtime_name == "runtimes/r-1"
+
+    get_creds.assert_not_called()
+    assert st._client is None
+
+
 def test_get_session_cross_api_backfills_via_by_url_even_when_token_fresh(real_state):
     fresh_expiry = datetime.now(timezone.utc) + timedelta(minutes=45)
     real_state.client.use_public_api = True
@@ -315,7 +358,10 @@ def test_get_session_cross_api_backfills_via_by_url_even_when_token_fresh(real_s
     a_pub.name = "runtimes/r-1"
     real_state.client.list_assignments.return_value = [a_pub]
 
-    s = real_state.get_session("tun-sess")
+    assert real_state.get_session("tun-sess").runtime_name is None
+    real_state.client.list_assignments.assert_not_called()
+
+    s = real_state.get_session("tun-sess", require_backend_id=True)
 
     assert s.runtime_name == "runtimes/r-1"
     assert real_state.store.get("tun-sess").runtime_name == "runtimes/r-1"
@@ -334,7 +380,7 @@ def test_get_session_cross_api_backfills_via_by_url_even_when_token_fresh(real_s
     a_tun = _assignment("ep-2", "tun-tok", url="https://vm-2.colab.dev/")
     real_state.client.list_assignments.return_value = [a_tun]
 
-    s2 = real_state.get_session("pub-sess")
+    s2 = real_state.get_session("pub-sess", require_backend_id=True)
 
     assert s2.endpoint == "ep-2"
     assert real_state.store.get("pub-sess").endpoint == "ep-2"

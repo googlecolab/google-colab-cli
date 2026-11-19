@@ -342,6 +342,9 @@ def test_cli_stop(mock_client, mock_store, mock_common_state):
     result = runner.invoke(app, ["stop", "-s", "s1"])
     assert result.exit_code == 0
 
+    mock_common_state.get_session.assert_called_once_with(
+        "s1", ignore_missing_session=True, require_backend_id=True
+    )
     mock_client.unassign.assert_called_with("e1", runtime_name=None)
     mock_store.remove.assert_called_with("s1")
 

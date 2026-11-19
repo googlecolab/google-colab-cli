@@ -92,7 +92,9 @@ def url(
     name = state.resolve_session(session)
     s = state.store.get(name)
     if s and not s.endpoint:
-        s = state.get_session(name, ignore_missing_session=True)
+        s = state.get_session(
+            name, ignore_missing_session=True, require_backend_id=True
+        )
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.", err=True)
         raise typer.Exit(code=1)
