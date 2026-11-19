@@ -23,7 +23,7 @@ from colab_cli.common import State
 from colab_cli.state import SessionState, StateStore
 
 
-def _assignment(endpoint, token, expires_in=3600):
+def _assignment(endpoint, token, expires_in=3600, url="https://new-url"):
     return ListedAssignment.model_validate(
         {
             "accelerator": "NONE",
@@ -33,7 +33,7 @@ def _assignment(endpoint, token, expires_in=3600):
             "runtimeProxyInfo": {
                 "token": token,
                 "tokenExpiresInSeconds": expires_in,
-                "url": "https://new-url",
+                "url": url,
             },
         }
     )
@@ -234,3 +234,107 @@ def test_sync_sessions_matches_by_runtime_name_when_endpoint_empty(real_state):
 
     assert sessions["s1"].token == "tok-1"
     assert sessions["s2"].token == "tok-2"
+
+
+def test_sync_sessions_matches_by_url_and_backfills_runtime_name(real_state):
+    real_state.store.add(
+        SessionState(
+            name="s1",
+            token="old",
+            url="https://vm-1.colab.dev/",
+            endpoint="ep-1",
+            runtime_name=None,
+        )
+    )
+    a1 = _assignment("", "pub-tok", url="https://vm-1.colab.dev")
+    a1.name = "runtimes/r-1"
+    real_state.client.list_assignments.return_value = [a1]
+
+    sessions, _ = real_state.sync_sessions()
+
+    assert "s1" in sessions
+    assert sessions["s1"].token == "pub-tok"
+    assert sessions["s1"].runtime_name == "runtimes/r-1"
+    assert real_state.store.get("s1").runtime_name == "runtimes/r-1"
+
+
+def test_sync_sessions_matches_by_url_and_backfills_endpoint(real_state):
+    real_state.store.add(
+        SessionState(
+            name="s1",
+            token="old",
+            url="https://vm-1.colab.dev",
+            endpoint="",
+            runtime_name="runtimes/r-1",
+        )
+    )
+    a1 = _assignment("ep-1", "tun-tok", url="https://vm-1.colab.dev/")
+    real_state.client.list_assignments.return_value = [a1]
+
+    sessions, _ = real_state.sync_sessions()
+
+    assert "s1" in sessions
+    assert sessions["s1"].token == "tun-tok"
+    assert sessions["s1"].endpoint == "ep-1"
+    assert real_state.store.get("s1").endpoint == "ep-1"
+
+
+def test_sync_sessions_by_url_rejects_conflicting_endpoint(real_state):
+    real_state.store.add(
+        SessionState(
+            name="s1",
+            token="old",
+            url="https://shared.colab.dev",
+            endpoint="ep-1",
+            runtime_name=None,
+        )
+    )
+    a2 = _assignment("ep-2", "other-tok", url="https://shared.colab.dev")
+    real_state.client.list_assignments.return_value = [a2]
+
+    sessions, _ = real_state.sync_sessions()
+
+    assert "s1" not in sessions
+    assert real_state.store.get("s1") is None
+
+
+def test_get_session_cross_api_backfills_via_by_url_even_when_token_fresh(real_state):
+    fresh_expiry = datetime.now(timezone.utc) + timedelta(minutes=45)
+    real_state.client.use_public_api = True
+    real_state.store.add(
+        SessionState(
+            name="tun-sess",
+            token="old",
+            url="https://vm-1.colab.dev/",
+            endpoint="ep-1",
+            runtime_name=None,
+            token_expires_at=fresh_expiry,
+        )
+    )
+    a_pub = _assignment("", "pub-tok", url="https://vm-1.colab.dev")
+    a_pub.name = "runtimes/r-1"
+    real_state.client.list_assignments.return_value = [a_pub]
+
+    s = real_state.get_session("tun-sess")
+
+    assert s.runtime_name == "runtimes/r-1"
+    assert real_state.store.get("tun-sess").runtime_name == "runtimes/r-1"
+
+    real_state.client.use_public_api = False
+    real_state.store.add(
+        SessionState(
+            name="pub-sess",
+            token="old",
+            url="https://vm-2.colab.dev",
+            endpoint="",
+            runtime_name="runtimes/r-2",
+            token_expires_at=fresh_expiry,
+        )
+    )
+    a_tun = _assignment("ep-2", "tun-tok", url="https://vm-2.colab.dev/")
+    real_state.client.list_assignments.return_value = [a_tun]
+
+    s2 = real_state.get_session("pub-sess")
+
+    assert s2.endpoint == "ep-2"
+    assert real_state.store.get("pub-sess").endpoint == "ep-2"

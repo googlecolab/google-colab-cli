@@ -91,7 +91,7 @@ flowchart LR
 3. **Update [`common.py`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/common.py#L105-L165) (`get_session` & `sync_sessions`), [`commands/session.py`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/commands/session.py), and [`commands/run.py`](file:///usr/local/google/home/sethtroisi/Projects/colab-cli/src/colab_cli/commands/run.py)**:
    - Persist `runtime_name=getattr(res, "runtime_name", None)` when creating sessions in `new()` and `run_command()`.
    - In `get_session()`, when `use_public_api` is enabled and `s.runtime_name` is set, refresh the runtime proxy token directly via `GET /v1beta/{s.runtime_name}` (`GET /v1beta/runtimes/{runtime_id}`) instead of calling `list_assignments()` (pruning the session on HTTP 404).
-   - In `sync_sessions()`, match local sessions to server assignments by `runtime_name` (`a.name`) or `endpoint`, and backfill `s.runtime_name = a.name` when non-empty.
+   - In `sync_sessions()` and `get_session()` fallback listing, match local sessions to server assignments by `runtime_name` (`a.name`), `endpoint`, or normalized proxy `url` (`by_url`), and backfill `s.runtime_name` / `s.endpoint` when non-empty.
    - Pass `runtime_name=s.runtime_name` when calling `state.client.unassign(s.endpoint, runtime_name=s.runtime_name)` in `session.stop()` and `run.py`.
 
 ### Step 5: Implement Dual-Path Methods in `Client` (`src/colab_cli/client.py`)

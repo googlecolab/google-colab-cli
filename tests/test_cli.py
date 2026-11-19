@@ -772,3 +772,38 @@ def test_cli_new_and_stop_forward_runtime_name(
     stop_res = runner.invoke(app, ["--public-api", "stop", "-s", "pub-sess"])
     assert stop_res.exit_code == 0
     mock_client.unassign.assert_called_with("", runtime_name="runtimes/r-abc")
+
+
+def test_cli_sessions_matches_name_by_url_when_endpoint_stripped(mock_common_state):
+    from colab_cli.client import ListedAssignment
+    from colab_cli.state import SessionState
+
+    s1 = SessionState(
+        name="s1",
+        token="t",
+        url="https://vm-1.colab.dev/",
+        endpoint="ep-1",
+        runtime_name=None,
+    )
+    a1 = ListedAssignment.model_validate(
+        {
+            "accelerator": "NONE",
+            "endpoint": "",
+            "name": "runtimes/r-1",
+            "variant": 0,
+            "machineShape": 0,
+            "runtimeProxyInfo": {
+                "token": "t2",
+                "tokenExpiresInSeconds": 3600,
+                "url": "https://vm-1.colab.dev",
+            },
+        }
+    )
+    mock_common_state.sync_sessions.return_value = ({"s1": s1}, [a1])
+
+    result = runner.invoke(app, ["--public-api", "sessions"])
+
+    assert result.exit_code == 0
+    assert "[s1] runtimes/r-1 | Hardware: CPU | Shape: Standard | Variant: DEFAULT" in (
+        result.output
+    )

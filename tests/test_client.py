@@ -797,3 +797,58 @@ def test_public_client_unassign_resolves_endpoint(mock_session):
     assert del_call.args[0] == "DELETE"
     assert del_call.args[1].endswith("/v1beta/runtimes/r-found")
     assert del_call.kwargs["params"] == {"allowMissing": "true"}
+
+
+def test_public_client_unassign_resolves_by_url_when_endpoint_stripped(mock_session):
+    c = Client(Prod(), mock_session, use_public_api=True)
+    rt = _public_runtime_dict(name="runtimes/r-found", endpoint=None)
+    rt["connectionInfo"]["url"] = "https://vm-99.colab.dev/"
+    mock_session.request.side_effect = [
+        MagicMock(ok=True, text=json.dumps({"runtimes": [rt]})),
+        MagicMock(ok=True, text="{}"),
+    ]
+
+    c.unassign("ep-99", url="https://vm-99.colab.dev")
+
+    assert mock_session.request.call_count == 2
+    del_call = mock_session.request.call_args_list[1]
+    assert del_call.args[0] == "DELETE"
+    assert del_call.args[1].endswith("/v1beta/runtimes/r-found")
+    assert del_call.kwargs["params"] == {"allowMissing": "true"}
+
+
+def test_tunnel_client_unassign_resolves_by_url_when_endpoint_empty(
+    client, mock_session
+):
+    list_resp = MagicMock(
+        ok=True,
+        text=")]}'\n"
+        + json.dumps(
+            {
+                "assignments": [
+                    {
+                        "accelerator": "NONE",
+                        "endpoint": "ep-99",
+                        "variant": 0,
+                        "machineShape": 0,
+                        "runtimeProxyInfo": {
+                            "token": "t1",
+                            "tokenExpiresInSeconds": 3600,
+                            "url": "https://vm-99.colab.dev",
+                        },
+                    }
+                ]
+            }
+        ),
+    )
+    get_resp = MagicMock(
+        ok=True, text=")]}'\n" + json.dumps({"token": "unassign_xsrf_token"})
+    )
+    post_resp = MagicMock(ok=True, text="")
+    mock_session.request.side_effect = [list_resp, get_resp, post_resp]
+
+    client.unassign("", url="https://vm-99.colab.dev/")
+
+    assert mock_session.request.call_count == 3
+    post_call = mock_session.request.call_args_list[2]
+    assert "unassign/ep-99" in post_call.args[1]

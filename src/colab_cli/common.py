@@ -28,6 +28,7 @@ from colab_cli.client import (
     ColabRequestError,
     Prod,
     RuntimeProxyInfo,
+    normalize_proxy_url,
     proxy_info_from_connection,
 )
 from colab_cli.history import HistoryLogger
@@ -48,6 +49,35 @@ def _apply_proxy_info(s: SessionState, info: RuntimeProxyInfo):
     s.token = info.token
     s.url = info.url
     s.token_expires_at = info.expires_at()
+
+
+def _index_assignments(assignments):
+    by_runtime = {a.name: a for a in assignments if a.name}
+    by_endpoint = {a.endpoint: a for a in assignments if a.endpoint}
+    by_url = {
+        u: a
+        for a in assignments
+        if (u := normalize_proxy_url(a.runtime_proxy_info.url))
+    }
+    return by_runtime, by_endpoint, by_url
+
+
+def _match_assignment(
+    s: SessionState, by_runtime: dict, by_endpoint: dict, by_url: dict
+):
+    if s.runtime_name and s.runtime_name in by_runtime:
+        return by_runtime[s.runtime_name]
+    if s.endpoint and s.endpoint in by_endpoint:
+        return by_endpoint[s.endpoint]
+    s_url = normalize_proxy_url(s.url)
+    a = by_url.get(s_url) if s_url else None
+    if a is None:
+        return None
+    if s.runtime_name and a.name and s.runtime_name != a.name:
+        return None
+    if s.endpoint and a.endpoint and s.endpoint != a.endpoint:
+        return None
+    return a
 
 
 class State:
@@ -120,41 +150,47 @@ class State:
         returns None.
         """
         s = self.store.get(name)
-        if s and (
-            not s.token_expires_at
-            or s.token_expires_at - datetime.now(timezone.utc) <= TOKEN_REFRESH_MARGIN
-        ):
-            if self.client.use_public_api is True and s.runtime_name:
-                try:
-                    rt = self.client.get_runtime(s.runtime_name)
-                except ColabRequestError as e:
-                    if get_status_code(e) == 404:
+        if s:
+            needs_refresh = (
+                not s.token_expires_at
+                or s.token_expires_at - datetime.now(timezone.utc)
+                <= TOKEN_REFRESH_MARGIN
+            )
+            missing_backend_id = (
+                self.client.use_public_api is True and not s.runtime_name
+            ) or (self.client.use_public_api is not True and not s.endpoint)
+            if needs_refresh or missing_backend_id:
+                if self.client.use_public_api is True and s.runtime_name:
+                    try:
+                        rt = self.client.get_runtime(s.runtime_name)
+                    except ColabRequestError as e:
+                        if get_status_code(e) == 404:
+                            self.prune_session(name)
+                            s = None
+                        else:
+                            raise
+                    else:
+                        if rt.connection_info.endpoint and not s.endpoint:
+                            s.endpoint = rt.connection_info.endpoint
+                        _apply_proxy_info(
+                            s, proxy_info_from_connection(rt.connection_info)
+                        )
+                        self.store.add(s)
+                else:
+                    by_runtime, by_endpoint, by_url = _index_assignments(
+                        self.client.list_assignments()
+                    )
+                    matched = _match_assignment(s, by_runtime, by_endpoint, by_url)
+                    if matched is not None:
+                        if matched.name and not s.runtime_name:
+                            s.runtime_name = matched.name
+                        if matched.endpoint and not s.endpoint:
+                            s.endpoint = matched.endpoint
+                        _apply_proxy_info(s, matched.runtime_proxy_info)
+                        self.store.add(s)
+                    else:
                         self.prune_session(name)
                         s = None
-                    else:
-                        raise
-                else:
-                    if rt.connection_info.endpoint and not s.endpoint:
-                        s.endpoint = rt.connection_info.endpoint
-                    _apply_proxy_info(s, proxy_info_from_connection(rt.connection_info))
-                    self.store.add(s)
-            else:
-                assignments = self.client.list_assignments()
-                by_runtime = {a.name: a for a in assignments if a.name}
-                by_endpoint = {a.endpoint: a for a in assignments if a.endpoint}
-                matched = (
-                    by_runtime.get(s.runtime_name) if s.runtime_name else None
-                ) or (by_endpoint.get(s.endpoint) if s.endpoint else None)
-                if matched is not None:
-                    if matched.name and not s.runtime_name:
-                        s.runtime_name = matched.name
-                    if matched.endpoint and not s.endpoint:
-                        s.endpoint = matched.endpoint
-                    _apply_proxy_info(s, matched.runtime_proxy_info)
-                    self.store.add(s)
-                else:
-                    self.prune_session(name)
-                    s = None
 
         if s is None and not ignore_missing_session:
             typer.echo(f"[colab] Session '{name}' not found.")
@@ -180,15 +216,12 @@ class State:
             return self._sessions, assignments
 
         assignments = self.client.list_assignments()
-        by_runtime = {a.name: a for a in assignments if a.name}
-        by_endpoint = {a.endpoint: a for a in assignments if a.endpoint}
+        by_runtime, by_endpoint, by_url = _index_assignments(assignments)
 
         self._sessions = local_sessions
         pruned = 0
         for name, s in list(self._sessions.items()):
-            matched = (by_runtime.get(s.runtime_name) if s.runtime_name else None) or (
-                by_endpoint.get(s.endpoint) if s.endpoint else None
-            )
+            matched = _match_assignment(s, by_runtime, by_endpoint, by_url)
             if matched is None:
                 self.prune_session(name)
                 pruned += 1

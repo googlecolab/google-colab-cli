@@ -226,6 +226,10 @@ class Assignment(BaseModel):
     runtime_proxy_info: RuntimeProxyInfo = Field(..., alias="runtimeProxyInfo")
 
 
+def normalize_proxy_url(url: object) -> str:
+    return url.rstrip("/") if isinstance(url, str) else ""
+
+
 def proxy_info_from_connection(conn: ConnectionInfo) -> RuntimeProxyInfo:
     expires_in = 3600
     try:
@@ -446,38 +450,64 @@ class Client:
             )
         return assignments
 
-    def unassign(self, endpoint: str, runtime_name: Optional[str] = None):
+    def unassign(
+        self,
+        endpoint: str,
+        runtime_name: Optional[str] = None,
+        url: Optional[str] = None,
+    ):
         if self.use_public_api:
-            return self._unassign_public(endpoint, runtime_name=runtime_name)
-        return self._unassign_tunnel(endpoint)
+            return self._unassign_public(endpoint, runtime_name=runtime_name, url=url)
+        return self._unassign_tunnel(endpoint, url=url)
 
-    def _unassign_tunnel(self, endpoint: str):
-        url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/unassign/{endpoint}")
-        resp = self._issue_request(url, schema=GetUnassignRequest)
+    def _unassign_tunnel(self, endpoint: str, url: Optional[str] = None):
+        if not endpoint and url:
+            by_url = {
+                u: a.endpoint
+                for a in self._list_assignments_tunnel()
+                if a.endpoint and (u := normalize_proxy_url(a.runtime_proxy_info.url))
+            }
+            endpoint = by_url.get(normalize_proxy_url(url), "")
+        req_url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/unassign/{endpoint}")
+        resp = self._issue_request(req_url, schema=GetUnassignRequest)
         headers = {COLAB_XSRF_TOKEN_HEADER["key"]: resp.token}
         return self._issue_request(
-            url, method="POST", headers=headers, schema=BaseModel
+            req_url, method="POST", headers=headers, schema=BaseModel
         )
 
-    def _unassign_public(self, endpoint: str, runtime_name: Optional[str] = None):
+    def _unassign_public(
+        self,
+        endpoint: str,
+        runtime_name: Optional[str] = None,
+        url: Optional[str] = None,
+    ):
         target = runtime_name
         if not target:
             if endpoint.startswith("runtimes/"):
                 target = endpoint
             elif endpoint.startswith("r-"):
                 target = f"runtimes/{endpoint}"
-            elif endpoint:
-                for a in self._list_assignments_public():
-                    if a.endpoint == endpoint and a.name:
-                        target = a.name
-                        break
+            elif endpoint or url:
+                assignments = self._list_assignments_public()
+                by_endpoint = {
+                    a.endpoint: a.name for a in assignments if a.endpoint and a.name
+                }
+                by_url = {
+                    u: a.name
+                    for a in assignments
+                    if a.name and (u := normalize_proxy_url(a.runtime_proxy_info.url))
+                }
+                norm_url = normalize_proxy_url(url)
+                target = (by_endpoint.get(endpoint) if endpoint else None) or (
+                    by_url.get(norm_url) if norm_url else None
+                )
         if not target:
             return None
         if not target.startswith("runtimes/"):
             target = f"runtimes/{target}"
-        url = urljoin(self.colab_public_api, f"/v1beta/{target}")
+        req_url = urljoin(self.colab_public_api, f"/v1beta/{target}")
         return self._issue_request(
-            url, method="DELETE", params={"allowMissing": "true"}, schema=None
+            req_url, method="DELETE", params={"allowMissing": "true"}, schema=None
         )
 
     def _call_with_assign_retries(self, fn):
