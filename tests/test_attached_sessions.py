@@ -16,7 +16,6 @@ from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 
 import pytest
-import typer
 import typer.main
 from session_fakes import (
     ATT,
@@ -31,11 +30,16 @@ from session_fakes import (
 from typer.testing import CliRunner
 
 from colab_cli.cli import app
+from colab_cli.client import (
+    Accelerator,
+    AssignmentVariant,
+    PostAssignmentResponse,
+    RuntimeProxyInfo,
+)
 from colab_cli.commands import automation as automation_cmd
 from colab_cli.commands import execution as execution_cmd
 from colab_cli.commands import run as run_cmd
 from colab_cli.commands import session as session_cmd
-from colab_cli.commands import ssh as ssh_module
 
 runner = CliRunner()
 
@@ -145,18 +149,41 @@ def test_url_refuses_attached_session(real_state, tmp_path):
 
 
 def test_teardown_reads_attached_record_without_ssh_only_refusal(
-    real_state, tmp_path, mocker, capsys
+    real_state, tmp_path, mocker
 ):
-    real_state.store.add(fresh_session(*ATT))
     use_guarded_client(real_state, mocker)
-    before = (tmp_path / "sessions.json").read_bytes()
+    mocker.patch.object(
+        real_state.client,
+        "assign",
+        return_value=PostAssignmentResponse(
+            accelerator=Accelerator.NONE,
+            endpoint="job-ep",
+            runtimeProxyInfo=RuntimeProxyInfo(
+                token="t", tokenExpiresInSeconds=3600, url="https://job-ep"
+            ),
+            variant=AssignmentVariant.DEFAULT,
+        ),
+    )
+    script = tmp_path / "job.py"
+    script.write_text("print(1)\n")
 
-    run_cmd._teardown("att", fresh_session(*ATT), reason="script_exit")
+    def attach_same_endpoint_mid_run(code, **kwargs):
+        if "print(1)" in code:
+            real_state.store.add(fresh_session("att", "job-ep", True))
+        return []
 
-    assert "colab ssh -s att" not in capsys.readouterr().err
+    run_cmd.ColabRuntime.return_value.execute_code.side_effect = (
+        attach_same_endpoint_mid_run
+    )
+
+    result = runner.invoke(app, ["run", "-s", "job", str(script)])
+
+    assert result.exit_code == 0, result.output
+    assert "colab ssh -s att" not in result.output
     assert real_state.client.session.requests == []
-    run_cmd.ColabRuntime.assert_not_called()
-    assert (tmp_path / "sessions.json").read_bytes() == before
+    run_cmd.ColabRuntime.return_value.stop.assert_called_once_with()
+    assert real_state.store.get("att").attached is True
+    assert real_state.store.get("job") is not None
 
 
 PICK_COMMANDS = ("stop", *sorted(set(ATTACHED_REFUSED) - {"new", "run"}))
@@ -222,20 +249,28 @@ def test_stale_cli_and_attached_session_need_explicit_command(real_state, mocker
     session_cmd.ColabRuntime.assert_not_called()
 
 
-def test_bare_ssh_with_cli_and_attached_is_ambiguous(real_state, mocker, capsys):
+def test_bare_ssh_with_cli_and_attached_is_ambiguous(real_state, mocker):
     _seed_store(real_state, mocker, (ATT, CLI), BOTH_ASSIGNED)
+    ssh_call = mocker.patch("subprocess.call", return_value=0)
 
-    with pytest.raises(typer.Exit):
-        ssh_module._resolve_session(None)
+    result = runner.invoke(app, ["ssh"])
 
-    assert "Multiple active sessions found" in capsys.readouterr().out
+    assert result.exit_code == 1
+    assert "Multiple active sessions found" in result.output
+    ssh_call.assert_not_called()
 
 
 @pytest.mark.parametrize("name", ["att", None], ids=["named", "unique"])
 def test_ssh_resolves_attached_session(real_state, mocker, name):
     _seed_store(real_state, mocker, (ATT,), ("att-ep",))
+    ssh_call = mocker.patch("subprocess.call", return_value=0)
 
-    assert ssh_module._resolve_session(name).endpoint == "att-ep"
+    args = ["ssh", "-s", name] if name else ["ssh"]
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0, result.output
+    ssh_call.assert_called_once()
+    assert "-s att" in ssh_call.call_args.args[0][2]
 
 
 @pytest.mark.parametrize("command", ["status", "sessions"])

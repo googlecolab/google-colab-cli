@@ -45,6 +45,15 @@ def _apply_proxy_info(s: SessionState, info: RuntimeProxyInfo):
 
 
 def exit_ssh_only(name: str, more: str = "") -> NoReturn:
+    """Prints an ssh-only error for an attached session and exits.
+
+    Args:
+      name: Session name the caller tried to use.
+      more: Optional trailing text appended after the ``colab ssh`` command.
+
+    Raises:
+      typer.Exit: Always exits with code 1.
+    """
     typer.echo(
         f"[colab] Error: Session '{name}' uses a runtime the CLI did not"
         f" create. Use it with `colab ssh -s {shlex.quote(name)}`{more}.",
@@ -54,6 +63,15 @@ def exit_ssh_only(name: str, more: str = "") -> NoReturn:
 
 
 def exit_attached_runtime(name: str, attached_name: str) -> NoReturn:
+    """Prints an error for a CLI session sharing an attached runtime and exits.
+
+    Args:
+      name: CLI session name that shares the attached endpoint.
+      attached_name: Attached session name that owns the runtime locally.
+
+    Raises:
+      typer.Exit: Always exits with code 1.
+    """
     ssh_cmd = f"`colab ssh -s {shlex.quote(attached_name)}`"
     stop_cmd = f"`colab stop -s {shlex.quote(name)}`"
     typer.echo(
@@ -136,6 +154,14 @@ class State:
         return self._client
 
     def refuse_attached_name(self, name: str) -> None:
+        """Exits if ``name`` already refers to an attached session in the store.
+
+        Args:
+          name: Candidate session name for ``colab new`` or ``colab run``.
+
+        Raises:
+          typer.Exit: With code 1 if ``name`` is an attached session.
+        """
         record = self.store.get(name)
         if record is not None and record.attached is True:
             remove = f", remove it with `colab stop -s {shlex.quote(name)}`"
@@ -160,6 +186,20 @@ class State:
         server-side (in which case it's pruned). Missing sessions print an error
         and exit, unless ignore_missing_session is set, in which case this
         returns None.
+
+        Args:
+          name: Session name to load from the local store.
+          ignore_missing_session: Return None instead of exiting when missing.
+          allow_attached: Allow loading attached sessions and CLI records
+            whose endpoint is attached (for ``ssh``, ``stop``, and teardown).
+
+        Returns:
+          The loaded ``SessionState``, or None when missing and
+          ``ignore_missing_session`` is True.
+
+        Raises:
+          typer.Exit: With code 1 if missing (and not ignored) or refused as
+            ssh-only.
         """
         s = self.store.get(name)
         if s and not allow_attached:
