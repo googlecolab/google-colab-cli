@@ -1,6 +1,7 @@
 ---
 log:
 2026-11-23: `colab stop -s <name>` now exits 1 when the named session does not exist (or has already vanished from the backend), delegating missing-session handling to `State.get_session` (#251).
+2026-11-18: `SessionState.attached` marks sessions attached to a runtime the CLI did not create in `sessions.json`; `State.store` and `setup_logging` derive the default config directory from `SettingsStore.path`.
 2026-11-13: Documented `--auth {oauth2,adc}` (default `oauth2`) and required ADC `gcloud` scopes under Global Flags.
 2026-11-04: `--gpu` and `--tpu` now reject unknown values instead of silently selecting `A100` (GPU) or `v6e1` (TPU). `resolve_runtime_options()` uses the new `GPU_ACCELERATORS` / `TPU_ACCELERATORS` maps and raises a `typer.BadParameter` that names the flag and the supported list; `--help` is generated from the same maps so it cannot drift. Validation runs before any assignment request, in both `colab new` and `colab run`.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to check if the active Linux `SecretService` keyring collection is locked via `secretstorage` before reading or writing OAuth tokens, logging and printing an immediate warning with the collection label, timeout, and `--auth=adc` hint while still attempting the keyring operation.
@@ -145,7 +146,8 @@ The runtime proxy token (`runtimeProxyInfo.token`) authenticates every request t
 - Handle authentication headers (likely `Authorization: Bearer <token>` or cookies).
 
 ### State Persistence & File Locking
-- **Stores**: `StateStore` (`sessions.json`) and `SettingsStore` (`settings.json`) both derive from `_LockedFileStore`, which guards concurrent access across independent `colab` invocations.
+- **Stores**: `StateStore` (`sessions.json`) and `SettingsStore` (`settings.json`) both derive from `_LockedFileStore`, which guards concurrent access across independent `colab` invocations. `State.store` and `setup_logging` derive the default config directory from `SettingsStore.path`.
+- **Attached sessions**: `SessionState.attached` (default `False`) marks sessions in `sessions.json` attached to a runtime the CLI did not create; token refresh and session sync preserve the flag.
 - **Cross-platform locking**: Locking uses the [`filelock`](https://pypi.org/project/filelock/) library rather than `fcntl.flock`. `fcntl` is POSIX-only and is unavailable on Windows, so the original implementation crashed on import there. `filelock` provides the same advisory cross-process locking on Linux, macOS, and Windows.
 - **Shared vs. exclusive**: Each store owns a `filelock.ReadWriteLock` bound to a sidecar file (`<path>.lock`). Reads acquire `read_lock()` (shared — multiple concurrent readers allowed) and writes acquire `write_lock()` (exclusive). This preserves the `LOCK_SH`/`LOCK_EX` distinction of the previous `fcntl` implementation.
 - **`is_singleton=False`**: The `ReadWriteLock` is created with `is_singleton=False`. With `filelock`'s default (`True`), two `ReadWriteLock` objects for the same path *within a single process* are deduplicated into one reentrant lock; its reentrancy guard then raises `RuntimeError` when two threads each construct their own `StateStore` and contend for the write lock. Disabling the singleton registry makes each store's lock independent so they serialize via the underlying file lock instead.

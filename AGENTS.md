@@ -11,7 +11,7 @@
   - `colab.research.google.com` (session backend / `tun/m/...`): requires the `colaboratory` and `userinfo.email` scopes. Handles assign, unassign, CCU info, and the contents API.
 - **Runtime**: `ColabRuntime` wraps `jupyter-kernel-client` for execution.
 - **State**:
-  - `StateStore` persists session metadata in `~/.config/colab-cli/sessions.json`.
+  - `StateStore` persists session metadata in `~/.config/colab-cli/sessions.json`, with `SessionState.attached` marking sessions attached to a runtime the CLI did not create.
   - Persistent settings are in `~/.config/colab-cli/settings.json`.
 - **History**: `HistoryLogger` records structured events in `~/.config/colab-cli/history/*.jsonl`.
 

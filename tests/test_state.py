@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import multiprocessing
 import os
 import pytest
+import stat
 import tempfile
 import threading
 from datetime import datetime, timezone
@@ -356,3 +358,94 @@ def test_state_store_multiprocess_concurrency(temp_config):
     assert p1.exitcode == 0
     assert p2.exitcode == 0
     assert len(StateStore(temp_config).list()) == 80
+
+
+OWNER_ONLY = 0o600
+WORLD_READABLE = 0o644
+DEFAULT_UMASK = 0o022
+
+
+def test_session_state_attached_defaults_to_false():
+    session = SessionState(name="s", token="t", url="u", endpoint="e")
+
+    assert session.attached is False
+
+
+@pytest.mark.parametrize("attached", [False, True], ids=["cli", "attached"])
+def test_state_store_persists_attached_flag(tmp_path, attached):
+    path = tmp_path / "sessions.json"
+    store = StateStore(str(path))
+
+    store.add(
+        SessionState(name="s", token="t", url="u", endpoint="e", attached=attached)
+    )
+
+    raw = json.loads(path.read_text())
+    assert raw["s"]["attached"] is attached
+    loaded = StateStore(str(path)).get("s")
+    assert loaded is not None
+    assert loaded.attached is attached
+    assert not (tmp_path / "sessions.attached.json").exists()
+
+
+def test_state_store_loads_legacy_record_without_attached_as_false(tmp_path):
+    path = tmp_path / "sessions.json"
+    path.write_text(
+        json.dumps({"s": {"name": "s", "token": "t", "url": "u", "endpoint": "e"}})
+    )
+
+    loaded = StateStore(str(path)).get("s")
+
+    assert loaded is not None
+    assert loaded.attached is False
+
+
+def test_is_attached_endpoint(tmp_path):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    store.add(SessionState(name="cli", token="t", url="u", endpoint="cli-ep"))
+    store.add(
+        SessionState(name="att", token="t", url="u", endpoint="att-ep", attached=True)
+    )
+
+    assert store.is_attached_endpoint("att-ep") is True
+    assert store.is_attached_endpoint("cli-ep") is False
+    assert store.is_attached_endpoint("missing") is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_attached_session_creates_private_sessions_file(tmp_path):
+    path = tmp_path / "sessions.json"
+    old_umask = os.umask(DEFAULT_UMASK)
+    try:
+        store = StateStore(str(path))
+        store.add(
+            SessionState(name="att", token="t", url="u", endpoint="e", attached=True)
+        )
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(path.stat().st_mode) == OWNER_ONLY
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_attached_session_tightens_existing_sessions_file_to_private(tmp_path):
+    path = tmp_path / "sessions.json"
+    path.touch()
+    os.chmod(path, WORLD_READABLE)
+
+    store = StateStore(str(path))
+    store.add(SessionState(name="att", token="t", url="u", endpoint="e", attached=True))
+
+    assert stat.S_IMODE(path.stat().st_mode) == OWNER_ONLY
+
+
+def test_default_store_paths_share_config_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+    settings_store = SettingsStore()
+    state_store = StateStore()
+
+    expected_dir = str(tmp_path / ".config" / "colab-cli")
+    assert settings_store.path == os.path.join(expected_dir, "settings.json")
+    assert state_store.path == os.path.join(expected_dir, "sessions.json")

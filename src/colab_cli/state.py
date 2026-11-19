@@ -35,6 +35,7 @@ class SessionState(BaseModel):
     session_id: Optional[str] = None
     last_execution: Optional[Tuple[str, Optional[str], str]] = None
     running: Optional[str] = None
+    attached: bool = False
 
 
 class Settings(BaseModel):
@@ -48,6 +49,7 @@ class Settings(BaseModel):
     tunnel_api_supported: Optional[bool] = None
 
 
+_DEFAULT_CONFIG_DIR = "~/.config/colab-cli"
 _OWNER_ONLY_MODE = 0o600
 
 
@@ -69,6 +71,7 @@ class _LockedFileStore:
     def __init__(self, path: str):
         self.path = path
         self.lock_path = "%s.lock" % self.path
+        self._ensure_dir()
         # ReadWriteLock gives us shared (concurrent) readers and exclusive
         # writers -- the cross-platform equivalent of fcntl LOCK_SH/LOCK_EX.
         # is_singleton=False keeps each store's lock independent: with the
@@ -77,7 +80,6 @@ class _LockedFileStore:
         # guard then raises RuntimeError when two threads contend for the write
         # lock. We want them to actually serialize via the underlying file lock.
         self._rwlock = filelock.ReadWriteLock(self.lock_path, is_singleton=False)
-        self._ensure_dir()
         make_private(self.path)
 
     def _ensure_dir(self):
@@ -109,7 +111,9 @@ class _LockedFileStore:
 class SettingsStore(_LockedFileStore):
     def __init__(self, path: Optional[str] = None):
         if not path:
-            path = os.path.expanduser("~/.config/colab-cli/settings.json")
+            path = os.path.expanduser(
+                os.path.join(_DEFAULT_CONFIG_DIR, "settings.json")
+            )
         super().__init__(path)
 
     def load(self) -> Settings:
@@ -133,7 +137,9 @@ class SettingsStore(_LockedFileStore):
 class StateStore(_LockedFileStore):
     def __init__(self, path: Optional[str] = None):
         if not path:
-            path = os.path.expanduser("~/.config/colab-cli/sessions.json")
+            path = os.path.expanduser(
+                os.path.join(_DEFAULT_CONFIG_DIR, "sessions.json")
+            )
         super().__init__(path)
 
     def _load_raw(self, f) -> Dict[str, SessionState]:
@@ -178,3 +184,9 @@ class StateStore(_LockedFileStore):
             if f is None:
                 return {}
             return self._load_raw(f)
+
+    def is_attached_endpoint(self, endpoint: str) -> bool:
+        return any(
+            session.attached is True and session.endpoint == endpoint
+            for session in self.list().values()
+        )
