@@ -53,6 +53,7 @@ def test_colab_runtime_kernel_client():
             "client_kwargs": {
                 "subprotocol": jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
                 "extra_params": {"colab-runtime-proxy-token": "token123"},
+                "reconnect_interval": 5,
             },
             "headers": {
                 "X-Colab-Client-Agent": "colab-cli",
@@ -93,6 +94,7 @@ def test_colab_runtime_kernel_client_jupyterclient_fallback():
                 client_kwargs={
                     "subprotocol": jupyter_kernel_client.JupyterSubprotocol.DEFAULT,
                     "extra_params": {"colab-runtime-proxy-token": "token123"},
+                    "reconnect_interval": 5,
                 },
                 headers={
                     "X-Colab-Client-Agent": "colab-cli",
@@ -200,6 +202,39 @@ def test_colab_runtime_streaming_timeout_is_an_idle_limit(monkeypatch, output_ho
         else:
             with pytest.raises(TimeoutError):
                 runtime.execute_code("print(1)", output_hook=output_hook, timeout=600)
+
+
+def test_reconnect_recovers_after_transient_drop(monkeypatch):
+    """When the WebSocket drops mid-execution and reconnects within the timeout,
+    the runtime should continue waiting for output instead of raising."""
+    runtime = ColabRuntime("http://url", "token123")
+    mock_kc = MockKernelClient(
+        # Output arrives at t=1, then connection drops at t=2, reconnects at
+        # t=5, and the idle status arrives at t=6.
+        [
+            (1.0, stdout_message("hello\n")),
+            (6.0, status_message("idle")),
+        ],
+        disconnect_at=2.0,
+        reconnect_at=5.0,
+    )
+    connect_runtime(runtime, mock_kc, monkeypatch)
+    outputs = runtime.execute_code("print('hello')")
+    assert any(o.get("text") == "hello\n" for o in outputs)
+
+
+def test_connection_lost_permanently_raises(monkeypatch):
+    """When the WebSocket drops and does not reconnect, the runtime raises
+    with a descriptive message instead of the old 'Connection was lost.'."""
+    runtime = ColabRuntime("http://url", "token123")
+    mock_kc = MockKernelClient(
+        [(100.0, status_message("idle"))],
+        disconnect_at=2.0,
+        reconnect_at=None,
+    )
+    connect_runtime(runtime, mock_kc, monkeypatch)
+    with pytest.raises(RuntimeError, match="could not reconnect"):
+        runtime.execute_code("import time; time.sleep(999)")
 
 
 def test_colab_runtime_stop():

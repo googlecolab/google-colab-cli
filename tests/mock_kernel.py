@@ -51,6 +51,41 @@ def reply_message(status="ok", parent=REQUEST, **content):
     return kernel_message("execute_reply", {"status": status, **content}, parent)
 
 
+class _SimulatedEvent:
+    """A threading.Event stand-in that respects the mock's simulated clock.
+
+    When the connection drops (``is_set`` returns False), ``wait(timeout)``
+    checks whether ``reconnect_at`` falls within the timeout window.  If so it
+    advances the clock and re-sets the flag, simulating the WebSocket library's
+    automatic reconnect.
+    """
+
+    def __init__(self, mock_client):
+        self._mock = mock_client
+        self._flag = True
+
+    def is_set(self):
+        return self._flag
+
+    def set(self):
+        self._flag = True
+
+    def clear(self):
+        self._flag = False
+
+    def wait(self, timeout=None):
+        if self._flag:
+            return True
+        ra = self._mock.reconnect_at
+        if ra is not None and ra <= self._mock.now + (timeout or 0):
+            self._mock.now = max(self._mock.now, ra)
+            self._flag = True
+            return True
+        if timeout is not None:
+            self._mock.now += timeout
+        return False
+
+
 class MockKernelClient:
     """The websocket client's methods that ColabRuntime uses, on a simulated clock.
 
@@ -58,17 +93,19 @@ class MockKernelClient:
     By default the shell channel replies when the last iopub message arrives. A
     get_*_msg call that would wait past the next message advances the clock by
     ``timeout`` and raises queue.Empty, as a quiet kernel would. The connection
-    drops when the clock reaches ``disconnect_at``.
+    drops when the clock reaches ``disconnect_at`` and comes back at
+    ``reconnect_at`` (if set).
     """
 
-    def __init__(self, iopub, shell=None, disconnect_at=None):
+    def __init__(self, iopub, shell=None, disconnect_at=None, reconnect_at=None):
         self.now = 0.0
         self.iopub = list(iopub)
         last = iopub[-1][0] if iopub else 0.0
         self.shell = list(shell if shell is not None else [(last, reply_message())])
         self.disconnect_at = disconnect_at
+        self.reconnect_at = reconnect_at
         self.waits = []
-        self.connection_ready = threading.Event()
+        self.connection_ready = _SimulatedEvent(self)
         self.connection_ready.set()
 
     def execute(self, code, **kwargs):
