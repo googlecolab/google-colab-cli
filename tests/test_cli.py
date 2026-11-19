@@ -737,3 +737,143 @@ def test_cli_test_public_api_hidden_and_reports_status(mock_common_state):
     assert res.exit_code == 0
     assert "Public API" in res.output
     assert "Tunnel API" in res.output
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_upload_directory_requires_recursive(
+    mock_contents_class, mock_store, mock_common_state, tmp_path
+):
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+    local_dir = tmp_path / "mydir"
+    local_dir.mkdir()
+
+    result = runner.invoke(app, ["upload", "-s", "s1", str(local_dir), "content/mydir"])
+
+    assert result.exit_code == 1
+    assert "-r/--recursive" in result.output
+    mock_contents_class.return_value.upload.assert_not_called()
+    mock_contents_class.return_value.upload_dir.assert_not_called()
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_upload_recursive_directory(
+    mock_contents_class, mock_store, mock_common_state, tmp_path
+):
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_contents_class.return_value.upload_dir.return_value = 3
+    local_dir = tmp_path / "mydir"
+    local_dir.mkdir()
+
+    result = runner.invoke(
+        app, ["upload", "-r", "-s", "s1", str(local_dir), "content/mydir"]
+    )
+
+    assert result.exit_code == 0
+    mock_contents_class.return_value.upload_dir.assert_called_once_with(
+        str(local_dir), "content/mydir"
+    )
+    assert "3 file(s)" in result.output
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_upload_recursive_single_file(
+    mock_contents_class, mock_store, mock_common_state, tmp_path
+):
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+    local_file = tmp_path / "a.txt"
+    local_file.write_text("hi", encoding="utf-8")
+
+    result = runner.invoke(
+        app, ["upload", "-r", "-s", "s1", str(local_file), "content/a.txt"]
+    )
+
+    assert result.exit_code == 0
+    mock_contents_class.return_value.upload.assert_called_once_with(
+        str(local_file), "content/a.txt"
+    )
+    mock_contents_class.return_value.upload_dir.assert_not_called()
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_download_recursive(
+    mock_contents_class, mock_store, mock_common_state, tmp_path
+):
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_contents_class.return_value.download_dir.return_value = 4
+    dest = tmp_path / "out"
+
+    result = runner.invoke(
+        app, ["download", "-r", "-s", "s1", "content/mydir", str(dest)]
+    )
+
+    assert result.exit_code == 0
+    mock_contents_class.return_value.download_dir.assert_called_once_with(
+        "content/mydir", str(dest)
+    )
+    assert "4 file(s)" in result.output
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+@patch("click.edit")
+def test_cli_edit_uses_fresh_client_for_upload(
+    mock_edit, mock_contents_class, mock_store, mock_common_state
+):
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+    dl_client = MagicMock()
+    ul_client = MagicMock()
+    mock_contents_class.side_effect = [dl_client, ul_client]
+
+    def modify(filename, **kwargs):
+        with open(filename, "a") as f:
+            f.write("edited")
+
+    mock_edit.side_effect = modify
+
+    result = runner.invoke(app, ["edit", "-s", "s1", "remote.txt"])
+
+    assert result.exit_code == 0
+    dl_client.download.assert_called_once()
+    dl_client.close.assert_called_once()
+    ul_client.upload.assert_called_once()
+    ul_client.close.assert_called_once()
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_download_directory_without_recursive(
+    mock_contents_class, mock_store, mock_common_state, tmp_path
+):
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+    mock_contents_class.return_value.download.side_effect = IsADirectoryError(
+        "Cannot download a directory: content/mydir. "
+        "Use -r/--recursive to download directories."
+    )
+
+    result = runner.invoke(
+        app, ["download", "-s", "s1", "content/mydir", str(tmp_path / "out")]
+    )
+
+    assert result.exit_code == 1
+    assert "-r/--recursive" in result.output
+    mock_contents_class.return_value.close.assert_called_once()
+
+
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_upload_recursive_missing_path(
+    mock_contents_class, mock_store, mock_common_state, tmp_path
+):
+    mock_store.get.return_value = MagicMock()
+    mock_common_state.resolve_session.return_value = "s1"
+
+    result = runner.invoke(
+        app, ["upload", "-r", "-s", "s1", str(tmp_path / "nope"), "content/nope"]
+    )
+
+    assert result.exit_code == 1
+    assert "Local path" in result.output
+    mock_contents_class.assert_not_called()

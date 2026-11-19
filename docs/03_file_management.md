@@ -1,3 +1,8 @@
+---
+log:
+2026-11-19: Added `-r`/`--recursive` support to `colab upload` and `colab download` via `ContentsClient.mkdir`, `_ensure_dir`, `upload_dir`, and `download_dir` (preserving empty directories, skipping symlinks on upload, handling single-file `download -r` targets, normalizing remote paths, and enforcing entry-name, canonical local-symlink/containment, and recursion-depth checks). Reused a persistent `requests.Session` in `ContentsClient` with `close()`/context-manager cleanup (reopening a fresh client after `$EDITOR` in `colab edit`) for HTTP keep-alive, and redacted `colab-runtime-proxy-token` query params from `HTTPError` messages.
+---
+
 # Design: File Management (`ls`, `rm`, `upload`, `download`, `edit`)
 
 ## Overview
@@ -27,11 +32,13 @@ File management on the Colab VM will be implemented using the Jupyter Contents A
     ```
 - **Base64 Encoding**: Use `format: base64` for binary files.
 - **Progress**: Implement a simple progress bar for large uploads by chunking or providing status updates.
+- **Recursive (`-r` / `--recursive`)**: Walks a local directory top-down (`followlinks=False`), creates the remote directory (and any missing parent directories) with `PUT /api/contents/<path>` (`{"type": "directory"}`), and uploads files using POSIX `/` paths. Uploading a directory without `-r` exits non-zero with a `-r/--recursive` hint.
 
 ### 3. Downloading Files (`colab download`)
 - **API**: `GET /api/contents/<remote_path>?content=1` (as seen in HAR).
 - **Response**: JSON with `content` field.
 - **Handling**: Decodes content based on `format` (`base64`, `json`, or plain `text`) and saves it locally.
+- **Recursive (`-r` / `--recursive`)**: Walks remote directories returned by the Contents API, creates matching local directories (including empty directories), validates entry names against path traversal, and downloads nested files/notebooks (or falls back to downloading a single file if `remote_path` is not a directory). Non-recursive `download` raises `IsADirectoryError` with a `-r/--recursive` hint when targeting a directory.
 
 ### 4. Deleting Files (`colab rm`)
 - **API**: `DELETE /api/contents/<remote_path>`.
