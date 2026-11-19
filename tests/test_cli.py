@@ -1000,3 +1000,53 @@ def test_stop_all_attached_only_omits_stopped_count(tmp_path, mocker):
     )
     local_state.client.unassign.assert_not_called()
     assert local_state.store.list() == {}
+
+
+def test_stop_all_skips_unassign_when_attached_precedes_shared_cli(tmp_path, mocker):
+    local_state = _real_stop_state(tmp_path, mocker)
+    att_sess = SessionState(
+        name="nb1", token="t", url="u", endpoint="ep-shared", attached=True
+    )
+    shared_cli = SessionState(name="cli2", token="t", url="u", endpoint="ep-shared")
+    local_state.store.add(att_sess)
+    local_state.store.add(shared_cli)
+    mocker.patch.object(
+        local_state,
+        "sync_sessions",
+        return_value=({"nb1": att_sess, "cli2": shared_cli}, []),
+    )
+
+    result = runner.invoke(app, ["stop", "--all"])
+
+    assert result.exit_code == 0, result.output
+    assert session_cmd.attached_not_stopped_message("nb1") in result.output
+    assert session_cmd.attached_not_stopped_message("cli2") in result.output
+    assert "Stopped" not in result.output
+    local_state.client.unassign.assert_not_called()
+    session_cmd.ColabRuntime.assert_not_called()
+    assert local_state.store.list() == {}
+
+
+def test_sessions_and_status_use_store_key_when_name_differs(mock_common_state):
+    mock_assignment = MagicMock()
+    mock_assignment.endpoint = "ep1"
+    mock_assignment.variant.name = "DEFAULT"
+    mock_assignment.accelerator.value = "NONE"
+    mock_assignment.machine_shape.name = "STANDARD"
+    sess = SessionState(name="inner", token="t", url="u", endpoint="ep1")
+    mock_common_state.sync_sessions.return_value = (
+        {"alias": sess},
+        [mock_assignment],
+    )
+    mock_common_state.store.get.return_value = sess
+
+    sessions_res = runner.invoke(app, ["sessions"])
+    status_res = runner.invoke(app, ["status"])
+    single_res = runner.invoke(app, ["status", "-s", "alias"])
+
+    assert sessions_res.exit_code == 0
+    assert sessions_res.output.startswith("[alias] ep1 |")
+    assert status_res.exit_code == 0
+    assert status_res.output.startswith("[alias] ep1 |")
+    assert single_res.exit_code == 0
+    assert single_res.output.startswith("[alias] ep1 |")
