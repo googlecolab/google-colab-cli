@@ -18,8 +18,9 @@ import os
 import re
 import shlex
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Dict, NoReturn, Optional
+from typing import NoReturn, Optional
 
 import typer
 
@@ -83,7 +84,7 @@ def exit_attached_runtime(name: str, attached_name: str) -> NoReturn:
     raise typer.Exit(1)
 
 
-def _exit_only_attached(sessions: Dict[str, SessionState]) -> NoReturn:
+def _exit_only_attached(sessions: Mapping[str, SessionState]) -> NoReturn:
     attached = [n for n, s in sessions.items() if s.attached is True]
     first, *others = sorted(attached or sessions)
     also = f" (also attached: {', '.join(others)})" if others else ""
@@ -264,6 +265,22 @@ class State:
     def resolve_session(
         self, session_name: Optional[str], allow_attached: bool = False
     ) -> str:
+        """Resolves a target session name or selects the sole non-attached one.
+
+        Args:
+          session_name: Explicit session name, or None to auto-select when
+            exactly one eligible active session exists.
+          allow_attached: Whether attached sessions (and CLI records sharing an
+            attached endpoint) are eligible for auto-selection.
+
+        Returns:
+          The resolved session name.
+
+        Raises:
+          typer.Exit: With code 1 if no eligible active sessions exist, multiple
+            eligible sessions remain, or only attached sessions exist when
+            ``allow_attached`` is False.
+        """
         if session_name:
             return session_name
 
