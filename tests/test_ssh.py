@@ -699,7 +699,6 @@ def test_kill_stale_sshd_body(mock_common_state, mocker):
     mockRt = MagicMock()
     mockRt.execute_code.return_value = []
     rtCls = mocker.patch("colab_cli.runtime.ColabRuntime", return_value=mockRt)
-    mocker.patch.object(ssh_module.time, "sleep")
 
     ssh_module._killStaleSshd(sess)
 
