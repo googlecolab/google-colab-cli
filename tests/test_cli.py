@@ -24,7 +24,6 @@ from typer.testing import CliRunner
 
 from colab_cli.auth import AuthProvider
 from colab_cli.cli import app
-from colab_cli.state import SessionState, Settings
 from colab_cli.client import (
     Assignment,
     ColabRequestError,
@@ -32,7 +31,10 @@ from colab_cli.client import (
     RuntimeProxyInfo,
     TooManyAssignmentsError,
 )
+from colab_cli.commands import session as session_cmd
+from colab_cli.common import State
 from colab_cli.consumption import ConsumptionUserInfo
+from colab_cli.state import SessionState, Settings, StateStore
 
 runner = CliRunner()
 
@@ -881,3 +883,120 @@ def test_cli_logout_adc_prints_gcloud_hint(mock_common_state, mocker):
     assert mock_common_state.auth_provider == AuthProvider.ADC
     m_clear.assert_not_called()
     assert "gcloud auth application-default revoke" in res.output
+
+
+def _real_stop_state(tmp_path, mocker):
+    mocker.patch("colab_cli.cli.auto_update.run_background_check")
+    local_state = State()
+    local_state._store = StateStore(str(tmp_path / "sessions.json"))
+    local_state._client = MagicMock()
+    local_state._history = MagicMock()
+    mocker.patch("colab_cli.common.state", local_state)
+    mocker.patch("colab_cli.cli.state", local_state)
+    return local_state
+
+
+def test_attached_not_stopped_message():
+    assert session_cmd.attached_not_stopped_message("nb1") == (
+        "[colab] 'nb1' wasn't created by the cli and isn't stopped,"
+        " only removed from sessions list"
+    )
+
+
+def test_stop_removes_attached_session_without_stopping_runtime(tmp_path, mocker):
+    local_state = _real_stop_state(tmp_path, mocker)
+    expired = datetime.now(timezone.utc) - timedelta(minutes=10)
+    local_state.store.add(
+        SessionState(
+            name="nb1",
+            token="t",
+            url="https://u",
+            endpoint="ep-nb1",
+            token_expires_at=expired,
+            attached=True,
+        )
+    )
+
+    result = runner.invoke(app, ["stop", "-s", "nb1"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == (
+        "[colab] 'nb1' wasn't created by the cli and isn't stopped,"
+        " only removed from sessions list\n"
+    )
+    local_state.client.list_assignments.assert_not_called()
+    local_state.client.unassign.assert_not_called()
+    session_cmd.ColabRuntime.assert_not_called()
+    local_state.history.log_event.assert_not_called()
+    assert local_state.store.get("nb1") is None
+
+
+def test_stop_removes_cli_record_sharing_attached_endpoint(tmp_path, mocker):
+    local_state = _real_stop_state(tmp_path, mocker)
+    local_state.store.add(
+        SessionState(
+            name="nb1", token="t", url="u", endpoint="ep-shared", attached=True
+        )
+    )
+    local_state.store.add(
+        SessionState(name="cli2", token="t", url="u", endpoint="ep-shared")
+    )
+
+    result = runner.invoke(app, ["stop", "-s", "cli2"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == (
+        "[colab] 'cli2' wasn't created by the cli and isn't stopped,"
+        " only removed from sessions list\n"
+    )
+    local_state.client.unassign.assert_not_called()
+    session_cmd.ColabRuntime.assert_not_called()
+    assert local_state.store.get("cli2") is None
+    assert local_state.store.get("nb1") is not None
+
+
+def test_stop_all_skips_unassign_for_attached_sessions(tmp_path, mocker):
+    local_state = _real_stop_state(tmp_path, mocker)
+    cli_sess = SessionState(name="cli1", token="t", url="u", endpoint="ep-cli")
+    att_sess = SessionState(
+        name="nb1", token="t", url="u", endpoint="ep-nb1", attached=True
+    )
+    local_state.store.add(cli_sess)
+    local_state.store.add(att_sess)
+    mocker.patch.object(
+        local_state,
+        "sync_sessions",
+        return_value=({"cli1": cli_sess, "nb1": att_sess}, []),
+    )
+
+    result = runner.invoke(app, ["stop", "--all"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "[colab] 'nb1' wasn't created by the cli and isn't stopped,"
+        " only removed from sessions list" in result.output
+    )
+    assert "[colab] Stopped 1 session(s)." in result.output
+    local_state.client.unassign.assert_called_once_with("ep-cli")
+    assert local_state.store.list() == {}
+
+
+def test_stop_all_attached_only_omits_stopped_count(tmp_path, mocker):
+    local_state = _real_stop_state(tmp_path, mocker)
+    att_sess = SessionState(
+        name="nb1", token="t", url="u", endpoint="ep-nb1", attached=True
+    )
+    local_state.store.add(att_sess)
+    mocker.patch.object(
+        local_state, "sync_sessions", return_value=({"nb1": att_sess}, [])
+    )
+
+    result = runner.invoke(app, ["stop", "--all"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == (
+        "[colab] 'nb1' wasn't created by the cli and isn't stopped,"
+        " only removed from sessions list\n"
+    )
+    local_state.client.unassign.assert_not_called()
+    assert local_state.store.list() == {}

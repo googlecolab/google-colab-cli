@@ -347,9 +347,21 @@ def status(
         _print_status_for(s)
 
 
-def _stopOne(name: str, s: SessionState) -> None:
-    """Terminate a single session (kernel, backend, local store)."""
+def attached_not_stopped_message(name: str) -> str:
+    return (
+        f"[colab] {name!r} wasn't created by the cli and isn't stopped,"
+        " only removed from sessions list"
+    )
+
+
+def _stopOne(name: str, s: SessionState) -> bool:
+    """Terminate a single session, or only remove it if its runtime is attached."""
     from colab_cli.common import state
+
+    if s.attached is True or state.store.is_attached_endpoint(s.endpoint) is True:
+        state.store.remove(name)
+        typer.echo(attached_not_stopped_message(name))
+        return False
 
     typer.echo(f"[colab] Stopping session '{name}'...")
     try:
@@ -359,6 +371,7 @@ def _stopOne(name: str, s: SessionState) -> None:
     state.client.unassign(s.endpoint)
     state.store.remove(name)
     state.history.log_event(name, "session_terminated", {"reason": "user_requested"})
+    return True
 
 
 def stop(
@@ -377,15 +390,22 @@ def stop(
         if not sessions:
             typer.echo("[colab] No active sessions.")
             return
-        for name, s in sessions.items():
-            _stopOne(name, s)
-        typer.echo(f"[colab] Stopped {len(sessions)} session(s).")
+        stopped = sum(1 for name, s in sessions.items() if _stopOne(name, s))
+        if stopped:
+            typer.echo(f"[colab] Stopped {stopped} session(s).")
         return
 
     name = state.resolve_session(session)
+    record = state.store.get(name)
+    if record is not None and (
+        record.attached is True
+        or state.store.is_attached_endpoint(record.endpoint) is True
+    ):
+        _stopOne(name, record)
+        return
     s = state.get_session(name)
-    _stopOne(name, s)
-    typer.echo("[colab] Session terminated.")
+    if _stopOne(name, s):
+        typer.echo("[colab] Session terminated.")
 
 
 def register(app: typer.Typer):
