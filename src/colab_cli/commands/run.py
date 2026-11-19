@@ -438,9 +438,22 @@ def run_command(
             outputs = runtime.execute_code(
                 payload, output_hook=_make_run_output_hook(), timeout=timeout
             )
+        except RuntimeError as e:
+            if "reconnect" in str(e).lower():
+                # Connection was lost and recovery failed.  Keep the session
+                # alive so the user can inspect the runtime later.
+                typer.echo(
+                    f"[colab] {e}  Session '{name}' preserved for inspection.",
+                    err=True,
+                )
+                exit_code = 1
+                cleanup_reason = "connection_lost"
+                keep = True
+                raise
+            exit_code = 1
+            cleanup_reason = "run_failed"
+            raise
         except Exception:
-            # Genuine transport-level failure. Cleanup still happens via the
-            # outer finally; surface non-zero exit so callers/CI notice.
             exit_code = 1
             cleanup_reason = "run_failed"
             raise

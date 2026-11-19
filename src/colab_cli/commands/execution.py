@@ -263,11 +263,20 @@ def exec_command(
             )
             state.store.add(s)
 
-            outputs = runtime.execute_code(
-                code,
-                output_hook=lambda o: display_output(o, output_image),
-                timeout=timeout,
-            )
+            try:
+                outputs = runtime.execute_code(
+                    code,
+                    output_hook=lambda o: display_output(o, output_image),
+                    timeout=timeout,
+                )
+            except RuntimeError as e:
+                if "reconnect" in str(e).lower():
+                    typer.echo(
+                        f"[colab] {e}  Session '{name}' preserved for inspection.",
+                        err=True,
+                    )
+                    raise typer.Exit(1)
+                raise
             if "cell" in block:
                 save_output(outputs, block["cell"])
             state.history.log_event(
