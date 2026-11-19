@@ -717,11 +717,12 @@ def test_cli_new_412_without_accelerator_shows_friendly_error(mock_client, mock_
 @pytest.mark.parametrize(
     "args,env,expected",
     [
-        (["sessions"], {}, False),
+        (["sessions"], {}, None),
         (["--public-api", "sessions"], {}, True),
         (["--no-public-api", "sessions"], {}, False),
         (["sessions"], {"COLAB_CLI_PUBLIC_API": "1"}, True),
         (["sessions"], {"COLAB_CLI_PUBLIC_API": "0"}, False),
+        (["--no-public-api", "sessions"], {"COLAB_CLI_PUBLIC_API": "1"}, False),
     ],
 )
 def test_cli_public_api_flag_and_env(args, env, expected):
@@ -730,6 +731,36 @@ def test_cli_public_api_flag_and_env(args, env, expected):
     result = runner.invoke(app, args, env=env)
     assert result.exit_code == 0
     assert cli.state.use_public_api is expected
+
+
+def test_cli_defers_to_settings_use_public_api_when_flag_omitted(tmp_path, mocker):
+    from colab_cli import cli
+    from colab_cli.common import State
+    from colab_cli.state import Settings, SettingsStore, StateStore
+
+    real_st = State()
+    real_st._store = StateStore(str(tmp_path / "sessions.json"))
+    real_st._settings_store = SettingsStore(str(tmp_path / "settings.json"))
+    real_st._settings_store.save(Settings(use_public_api=True))
+    mock_sess = MagicMock()
+    mock_sess.request.return_value = MagicMock(ok=True, text="{}")
+    mocker.patch("colab_cli.auto_update.run_background_check")
+    mocker.patch("colab_cli.common.get_credentials", return_value=mock_sess)
+    mocker.patch.object(cli, "state", real_st)
+    mocker.patch("colab_cli.common.state", real_st)
+
+    res = runner.invoke(app, ["sessions"])
+    assert res.exit_code == 0
+    assert real_st.client.use_public_api is True
+
+    real_st._client = None
+    real_st._sessions = None
+    mock_sess.request.return_value = MagicMock(
+        ok=True, text=')]}\'\n{"assignments": []}'
+    )
+    res_no = runner.invoke(app, ["--no-public-api", "sessions"])
+    assert res_no.exit_code == 0
+    assert real_st.client.use_public_api is False
 
 
 def test_cli_test_public_api_hidden_and_reports_status(mock_common_state):

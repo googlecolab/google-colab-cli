@@ -487,6 +487,8 @@ def _proxy_command(session: SessionState, identity: Optional[str], mode: str) ->
         argv += ["--config", os.path.abspath(state.config_path)]
     if state.use_public_api is True:
         argv.append("--public-api")
+    elif state.use_public_api is False:
+        argv.append("--no-public-api")
     argv += ["ssh", "--proxy-mode", "-s", session.name]
     if identity:
         argv += ["--identity", identity]
