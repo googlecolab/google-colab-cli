@@ -95,6 +95,7 @@ class State:
                 creds,
                 use_public_api=use_public,
                 settings_store=self.settings_store,
+                is_attached=self.store.is_attached_endpoint,
             )
         return self._client
 

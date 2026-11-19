@@ -25,12 +25,14 @@ from typer.testing import CliRunner
 from colab_cli.cli import app
 from colab_cli.client import (
     Accelerator,
+    AttachedRuntimeError,
     PostAssignmentResponse,
     RuntimeProxyInfo,
     TooManyAssignmentsError,
     Variant,
 )
-from colab_cli.state import SessionState
+from colab_cli.commands import run as run_cmd
+from colab_cli.state import SessionState, StateStore
 
 runner = CliRunner()
 
@@ -719,3 +721,43 @@ def test_run_with_timeout_flag(
     code_calls = mock_runtime.execute_code.call_args_list
     body_call = next(c for c in code_calls if "hello from script" in c.args[0])
     assert body_call.kwargs.get("timeout") == 3600.0
+
+
+def test_teardown_skips_kernel_and_keeps_attached_record(
+    mock_common_state, mock_runtime_class, tmp_path, capsys
+):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    attached = SessionState(
+        name="nb1", token="t", url="http://u", endpoint="ep-nb1", attached=True
+    )
+    store.add(attached)
+    mock_common_state.store = store
+    mock_common_state.get_session.side_effect = lambda name, **_: store.get(name)
+    mock_common_state.client.unassign.side_effect = AttachedRuntimeError("attached")
+
+    run_cmd._teardown("nb1", attached, reason="run_completed")
+
+    mock_runtime_class.assert_not_called()
+    assert store.get("nb1") is not None
+    assert "colab stop -s nb1" in capsys.readouterr().err
+
+
+def test_teardown_keeps_record_and_prints_retry_hint_when_unassign_fails(
+    mock_common_state, mock_runtime_class, tmp_path, capsys
+):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    cli_sess = SessionState(name="job1", token="t", url="http://u", endpoint="ep-job")
+    store.add(cli_sess)
+    mock_common_state.store = store
+    mock_common_state.get_session.side_effect = lambda name, **_: store.get(name)
+    mock_common_state.client.unassign.side_effect = RuntimeError("network error")
+
+    run_cmd._teardown("job1", cli_sess, reason="run_completed")
+
+    mock_runtime_class.return_value.stop.assert_called_once_with(shutdown_kernel=True)
+    assert store.get("job1") is not None
+    err = capsys.readouterr().err
+    assert (
+        "[colab] Could not release runtime 'ep-job'; run 'colab stop -s job1' to retry."
+        in err
+    )

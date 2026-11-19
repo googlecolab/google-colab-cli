@@ -1,7 +1,7 @@
 ---
 log:
 2026-11-23: `colab stop -s <name>` now exits 1 when the named session does not exist (or has already vanished from the backend), delegating missing-session handling to `State.get_session` (#251).
-2026-11-18: `SessionState.attached` marks sessions attached to a runtime the CLI did not create in `sessions.json`; `colab stop` (including `--all`) removes attached sessions without stopping or unassigning their runtimes; `State.store` and `setup_logging` derive the default config directory from `SettingsStore.path`.
+2026-11-18: `SessionState.attached` marks sessions attached to a runtime the CLI did not create in `sessions.json`; `Client.unassign` refuses attached endpoints, `colab stop` (including `--all`) and `colab ssh --rm` remove attached sessions without stopping or unassigning their runtimes, `colab run` cleanup removes its non-attached record only once its runtime is released, and `State.store` and `setup_logging` derive the default config directory from `SettingsStore.path`.
 2026-11-13: Documented `--auth {oauth2,adc}` (default `oauth2`) and required ADC `gcloud` scopes under Global Flags.
 2026-11-04: `--gpu` and `--tpu` now reject unknown values instead of silently selecting `A100` (GPU) or `v6e1` (TPU). `resolve_runtime_options()` uses the new `GPU_ACCELERATORS` / `TPU_ACCELERATORS` maps and raises a `typer.BadParameter` that names the flag and the supported list; `--help` is generated from the same maps so it cannot drift. Validation runs before any assignment request, in both `colab new` and `colab run`.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to check if the active Linux `SecretService` keyring collection is locked via `secretstorage` before reading or writing OAuth tokens, logging and printing an immediate warning with the collection label, timeout, and `--auth=adc` hint while still attempting the keyring operation.
@@ -111,7 +111,7 @@ end to end; mocked timeouts alone do not establish backend compatibility.
 - **Future**: Real-time VM resource usage (CPU/RAM/GPU) via a kernel diagnostic snippet is still TODO. For account-level compute-unit balance and usage rate, use `colab usage`.
 
 ### 3. Stop Session (`colab stop`)
-- **Attached sessions**: `colab stop` (and `colab stop --all`) on an attached session, or a record sharing an attached session's endpoint, only removes the record from `sessions.json` without shutting down its kernel or unassigning its runtime, and prints `[colab] '<name>' wasn't created by the cli and isn't stopped, only removed from sessions list`.
+- **Attached sessions**: `colab stop` (and `colab stop --all`) and `colab ssh --rm` on an attached session, or a record sharing an attached session's endpoint, only remove the record from `sessions.json` without shutting down its kernel or unassigning its runtime, and print `[colab] '<name>' wasn't created by the cli and isn't stopped, only removed from sessions list`. `Client.unassign` refuses any endpoint the store holds as attached, and `colab run` cleanup removes its non-attached record only once its runtime is released (otherwise it keeps the record and prints a `colab stop -s <name>` retry hint).
 - **API**: `POST https://colab.sandbox.google.com/tun/m/unassign/<endpoint>` (based on `tpu-v5e1-unassign.har`).
 - **Flow**:
     1.  Perform a `GET` request to the unassign URL to obtain a fresh XSRF token.

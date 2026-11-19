@@ -28,6 +28,7 @@ from unittest.mock import MagicMock
 from click import unstyle
 from colab_cli.cli import app
 from colab_cli.commands import ssh as ssh_module
+from colab_cli.state import SessionState, StateStore
 import pytest
 from typer.testing import CliRunner
 import typer
@@ -331,3 +332,54 @@ def test_ssh_help_advertises_autocreate_flags(mocker, force_color):
     assert result.exit_code == 0
     for flag in ("--rm", "--gpu", "--tpu"):
         assert flag in unstyle(result.output)
+
+
+def test_ssh_rm_removes_attached_session_without_stopping_runtime(
+    mock_common_state, tmp_path, mocker, capsys
+):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    attached = SessionState(
+        name="nb1", token="t", url="https://u", endpoint="ep-nb1", attached=True
+    )
+    store.add(attached)
+    mock_common_state.store = store
+    stop = mocker.patch("colab_cli.commands.session.stop")
+    _patch_interactive(mocker)
+
+    ssh_module._run_interactive_shell(attached, None, True, True)
+
+    stop.assert_not_called()
+    mock_common_state.client.unassign.assert_not_called()
+    assert store.get("nb1") is None
+    assert (
+        "[colab] 'nb1' wasn't created by the cli and isn't stopped,"
+        " only removed from sessions list" in capsys.readouterr().out
+    )
+
+
+def test_ssh_rm_proxy_removes_shared_attached_endpoint(
+    mock_common_state, tmp_path, mocker, capsys
+):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    store.add(
+        SessionState(
+            name="nb1", token="t", url="https://u", endpoint="ep1", attached=True
+        )
+    )
+    shared = SessionState(name="cli2", token="t", url="https://u", endpoint="ep1")
+    store.add(shared)
+    mock_common_state.store = store
+    stop = mocker.patch("colab_cli.commands.session.stop")
+    mocker.patch("signal.signal")
+    _patch_proxy(mocker)
+
+    ssh_module._run_proxy_bridge(shared, None, True)
+
+    stop.assert_not_called()
+    mock_common_state.client.unassign.assert_not_called()
+    assert store.get("cli2") is None
+    assert store.get("nb1") is not None
+    assert (
+        "[colab] 'cli2' wasn't created by the cli and isn't stopped,"
+        " only removed from sessions list" in capsys.readouterr().err
+    )

@@ -22,6 +22,7 @@ import requests
 from colab_cli.client import (
     Accelerator,
     Assignment,
+    AttachedRuntimeError,
     Client,
     ColabRequestError,
     ConnectionInfo,
@@ -507,3 +508,31 @@ def test_issue_request_auth_error_uses_cached_support_for_hint(tmp_path, mock_se
 
     assert "--public-api" in str(exc2.value)
     assert store.load().tunnel_api_supported is False
+
+
+def test_client_unassign_refuses_attached_endpoint(mock_session):
+    guarded = Client(Prod(), mock_session, is_attached=lambda ep: ep == "att-ep")
+
+    with pytest.raises(AttachedRuntimeError, match="att-ep"):
+        guarded.unassign("att-ep")
+
+    mock_session.request.assert_not_called()
+
+
+def test_state_client_wires_attached_endpoint_guard(tmp_path, mocker):
+    from colab_cli.common import State
+    from colab_cli.state import SessionState, SettingsStore, StateStore
+
+    local_state = State()
+    local_state._settings_store = SettingsStore(str(tmp_path / "settings.json"))
+    local_state._store = StateStore(str(tmp_path / "sessions.json"))
+    local_state.store.add(
+        SessionState(name="nb1", token="t", url="u", endpoint="att-ep", attached=True)
+    )
+    mock_http = MagicMock()
+    mocker.patch("colab_cli.common.get_credentials", return_value=mock_http)
+
+    with pytest.raises(AttachedRuntimeError, match="att-ep"):
+        local_state.client.unassign("att-ep")
+
+    mock_http.request.assert_not_called()

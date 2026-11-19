@@ -22,9 +22,10 @@ below corresponds to a tag of the same name.
 
 - **ssh:** `colab ssh [-s NAME] -- CMD` runs one command on an existing runtime and exits with its status. Output is byte-exact when piped (a PTY only when stdin and stdout are terminals), and it never creates a runtime. Its handshake is tagged `ssh-mode-cmd`.
 - **sessions:** Track sessions attached to a runtime the CLI did not create in
-  `sessions.json` via `SessionState.attached`; `colab stop` and `colab stop --all`
-  remove attached sessions from `sessions.json` without stopping or unassigning
-  their runtimes.
+  `sessions.json` via `SessionState.attached`; `Client.unassign` refuses
+  attached endpoints, `colab stop`, `colab stop --all` and `colab ssh --rm`
+  remove attached sessions without stopping or unassigning their runtimes, and
+  `colab run` cleanup removes its record only once its runtime is released.
 
 ### Removed
 
