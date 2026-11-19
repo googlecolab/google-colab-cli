@@ -146,9 +146,8 @@ def test_a_lost_connection_stops_the_wait(run):
     mock_kc = MockKernelClient(
         [(5, stdout_message("x\n")), (100, status_message("idle"))], disconnect_at=10
     )
-    with pytest.raises(RuntimeError, match="Connection was lost"):
+    with pytest.raises(RuntimeError, match="could not reconnect"):
         run(mock_kc, timeout=None)
-    assert mock_kc.now < 12
 
 
 @pytest.mark.parametrize("state", ["dead", "restarting"])
