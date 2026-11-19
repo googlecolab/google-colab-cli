@@ -171,9 +171,10 @@ The runtime proxy token (`runtimeProxyInfo.token`) authenticates every request t
   sessions in `sessions.json` attached to a runtime the CLI did not create;
   token refresh and session sync preserve the flag.
 - **Ssh-only**: `State.get_session` refuses an attached record, pointing to
-  `colab ssh -s NAME`, before any token refresh unless the caller passes
-  `allow_attached=True` (`colab ssh`, `colab stop` and `run` cleanup).
-  `colab url` refuses an attached record as well, while `colab sessions` and
+  `colab ssh -s NAME`, and a CLI record whose endpoint is attached, pointing to
+  `colab ssh -s <attached>` and `colab stop -s NAME`, before any token refresh
+  unless the caller passes `allow_attached=True` (`colab ssh`, `colab stop` and
+  `run` cleanup). `colab url` refuses both as well, while `colab sessions` and
   `colab status` still list attached records.
 - **Cross-platform locking**: Locking uses the [`filelock`](https://pypi.org/project/filelock/) library rather than `fcntl.flock`. `fcntl` is POSIX-only and is unavailable on Windows, so the original implementation crashed on import there. `filelock` provides the same advisory cross-process locking on Linux, macOS, and Windows.
 - **Shared vs. exclusive**: Each store owns a `filelock.ReadWriteLock` bound to a sidecar file (`<path>.lock`). Reads acquire `read_lock()` (shared — multiple concurrent readers allowed) and writes acquire `write_lock()` (exclusive). This preserves the `LOCK_SH`/`LOCK_EX` distinction of the previous `fcntl` implementation.

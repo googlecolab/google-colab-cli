@@ -13,14 +13,97 @@
 # limitations under the License.
 
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 
-from session_fakes import ATT, CLI, fresh_session, use_guarded_client
+import pytest
+import typer.main
+from session_fakes import ATT, CLI, SHARED, fresh_session, use_guarded_client
 from typer.testing import CliRunner
 
 from colab_cli.cli import app
+from colab_cli.commands import automation as automation_cmd
+from colab_cli.commands import execution as execution_cmd
 from colab_cli.commands import run as run_cmd
+from colab_cli.commands import session as session_cmd
 
 runner = CliRunner()
+
+ATTACHED_ALLOWED = frozenset({"ssh", "stop", "sessions", "status"})
+SESSION_INDEPENDENT = frozenset(
+    (
+        "help readme README skill SKILL version update whoami test-public-api "
+        "pay usage log logout"
+    ).split()
+)
+ARGLESS = ("auth", "drivemount", "exec", "ls", "new", "repl", "restart-kernel", "url")
+ATTACHED_REFUSED = MappingProxyType(
+    dict.fromkeys(ARGLESS, ())
+    | {
+        "download": ("x", "y"),
+        "edit": ("x",),
+        "install": ("pkg",),
+        "rm": ("x",),
+        "run": ("job.py",),
+        "upload": ("job.py", "x"),
+    }
+)
+
+
+def _assert_no_kernel_or_contents_request(local_state, contents):
+    assert local_state.client.session.requests == []
+    contents.assert_not_called()
+    session_cmd.ColabRuntime.assert_not_called()
+    execution_cmd.ColabRuntime.assert_not_called()
+    automation_cmd.ColabRuntime.assert_not_called()
+    run_cmd.ColabRuntime.assert_not_called()
+
+
+def test_every_command_is_classified_for_attached_sessions():
+    registered = set(typer.main.get_group(app).commands)
+
+    listed = ATTACHED_ALLOWED | SESSION_INDEPENDENT | set(ATTACHED_REFUSED)
+    assert registered == listed
+
+
+@pytest.mark.parametrize("command", sorted(ATTACHED_REFUSED))
+def test_attached_session_is_ssh_only(
+    real_state, tmp_path, monkeypatch, mocker, command
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "job.py").write_text("print(1)\n")
+    real_state.store.add(fresh_session(*ATT))
+    real_state.store.add(fresh_session(*CLI))
+    contents = mocker.patch("colab_cli.contents.requests.request")
+    before = (tmp_path / "sessions.json").read_bytes()
+
+    args = [command, "-s", "att", *ATTACHED_REFUSED[command]]
+    result = runner.invoke(app, args, input="print(1)\n")
+
+    assert result.exit_code == 1, result.output
+    assert "colab ssh -s att" in result.output
+    _assert_no_kernel_or_contents_request(real_state, contents)
+    assert (tmp_path / "sessions.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("command", sorted(set(ATTACHED_REFUSED) - {"new", "run"}))
+def test_cli_session_on_an_attached_runtime_is_refused(
+    real_state, tmp_path, monkeypatch, mocker, command
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "job.py").write_text("print(1)\n")
+    real_state.store.add(fresh_session(*ATT))
+    real_state.store.add(fresh_session(*SHARED))
+    contents = mocker.patch("colab_cli.contents.requests.request")
+    before = (tmp_path / "sessions.json").read_bytes()
+
+    args = [command, "-s", "cli2", *ATTACHED_REFUSED[command]]
+    result = runner.invoke(app, args, input="print(1)\n")
+
+    assert result.exit_code == 1, result.output
+    assert "colab ssh -s att" in result.output
+    assert "colab stop -s cli2" in result.output
+    _assert_no_kernel_or_contents_request(real_state, contents)
+    assert (tmp_path / "sessions.json").read_bytes() == before
 
 
 def test_refusal_precedes_token_refresh(real_state, tmp_path):

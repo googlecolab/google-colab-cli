@@ -53,6 +53,18 @@ def exit_ssh_only(name: str, more: str = "") -> NoReturn:
     raise typer.Exit(1)
 
 
+def exit_attached_runtime(name: str, attached_name: str) -> NoReturn:
+    ssh_cmd = f"`colab ssh -s {shlex.quote(attached_name)}`"
+    stop_cmd = f"`colab stop -s {shlex.quote(name)}`"
+    typer.echo(
+        f"[colab] Error: Session '{name}' uses the same runtime as attached"
+        f" session '{attached_name}'. Use {ssh_cmd}, or remove '{name}' with"
+        f" {stop_cmd}.",
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
 class State:
     def __init__(self):
         self.client_oauth_config = os.path.expanduser("~/.colab-cli-oauth-config.json")
@@ -136,8 +148,12 @@ class State:
         returns None.
         """
         s = self.store.get(name)
-        if s and not allow_attached and s.attached is True:
-            exit_ssh_only(name)
+        if s and not allow_attached:
+            if s.attached is True:
+                exit_ssh_only(name)
+            attached_name = self.store.attached_name_for_endpoint(s.endpoint)
+            if isinstance(attached_name, str):
+                exit_attached_runtime(name, attached_name)
         if s and (
             not s.token_expires_at
             or s.token_expires_at - datetime.now(timezone.utc) <= TOKEN_REFRESH_MARGIN

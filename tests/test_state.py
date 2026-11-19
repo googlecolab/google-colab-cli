@@ -410,6 +410,9 @@ def test_is_attached_endpoint(tmp_path):
     assert store.is_attached_endpoint("att-ep") is True
     assert store.is_attached_endpoint("cli-ep") is False
     assert store.is_attached_endpoint("missing") is False
+    assert store.attached_name_for_endpoint("att-ep") == "att"
+    assert store.attached_name_for_endpoint("cli-ep") is None
+    assert store.attached_name_for_endpoint("missing") is None
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")

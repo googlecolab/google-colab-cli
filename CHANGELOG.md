@@ -31,7 +31,9 @@ below corresponds to a tag of the same name.
 - **sessions:** Attached sessions are ssh-only: commands other than
   `colab ssh`, `colab stop`, `colab sessions` and `colab status` refuse an
   attached session before any request and point to `colab ssh -s NAME`,
-  including `colab url`.
+  including `colab url`; commands that load an existing session and `colab url`
+  also refuse a CLI session whose runtime is attached and point to
+  `colab stop -s NAME`.
 
 ### Removed
 

@@ -20,7 +20,7 @@ import pytest
 import typer
 
 from colab_cli.client import ListedAssignment
-from colab_cli.common import State, exit_ssh_only, setup_logging
+from colab_cli.common import State, exit_attached_runtime, exit_ssh_only, setup_logging
 from colab_cli.state import SessionState, SettingsStore, StateStore
 
 
@@ -213,3 +213,13 @@ def test_exit_ssh_only_quotes_session_name(capsys):
 
     assert exc.value.exit_code == 1
     assert "`colab ssh -s 'my run'`" in capsys.readouterr().err
+
+
+def test_exit_attached_runtime_names_ssh_and_stop(capsys):
+    with pytest.raises(typer.Exit) as exc:
+        exit_attached_runtime("cli 2", "nb 1")
+
+    err = capsys.readouterr().err
+    assert exc.value.exit_code == 1
+    assert "`colab ssh -s 'nb 1'`" in err
+    assert "`colab stop -s 'cli 2'`" in err

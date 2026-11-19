@@ -185,6 +185,20 @@ class StateStore(_LockedFileStore):
                 return {}
             return self._load_raw(f)
 
+    def attached_name_for_endpoint(self, endpoint: str) -> Optional[str]:
+        """Returns the attached session name using ``endpoint``, if any.
+
+        Args:
+          endpoint: Colab runtime endpoint identifier.
+
+        Returns:
+          The stored attached session name matching ``endpoint``, or None.
+        """
+        for session in self.list().values():
+            if session.attached is True and session.endpoint == endpoint:
+                return session.name
+        return None
+
     def is_attached_endpoint(self, endpoint: str) -> bool:
         """Returns whether any attached session in the store uses ``endpoint``.
 
@@ -195,7 +209,4 @@ class StateStore(_LockedFileStore):
           True if at least one stored session has ``attached=True`` and
           matches ``endpoint``, False otherwise.
         """
-        return any(
-            session.attached is True and session.endpoint == endpoint
-            for session in self.list().values()
-        )
+        return self.attached_name_for_endpoint(endpoint) is not None
