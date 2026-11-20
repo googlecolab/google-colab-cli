@@ -16,7 +16,10 @@ import json
 import urllib.parse
 from unittest.mock import MagicMock, mock_open, patch
 
-from keyring.errors import KeyringError
+import keyring
+import keyring.backends.chainer
+import keyring.backends.null
+from keyring.errors import KeyringError, NoKeyringError, PasswordDeleteError
 import pytest
 
 from colab_cli.auth import (
@@ -28,6 +31,7 @@ from colab_cli.auth import (
     AuthProvider,
     _check_linux_keyring_locked,
     _run_with_timeout,
+    clear_oauth_token,
     get_credentials,
 )
 
@@ -766,3 +770,184 @@ def test_partial_grant_token_refreshes_with_granted_scopes(
     saved = json.loads(m_keyring.set_password.call_args.args[2])
     assert saved["token"] == "refreshed-access"
     assert saved["scopes"] == granted
+
+
+def _make_macos_cause(name: str):
+    exc_cls = type(name, (Exception,), {"__module__": "keyring.backends.macOS.api"})
+    return exc_cls(name)
+
+
+def test_clear_oauth_token_deletes_keyring_entry(mocker, monkeypatch, tmp_path):
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(tmp_path / "none.json"))
+    m_keyring = mocker.patch("colab_cli.auth.keyring")
+    backend = m_keyring.get_keyring.return_value
+
+    assert clear_oauth_token() is True
+    backend.get_password.assert_not_called()
+    backend.delete_password.assert_called_once_with(
+        KEYRING_SERVICE_NAME, KEYRING_USERNAME
+    )
+
+
+def test_clear_oauth_token_noop_when_empty(mocker, monkeypatch, tmp_path):
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(tmp_path / "none.json"))
+    m_keyring = mocker.patch("colab_cli.auth.keyring")
+    backend = m_keyring.get_keyring.return_value
+    backend.delete_password.side_effect = PasswordDeleteError("missing")
+    backend.get_password.return_value = None
+
+    assert clear_oauth_token() is False
+    backend.delete_password.assert_called_once_with(
+        KEYRING_SERVICE_NAME, KEYRING_USERNAME
+    )
+    backend.get_password.assert_called_once_with(KEYRING_SERVICE_NAME, KEYRING_USERNAME)
+
+
+def test_clear_oauth_token_macos_not_found_skips_get_password(
+    mocker, monkeypatch, tmp_path
+):
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(tmp_path / "none.json"))
+    m_keyring = mocker.patch("colab_cli.auth.keyring")
+    backend = m_keyring.get_keyring.return_value
+    err = PasswordDeleteError("not found")
+    err.__cause__ = _make_macos_cause("NotFound")
+    backend.delete_password.side_effect = err
+
+    assert clear_oauth_token() is False
+    backend.get_password.assert_not_called()
+
+
+def test_clear_oauth_token_macos_locked_raises(mocker, monkeypatch, tmp_path):
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(tmp_path / "none.json"))
+    m_keyring = mocker.patch("colab_cli.auth.keyring")
+    backend = m_keyring.get_keyring.return_value
+    err = PasswordDeleteError("errSecInteractionNotAllowed")
+    err.__cause__ = _make_macos_cause("Error")
+    backend.delete_password.side_effect = err
+    backend.get_password.return_value = None
+
+    with pytest.raises(PasswordDeleteError, match="errSecInteractionNotAllowed"):
+        clear_oauth_token()
+
+    backend.get_password.assert_not_called()
+
+
+def test_clear_oauth_token_kwallet_cancel_raises(mocker, monkeypatch, tmp_path):
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(tmp_path / "none.json"))
+    m_keyring = mocker.patch("colab_cli.auth.keyring")
+    backend = m_keyring.get_keyring.return_value
+    backend.delete_password.side_effect = PasswordDeleteError("Cancelled by user")
+    backend.get_password.return_value = '{"token": "still-here"}'
+
+    with pytest.raises(PasswordDeleteError, match="Cancelled by user"):
+        clear_oauth_token()
+
+
+def test_clear_oauth_token_chainer_deletes_all_backends(mocker, monkeypatch, tmp_path):
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(tmp_path / "none.json"))
+    m_keyring = mocker.patch("colab_cli.auth.keyring")
+    b1 = MagicMock()
+    b1.delete_password.side_effect = PasswordDeleteError("missing")
+    b1.get_password.return_value = None
+    b2 = MagicMock()
+    chainer_kr = MagicMock(spec=keyring.backends.chainer.ChainerBackend)
+    chainer_kr.backends = [b1, b2]
+    m_keyring.get_keyring.return_value = chainer_kr
+
+    assert clear_oauth_token() is True
+    b1.delete_password.assert_called_once_with(KEYRING_SERVICE_NAME, KEYRING_USERNAME)
+    b2.delete_password.assert_called_once_with(KEYRING_SERVICE_NAME, KEYRING_USERNAME)
+
+
+def test_clear_oauth_token_noop_on_null_keyring(monkeypatch, tmp_path):
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(tmp_path / "none.json"))
+    prev = keyring.get_keyring()
+    keyring.set_keyring(keyring.backends.null.Keyring())
+    try:
+        assert clear_oauth_token() is False
+    finally:
+        keyring.set_keyring(prev)
+
+
+def test_clear_oauth_token_no_keyring_warns_on_stderr(
+    mocker, monkeypatch, tmp_path, capsys
+):
+    legacy = tmp_path / "token.json"
+    legacy.write_text('{"token": "legacy"}')
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(legacy))
+    m_keyring = mocker.patch("colab_cli.auth.keyring")
+    backend = m_keyring.get_keyring.return_value
+    backend.delete_password.side_effect = NoKeyringError("no backend")
+
+    assert clear_oauth_token() is True
+    assert not legacy.exists()
+    assert "No OS keyring available" in capsys.readouterr().err
+
+    assert clear_oauth_token() is False
+    assert "No OS keyring available" in capsys.readouterr().err
+
+
+def test_clear_oauth_token_removes_both_legacy_and_keyring(
+    mocker, monkeypatch, tmp_path
+):
+    legacy = tmp_path / "token.json"
+    legacy.write_text('{"token": "legacy"}')
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(legacy))
+    m_keyring = mocker.patch("colab_cli.auth.keyring")
+    backend = m_keyring.get_keyring.return_value
+
+    assert clear_oauth_token() is True
+    assert not legacy.exists()
+    backend.delete_password.assert_called_once_with(
+        KEYRING_SERVICE_NAME, KEYRING_USERNAME
+    )
+
+
+def test_clear_oauth_token_legacy_race_filenotfound_is_noop(
+    mocker, monkeypatch, tmp_path
+):
+    legacy = tmp_path / "token.json"
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(legacy))
+    mocker.patch("colab_cli.auth.os.path.exists", return_value=True)
+    m_remove = mocker.patch("colab_cli.auth.os.remove", side_effect=FileNotFoundError)
+    m_keyring = mocker.patch("colab_cli.auth.keyring")
+    backend = m_keyring.get_keyring.return_value
+    backend.delete_password.side_effect = PasswordDeleteError("missing")
+    backend.get_password.return_value = None
+
+    assert clear_oauth_token() is False
+    m_remove.assert_called_once_with(str(legacy))
+
+
+def test_clear_oauth_token_legacy_error_still_deletes_keyring(
+    mocker, monkeypatch, tmp_path
+):
+    legacy = tmp_path / "token.json"
+    legacy.write_text('{"token": "legacy"}')
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(legacy))
+    mocker.patch("colab_cli.auth.os.remove", side_effect=PermissionError("read-only"))
+    m_keyring = mocker.patch("colab_cli.auth.keyring")
+    backend = m_keyring.get_keyring.return_value
+
+    with pytest.raises(PermissionError, match="read-only"):
+        clear_oauth_token()
+
+    backend.delete_password.assert_called_once_with(
+        KEYRING_SERVICE_NAME, KEYRING_USERNAME
+    )
+
+
+def test_clear_oauth_token_removes_legacy_before_keyring_error(
+    mocker, monkeypatch, tmp_path
+):
+    legacy = tmp_path / "token.json"
+    legacy.write_text('{"token": "legacy"}')
+    monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(legacy))
+    m_keyring = mocker.patch("colab_cli.auth.keyring")
+    backend = m_keyring.get_keyring.return_value
+    backend.delete_password.side_effect = KeyringError("locked")
+
+    with pytest.raises(KeyringError, match="locked"):
+        clear_oauth_token()
+
+    assert not legacy.exists()

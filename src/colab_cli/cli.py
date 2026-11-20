@@ -121,6 +121,7 @@ def callback(
         "update",
         "version",
         "log",
+        "logout",
         "pay",
         "help",
         "url",
