@@ -338,7 +338,7 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
 
 def _remove_legacy_token(raise_on_error: bool = False) -> bool:
     """Removes the legacy token file if it exists and reports whether it was removed."""
-    if not raise_on_error and not os.path.exists(LEGACY_TOKEN_PATH):
+    if not os.path.exists(LEGACY_TOKEN_PATH):
         return False
     try:
         os.remove(LEGACY_TOKEN_PATH)

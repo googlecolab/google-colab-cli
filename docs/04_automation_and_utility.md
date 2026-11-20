@@ -313,7 +313,7 @@ How each provider supplies the scopes:
 
 -   **Action**: Clear locally cached OAuth2 credentials and cached runtime proxy tokens so the user can sign out or switch accounts on the next command.
 -   **Implementation**:
-    -   Under `--auth=oauth2` (default), deletes `(google-colab-cli, oauth_token)` across all chained keyring backends (disambiguating missing entries from real keychain/KWallet errors and warning on stderr on `NoKeyringError`) and removes any leftover `~/.config/colab-cli/token.json` via EAFP, attempting both stores even if one errors. Does not call Google's `/revoke` endpoint because the bundled OAuth client is shared with Google Cloud SDK.
+    -   Under `--auth=oauth2` (default), deletes `(google-colab-cli, oauth_token)` across all chained keyring backends (disambiguating missing entries from real keychain/KWallet errors and warning on stderr on `NoKeyringError`) and removes any leftover `~/.config/colab-cli/token.json`, attempting both stores even if one errors. Does not call Google's `/revoke` endpoint because the bundled OAuth client is shared with Google Cloud SDK.
     -   Under `--auth=adc`, leaves local ADC untouched and directs the user to `gcloud auth application-default revoke`.
     -   Blanks cached `token` and `token_expires_at` on local `sessions.json` entries (so `-s NAME` cannot bypass re-auth with stale proxy tokens), resets cached `public_api_supported`/`tunnel_api_supported` flags in `settings.json`, and warns on stderr if local sessions exist.
     -   Suppressed from the daily auto-update banner (`_AUTO_UPDATE_SUPPRESSED`).

@@ -824,9 +824,12 @@ def test_clear_oauth_token_macos_locked_raises(mocker, monkeypatch, tmp_path):
     err = PasswordDeleteError("errSecInteractionNotAllowed")
     err.__cause__ = _make_macos_cause("Error")
     backend.delete_password.side_effect = err
+    backend.get_password.return_value = None
 
     with pytest.raises(PasswordDeleteError, match="errSecInteractionNotAllowed"):
         clear_oauth_token()
+
+    backend.get_password.assert_not_called()
 
 
 def test_clear_oauth_token_kwallet_cancel_raises(mocker, monkeypatch, tmp_path):
@@ -905,12 +908,15 @@ def test_clear_oauth_token_legacy_race_filenotfound_is_noop(
 ):
     legacy = tmp_path / "token.json"
     monkeypatch.setattr("colab_cli.auth.LEGACY_TOKEN_PATH", str(legacy))
+    mocker.patch("colab_cli.auth.os.path.exists", return_value=True)
+    m_remove = mocker.patch("colab_cli.auth.os.remove", side_effect=FileNotFoundError)
     m_keyring = mocker.patch("colab_cli.auth.keyring")
     backend = m_keyring.get_keyring.return_value
     backend.delete_password.side_effect = PasswordDeleteError("missing")
     backend.get_password.return_value = None
 
     assert clear_oauth_token() is False
+    m_remove.assert_called_once_with(str(legacy))
 
 
 def test_clear_oauth_token_legacy_error_still_deletes_keyring(
