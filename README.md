@@ -87,8 +87,8 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | Command | Description |
 | --- | --- |
 | `colab ls [-s NAME] [PATH]` | List remote files on the VM |
-| `colab upload [-s NAME] LOCAL REMOTE` | Upload a local file to the VM filesystem |
-| `colab download [-s NAME] REMOTE LOCAL` | Download a remote file from the VM filesystem |
+| `colab upload [-s NAME] [-r] LOCAL REMOTE` | Upload a local file or directory (`-r`) to the VM filesystem |
+| `colab download [-s NAME] [-r] REMOTE LOCAL` | Download a remote file or directory (`-r`) from the VM filesystem |
 | `colab rm [-s NAME] PATH` | Delete a remote file on the VM filesystem |
 | `colab edit [-s NAME] PATH` | Edit a remote file in-place using your local `$EDITOR` |
 
