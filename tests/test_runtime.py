@@ -223,6 +223,25 @@ def test_reconnect_recovers_after_transient_drop(monkeypatch):
     assert any(o.get("text") == "hello\n" for o in outputs)
 
 
+def test_reconnect_pauses_deadline(monkeypatch):
+    """The idle-timeout deadline should not tick while the WebSocket is down.
+
+    A 4s timeout would expire during a 3s disconnect window (t=2..5) if the
+    deadline kept running, but pausing it lets the execution finish at t=6."""
+    runtime = ColabRuntime("http://url", "token123")
+    mock_kc = MockKernelClient(
+        [
+            (1.0, stdout_message("hi\n")),
+            (6.0, status_message("idle")),
+        ],
+        disconnect_at=2.0,
+        reconnect_at=5.0,
+    )
+    connect_runtime(runtime, mock_kc, monkeypatch)
+    outputs = runtime.execute_code("print('hi')", timeout=4)
+    assert any(o.get("text") == "hi\n" for o in outputs)
+
+
 def test_connection_lost_permanently_raises(monkeypatch):
     """A permanent WebSocket drop raises ConnectionLostError within the
     reconnect timeout window."""

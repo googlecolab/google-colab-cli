@@ -318,7 +318,9 @@ class ColabRuntime:
                 if _isConnected():
                     if lostAt is not None:
                         logging.info("WebSocket reconnected.")
-                    lostAt = None
+                        if deadline is not None:
+                            deadline += time.monotonic() - lostAt
+                        lostAt = None
                 else:
                     if lostAt is None:
                         lostAt = time.monotonic()
