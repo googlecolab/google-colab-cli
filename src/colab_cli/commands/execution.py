@@ -24,7 +24,7 @@ from rich.console import Console
 from typing import List, Optional
 from typing_extensions import Annotated
 
-from colab_cli.runtime import ColabRuntime
+from colab_cli.runtime import ColabRuntime, ConnectionLostError
 from colab_cli.utils import handle_image, is_terminal_error, render_display_data
 
 _console = Console()
@@ -263,11 +263,19 @@ def exec_command(
             )
             state.store.add(s)
 
-            outputs = runtime.execute_code(
-                code,
-                output_hook=lambda o: display_output(o, output_image),
-                timeout=timeout,
-            )
+            try:
+                outputs = runtime.execute_code(
+                    code,
+                    output_hook=lambda o: display_output(o, output_image),
+                    timeout=timeout,
+                )
+            except ConnectionLostError as e:
+                typer.echo(
+                    f"[colab] {e} Session '{name}' is still running;"
+                    f" check it with 'colab status -s {name}'.",
+                    err=True,
+                )
+                raise typer.Exit(1)
             if "cell" in block:
                 save_output(outputs, block["cell"])
             state.history.log_event(

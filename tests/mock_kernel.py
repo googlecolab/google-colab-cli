@@ -20,7 +20,7 @@ tests can cover long runs and long silences without waiting.
 
 import itertools
 import queue
-import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from colab_cli import runtime as runtime_module
@@ -58,18 +58,27 @@ class MockKernelClient:
     By default the shell channel replies when the last iopub message arrives. A
     get_*_msg call that would wait past the next message advances the clock by
     ``timeout`` and raises queue.Empty, as a quiet kernel would. The connection
-    drops when the clock reaches ``disconnect_at``.
+    drops when the clock reaches ``disconnect_at`` and comes back at
+    ``reconnect_at`` (if set).
     """
 
-    def __init__(self, iopub, shell=None, disconnect_at=None):
+    def __init__(self, iopub, shell=None, disconnect_at=None, reconnect_at=None):
         self.now = 0.0
         self.iopub = list(iopub)
         last = iopub[-1][0] if iopub else 0.0
         self.shell = list(shell if shell is not None else [(last, reply_message())])
         self.disconnect_at = disconnect_at
+        self.reconnect_at = reconnect_at
         self.waits = []
-        self.connection_ready = threading.Event()
-        self.connection_ready.set()
+
+    @property
+    def kernel_socket(self):
+        down = (
+            self.disconnect_at is not None
+            and self.now >= self.disconnect_at
+            and (self.reconnect_at is None or self.now < self.reconnect_at)
+        )
+        return SimpleNamespace(sock=SimpleNamespace(connected=not down))
 
     def execute(self, code, **kwargs):
         self.code, self.execute_kwargs = code, kwargs
@@ -83,8 +92,6 @@ class MockKernelClient:
             self.now = max(self.now, at)
             return msg
         self.now += timeout
-        if self.disconnect_at is not None and self.now >= self.disconnect_at:
-            self.connection_ready.clear()
         raise queue.Empty
 
     def get_iopub_msg(self, timeout=None):
