@@ -1,6 +1,6 @@
 ---
 log:
-2026-11-19: Added `-r`/`--recursive` support to `colab upload` and `colab download` via `ContentsClient.mkdir`, `_ensure_dir`, `upload_dir`, and `download_dir` (preserving empty directories, skipping symlinks on upload, handling single-file `download -r` targets, normalizing remote paths, and enforcing entry-name, canonical local-symlink/containment, and recursion-depth checks). Reused a persistent `requests.Session` in `ContentsClient` with `close()`/context-manager cleanup (reopening a fresh client after `$EDITOR` in `colab edit`) for HTTP keep-alive, and redacted `colab-runtime-proxy-token` query params from `HTTPError` messages.
+2026-11-19: Added `-r`/`--recursive` support to `colab upload` and `colab download` via `ContentsClient.mkdir`, `_ensure_dir`, `upload_dir`, and `download_dir` (preserving empty directories, skipping symlinks on upload, handling single-file `download -r` targets, normalizing remote paths, and enforcing entry-name, canonical local-symlink/containment, and recursion-depth checks). Reused a persistent `requests.Session` in `ContentsClient` with `close()`/context-manager cleanup (reopening a fresh client after `$EDITOR` in `colab edit`) for HTTP keep-alive, and omitted URLs from `HTTPError` messages.
 ---
 
 # Design: File Management (`ls`, `rm`, `upload`, `download`, `edit`)

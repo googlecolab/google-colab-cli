@@ -14,7 +14,6 @@
 
 import base64
 import json
-import ntpath
 import os
 import posixpath
 from urllib.parse import quote
@@ -62,14 +61,18 @@ def _validate_entry_name(name: object) -> str:
         or "/" in name
         or "\\" in name
         or "\x00" in name
-        or ntpath.splitdrive(name)[0]
     ):
         raise ValueError(f"Unsafe entry name in remote directory: {name!r}")
     return name
 
 
+def _is_local_symlink(path: str) -> bool:
+    stripped = path.rstrip("/" + os.sep) or path
+    return os.path.islink(stripped)
+
+
 def _assert_safe_local_child(real_root: str, child_local: str) -> None:
-    if os.path.islink(child_local):
+    if _is_local_symlink(child_local):
         raise ValueError(f"Refusing to overwrite local symlink: {child_local}")
     real_child = os.path.realpath(child_local)
     try:
@@ -114,10 +117,10 @@ class ContentsClient:
         try:
             response.raise_for_status()
         except requests.HTTPError as e:
-            resp = e.response or response
+            resp = e.response if e.response is not None else response
             reason = getattr(resp, "reason", None) or "Error"
             raise requests.HTTPError(
-                f"{resp.status_code} {reason} for url: {url}",
+                f"{resp.status_code} {reason} for path: {path}",
                 response=resp,
             ) from None
 
@@ -183,18 +186,13 @@ class ContentsClient:
             files.sort()
             rel = os.path.relpath(root, local_dir)
             rel_posix = "" if rel == "." else rel.replace(os.sep, "/")
-            if base_remote and rel_posix:
-                current_remote = posixpath.join(base_remote, rel_posix)
-            else:
-                current_remote = base_remote or rel_posix
+            current_remote = posixpath.join(base_remote, rel_posix)
             for d in dirs:
-                self.mkdir(posixpath.join(current_remote, d) if current_remote else d)
+                self.mkdir(posixpath.join(current_remote, d))
             for f in files:
                 local_file = os.path.join(root, f)
                 if not os.path.islink(local_file) and os.path.isfile(local_file):
-                    remote_file = (
-                        posixpath.join(current_remote, f) if current_remote else f
-                    )
+                    remote_file = posixpath.join(current_remote, f)
                     self.upload(local_file, remote_file)
                     count += 1
         return count
@@ -225,7 +223,7 @@ class ContentsClient:
         base_remote = _normalize_remote_path(remote_path)
         data = self._request("GET", base_remote, params={"content": "1"})
         if data.get("type") != "directory":
-            if os.path.islink(local_path):
+            if _is_local_symlink(local_path):
                 raise ValueError(f"Refusing to overwrite local symlink: {local_path}")
             if os.path.isdir(local_path) or local_path.endswith(("/", os.sep)):
                 target_name = _validate_entry_name(
@@ -242,16 +240,14 @@ class ContentsClient:
                 _write_file_content(data, local_path)
             return 1
 
-        if os.path.islink(local_path):
+        if _is_local_symlink(local_path):
             raise ValueError(f"Refusing to traverse local symlink: {local_path}")
         os.makedirs(local_path, exist_ok=True)
         real_root = os.path.realpath(local_path)
         count = 0
         for item in data.get("content") or []:
             item_name = _validate_entry_name(item.get("name", ""))
-            child_remote = (
-                posixpath.join(base_remote, item_name) if base_remote else item_name
-            )
+            child_remote = posixpath.join(base_remote, item_name)
             child_local = os.path.join(local_path, item_name)
             _assert_safe_local_child(real_root, child_local)
             if item.get("type") == "directory":

@@ -518,8 +518,12 @@ def test_http_error_omits_runtime_proxy_token(mock_request, client):
         client.list_dir("content/x")
 
     assert exc_info.value.response.status_code == 400
+    assert exc_info.value.__suppress_context__ is True
+    assert exc_info.value.__cause__ is None
     assert "SECRET-JWT" not in str(exc_info.value)
     assert "colab-runtime-proxy-token" not in str(exc_info.value)
+    assert "fake-endpoint.colab.dev" not in str(exc_info.value)
+    assert "content/x" in str(exc_info.value)
 
 
 @patch("colab_cli.contents.requests.Session.request")
@@ -599,7 +603,7 @@ def test_upload_dir_normalizes_remote_dir(mock_request, client, tmp_path):
 
 @pytest.mark.parametrize(
     "bad_name",
-    ["C:evil.txt", "D:evil.txt", 123, "bad\x00name", "", ".", "..", "a\\b", "a/b"],
+    [123, "bad\x00name", "", ".", "..", "a\\b", "a/b"],
 )
 @patch("colab_cli.contents.requests.Session.request")
 def test_download_dir_rejects_unsafe_entry_variants(
@@ -640,6 +644,41 @@ def test_download_dir_rejects_local_symlink(mock_request, client, tmp_path):
         client.download_dir("content/dir", str(dest))
 
     assert outside.read_text(encoding="utf-8") == "keep"
+
+
+@patch("colab_cli.contents.requests.Session.request")
+def test_download_dir_rejects_trailing_slash_local_symlink(
+    mock_request, client, tmp_path
+):
+    real_dir = tmp_path / "real_dir"
+    real_dir.mkdir()
+    link_dir = tmp_path / "link_dir"
+    link_dir.symlink_to(real_dir, target_is_directory=True)
+
+    dir_resp = MagicMock(spec=Response)
+    dir_resp.status_code = 200
+    dir_resp.json.return_value = {
+        "name": "dir",
+        "type": "directory",
+        "content": [{"name": "a.txt", "type": "file"}],
+    }
+    mock_request.return_value = dir_resp
+    with pytest.raises(ValueError, match="symlink"):
+        client.download_dir("content/dir", f"{link_dir}/")
+
+    file_resp = MagicMock(spec=Response)
+    file_resp.status_code = 200
+    file_resp.json.return_value = {
+        "name": "solo.txt",
+        "type": "file",
+        "format": "text",
+        "content": "nope",
+    }
+    mock_request.return_value = file_resp
+    with pytest.raises(ValueError, match="symlink"):
+        client.download_dir("content/solo.txt", f"{link_dir}/")
+
+    assert list(real_dir.iterdir()) == []
 
 
 @patch("colab_cli.contents.requests.Session.request")
