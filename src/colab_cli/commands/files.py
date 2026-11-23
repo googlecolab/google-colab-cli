@@ -20,7 +20,7 @@ import typer
 from typing import Optional
 from typing_extensions import Annotated
 
-from colab_cli.contents import ContentsClient
+from colab_cli.contents import ContentsClient, describe_error
 
 
 def ls(
@@ -88,7 +88,7 @@ def upload(
     if not os.path.isfile(local_path):
         typer.echo(f"[colab] Local file '{local_path}' not found.")
         raise typer.Exit(1)
-    contents = ContentsClient(s)
+    contents = ContentsClient(s, refresh_session=lambda: state.get_session(name))
     try:
         contents.upload(local_path, remote_path)
         state.history.log_event(
@@ -98,7 +98,7 @@ def upload(
         )
         typer.echo(f"[colab] Uploaded '{local_path}' to '{remote_path}'")
     except Exception as e:
-        typer.echo(f"[colab] Upload failed: {e}")
+        typer.echo(f"[colab] Upload failed: {describe_error(e)}")
         raise typer.Exit(1)
 
 
@@ -144,7 +144,7 @@ def edit(
     name = state.resolve_session(session)
     s = state.get_session(name)
 
-    contents = ContentsClient(s)
+    contents = ContentsClient(s, refresh_session=lambda: state.get_session(name))
 
     def get_file_hash(path):
         if not os.path.exists(path):

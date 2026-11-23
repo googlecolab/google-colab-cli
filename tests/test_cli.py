@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, call, patch
 import click
 from keyring.errors import KeyringError
 import pytest
+import requests
 import typer
 from typer.testing import CliRunner
 
@@ -653,6 +654,28 @@ def test_cli_edit_with_changes(
     mock_contents_class.return_value.download.assert_called_once()
     mock_contents_class.return_value.upload.assert_called_once()
     assert "Edited and uploaded 'remote.txt'" in result.output
+
+
+@patch("colab_cli.commands.files.os.path.isfile")
+@patch("colab_cli.commands.files.ContentsClient")
+def test_cli_upload_failure_hides_proxy_token(
+    mock_contents_class, mock_isfile, mock_store, mock_common_state
+):
+    """A requests error's text includes the URL with the runtime proxy token."""
+    mock_store.get.return_value = MagicMock()
+    mock_isfile.return_value = True
+    mock_common_state.resolve_session.return_value = "s1"
+    response = MagicMock(status_code=500, reason="Server Error")
+    mock_contents_class.return_value.upload.side_effect = requests.HTTPError(
+        "500 Server Error for url: https://x/api/contents/r?colab-runtime-proxy-token=SECRET",
+        response=response,
+    )
+
+    result = runner.invoke(app, ["upload", "-s", "s1", "local.txt", "remote.txt"])
+
+    assert result.exit_code == 1
+    assert "Upload failed: HTTPError 500 Server Error" in result.output
+    assert "SECRET" not in result.output
 
 
 def _make_400_error(message="Bad Request"):
