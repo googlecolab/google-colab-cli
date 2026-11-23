@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-23: Updated `integration/repro_windows_ssh/test.py` to check cached OAuth2 credentials via the OS `keyring` (`KEYRING_SERVICE_NAME` / `KEYRING_USERNAME`) instead of the removed `TOKEN_CONFIG_PATH`, and added portable import and prerequisite-skip regression tests in `tests/test_windows_ssh.py`.
 2026-11-09: `--identity/-i` now accepts either a `.pub` public key or a private key path: `_resolve_pubkey` reads the `.pub` file directly when present before falling back to `_pubkey_from_identity` (`ssh-keygen -y -f`), and `_ssh_base_args` strips `.pub` for `ssh -i` when the sibling private key exists on disk.
 2026-10-29: Removed the `colab console` subcommand, so `colab ssh` is the interactive shell on the runtime. Dropped console behavior from the Windows validation caveat.
 2026-10-29: Added `colab ssh [-s NAME] -- CMD`, which runs one command on an existing session and exits with its status (a PTY only when stdin and stdout are terminals; neither it nor its ProxyCommand child creates a runtime). Its handshake carries `ssh-mode-cmd`, and the update banner is skipped for `ssh` when stdout is not a terminal. Added `tests/test_ssh_cmd.py`.
@@ -191,18 +192,20 @@ interpreter installed under a path with spaces. Assertions check exact argv
 preservation for spaces, quotes, shell punctuation, backslashes, Unicode, and
 identity paths. A separate test launches the real Windows OpenSSH client with
 a local stub ProxyCommand and verifies its argv, without contacting Colab.
-Portable tests also check registration without SIGHUP and the local null
-device. Existing POSIX shell quoting and teardown tests remain in the suite.
+Portable tests also check registration without SIGHUP, the local null
+device, and `integration/repro_windows_ssh/test.py` import and prerequisite
+skip paths across platforms. Existing POSIX shell quoting and teardown tests
+remain in the suite.
 
 These and the existing SSH tests passed on Windows, Linux, and macOS with
 Python 3.12. This covers SSH compatibility only; local file editing and
 self-update require separate platform validation.
 
 `uv run python integration/repro_windows_ssh/test.py` provides a native Windows
-live test using cached OAuth2 credentials. It creates a CPU runtime, executes a
-remote command through the generated ProxyCommand with a key path containing
-spaces, exercises `--rm`, and cleans up the recorded endpoint on failure. Exit
-77 is a prerequisite skip, not a successful live validation.
+live test using OAuth2 credentials cached in the OS keyring. It creates a CPU
+runtime, executes a remote command through the generated ProxyCommand with a key
+path containing spaces, exercises `--rm`, and cleans up the recorded endpoint on
+failure. Exit 77 is a prerequisite skip, not a successful live validation.
 
 The native Windows live test passed on 2026-10-20 with Python 3.12.14 and the
 Windows OpenSSH client. This validates remote command execution and cleanup
