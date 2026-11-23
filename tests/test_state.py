@@ -449,3 +449,25 @@ def test_default_store_paths_share_config_dir(tmp_path, monkeypatch):
     expected_dir = str(tmp_path / ".config" / "colab-cli")
     assert settings_store.path == os.path.join(expected_dir, "settings.json")
     assert state_store.path == os.path.join(expected_dir, "sessions.json")
+
+
+def test_state_store_creates_missing_parent_dirs(tmp_path):
+    path = tmp_path / "new" / "dir" / "sessions.json"
+    session = SessionState(name="s", token="t", url="u", endpoint="e")
+
+    store = StateStore(str(path))
+
+    assert path.parent.is_dir()
+    store.add(session)
+    assert StateStore(str(path)).get("s") == session
+
+
+def test_settings_store_creates_missing_parent_dirs(tmp_path):
+    path = tmp_path / "new" / "dir" / "settings.json"
+    settings = Settings(enable_update_check=False, use_public_api=True)
+
+    store = SettingsStore(str(path))
+
+    assert path.parent.is_dir()
+    store.save(settings)
+    assert SettingsStore(str(path)).load() == settings
