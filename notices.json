@@ -2,5 +2,9 @@
   {
     "affects": "<1.0.0",
     "message": "test notice"
+  },
+  {
+    "affects": "<1.0.0",
+    "message": "test notice\\nplease update\\nline3\\n"
   }
 ]
