@@ -21,7 +21,13 @@ from datetime import datetime, timezone
 
 import filelock
 
-from colab_cli.state import StateStore, SessionState, SettingsStore, Settings
+from colab_cli.state import (
+    SessionState,
+    Settings,
+    SettingsStore,
+    StateStore,
+    UpdateNotice,
+)
 
 
 @pytest.fixture
@@ -134,6 +140,11 @@ def test_settings_store_defaults(temp_config):
     settings = store.load()
     assert settings.enable_update_check is True
     assert settings.last_check is None
+    assert (
+        settings.notices_url
+        == "https://raw.githubusercontent.com/googlecolab/google-colab-cli/refs/tags/notices/notices.json"
+    )
+    assert settings.update_notices == []
     assert settings.use_public_api is False
     assert settings.public_api_supported is None
     assert settings.tunnel_api_supported is None
@@ -144,6 +155,8 @@ def test_settings_store_save_load(temp_config):
     settings = Settings(
         enable_update_check=False,
         last_check=datetime(2026, 1, 1),
+        notices_url="https://example.com/notices.json",
+        update_notices=[UpdateNotice(affects="<1.0.0", message="Upgrade soon")],
         use_public_api=True,
         public_api_supported=True,
         tunnel_api_supported=False,
@@ -153,6 +166,10 @@ def test_settings_store_save_load(temp_config):
     loaded = SettingsStore(temp_config).load()
     assert loaded.enable_update_check is False
     assert loaded.last_check == datetime(2026, 1, 1)
+    assert loaded.notices_url == "https://example.com/notices.json"
+    assert loaded.update_notices == [
+        UpdateNotice(affects="<1.0.0", message="Upgrade soon")
+    ]
     assert loaded.use_public_api is True
     assert loaded.public_api_supported is True
     assert loaded.tunnel_api_supported is False

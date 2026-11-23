@@ -12,35 +12,44 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Auto-update subsystem.
+"""Auto-update and standalone notices subsystem.
 
-Owns version detection, the PyPI-style update probe, the on-disk
-``latest_version`` cache, and the upgrade-banner UX. The CLI's global
-callback (``cli.py``) calls ``check_for_updates`` once per day and
-``maybe_show_cached_banner`` on every other invocation; the
-``colab update`` Typer command (``commands/utility.py``) delegates to
-``check_for_updates``.
+Owns version detection, the PyPI-style update probe, standalone version-gated
+notices fetched from a movable GitHub tag (`notices_url`), the on-disk
+`Settings` cache, and the upgrade / notice banners. The CLI's global callback
+(`cli.py`) calls `check_for_updates` once per day and
+`maybe_show_cached_banner` on every other invocation; the `colab update` Typer
+command (`commands/utility.py`) delegates to `check_for_updates`.
 """
 
 import json
 import platform
+import re
 import subprocess
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version as installed_version
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 from typing import Optional
 
 import typer
 
 from colab_cli.common import state
-from colab_cli.state import Settings
+from colab_cli.state import Settings, UpdateNotice
 
-# PyPI distribution name (different from the importable package name `colab`).
 PYPI_PACKAGE_NAME = "google-colab-cli"
-
-
-# ---------- Version detection -------------------------------------------
+MAX_NOTICES = 3
+MAX_NOTICE_LENGTH = 500
+_DISABLE_HINT = (
+    '[colab] To silence this check, set "enable_update_check": false in '
+    "~/.config/colab-cli/settings.json"
+)
+_ANSI_ESCAPE_RE = re.compile(
+    r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))"
+)
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]+")
 
 
 def is_self_install_supported() -> bool:
@@ -65,9 +74,6 @@ def get_app_version() -> str:
         return "unknown"
 
 
-# ---------- Source fetchers ---------------------------------------------
-
-
 def _parse_version(payload: Optional[dict]) -> Optional[str]:
     """Returns ``info.version`` from a PyPI-style payload, or None."""
     return (payload or {}).get("info", {}).get("version")
@@ -84,7 +90,53 @@ def _fetch_pypi(url: str, quiet: bool) -> Optional[dict]:
         return None
 
 
-# ---------- Version comparison ------------------------------------------
+def _parse_notices(payload: object) -> Optional[list[UpdateNotice]]:
+    """Parse a JSON array (or ``{"notices": [...]}`` object) into valid notices."""
+    if isinstance(payload, dict):
+        raw_items = payload.get("notices")
+    elif isinstance(payload, list):
+        raw_items = payload
+    else:
+        return None
+    if not isinstance(raw_items, list):
+        return None
+
+    notices: list[UpdateNotice] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            notice = UpdateNotice.model_validate(item)
+        except Exception:
+            continue
+        if notice.affects.strip() and notice.message.strip():
+            notices.append(notice)
+    return notices
+
+
+def _fetch_notices(url: str, quiet: bool) -> Optional[list[UpdateNotice]]:
+    """Fetch remote standalone notices from ``url``.
+
+    HTTP 404 returns ``[]`` without warning so an absent or deleted ``notices``
+    tag cleanly clears stale cached notices; transient errors return ``None``
+    so the caller preserves its cached notices.
+    """
+    if not url:
+        return []
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return _parse_notices(payload)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return []
+        if not quiet:
+            typer.echo(f"[colab] Warning: Failed to fetch update notices: {e}")
+        return None
+    except Exception as e:
+        if not quiet:
+            typer.echo(f"[colab] Warning: Failed to fetch update notices: {e}")
+        return None
 
 
 def _is_newer(candidate: Optional[str], current: str) -> bool:
@@ -97,7 +149,36 @@ def _is_newer(candidate: Optional[str], current: str) -> bool:
         return candidate != current
 
 
-# ---------- UX ----------------------------------------------------------
+def _sanitize_notice(text: str) -> str:
+    cleaned = _ANSI_ESCAPE_RE.sub("", text)
+    cleaned = _CONTROL_CHARS_RE.sub(" ", cleaned).strip()
+    return cleaned[:MAX_NOTICE_LENGTH]
+
+
+def matching_notices(notices: list[UpdateNotice], current: str) -> list[str]:
+    """Return sanitized messages from ``notices`` whose PEP 440 specifier matches ``current``."""
+    try:
+        current_ver = Version(current)
+    except InvalidVersion:
+        return []
+
+    matched: list[str] = []
+    for notice in notices:
+        spec_text = notice.affects.strip()
+        if not spec_text:
+            continue
+        try:
+            spec = SpecifierSet(spec_text)
+        except InvalidSpecifier:
+            continue
+        if not spec.contains(current_ver, prereleases=True):
+            continue
+        msg = _sanitize_notice(notice.message)
+        if msg and msg not in matched:
+            matched.append(msg)
+        if len(matched) >= MAX_NOTICES:
+            break
+    return matched
 
 
 def announce_upgrade(
@@ -122,15 +203,24 @@ def announce_upgrade(
         typer.echo("[colab] You can run 'colab update --install' to upgrade in place.")
     typer.echo(f"[colab] Run '{install_cmd}' to update.")
     if show_disable_hint:
-        typer.echo(
-            "[colab] To silence this check, set "
-            '"enable_update_check": false in '
-            "~/.config/colab-cli/settings.json"
-        )
+        typer.echo(_DISABLE_HINT)
     typer.echo("")
 
 
-# ---------- Orchestration -----------------------------------------------
+def announce_notices(
+    messages: list[str],
+    *,
+    show_disable_hint: bool = False,
+) -> None:
+    """Print standalone notices matching the installed CLI version."""
+    if not messages:
+        return
+    typer.echo(f"\n[colab] Notice: {messages[0]}")
+    for msg in messages[1:]:
+        typer.echo(f"[colab] Notice: {msg}")
+    if show_disable_hint:
+        typer.echo(_DISABLE_HINT)
+    typer.echo("")
 
 
 def _get_install_command() -> str:
@@ -143,11 +233,11 @@ def _get_install_command() -> str:
 
 
 def check_for_updates(quiet: bool = False) -> None:
-    """Check PyPI for updates and print a message if a new version is available.
+    """Check PyPI and standalone notices, printing applicable banners and caching state.
 
-    The disable-hint is appended to the banner only when ``quiet`` is True
-    (the daily background fetch); explicit ``colab update`` invocations
-    (``quiet=False``) omit it because the user asked for the check.
+    The disable-hint is appended only when ``quiet`` is True (the daily
+    background fetch); explicit ``colab update`` invocations (``quiet=False``)
+    omit it because the user asked for the check.
     """
     settings = state.settings_store.load()
     current = get_app_version()
@@ -155,19 +245,27 @@ def check_for_updates(quiet: bool = False) -> None:
     try:
         pypi = _fetch_pypi(settings.update_url, quiet)
         pypi_v = _parse_version(pypi)
+        fetched_notices = _fetch_notices(settings.notices_url, quiet)
+        if fetched_notices is not None:
+            settings.update_notices = fetched_notices
 
-        if _is_newer(pypi_v, current):
+        has_upgrade = _is_newer(pypi_v, current)
+        matched = matching_notices(settings.update_notices, current)
+
+        if has_upgrade:
             announce_upgrade(
                 pypi_v,
                 current,
                 _get_install_command(),
-                show_disable_hint=quiet,
+                show_disable_hint=quiet and not matched,
             )
         elif not quiet:
             suffix = f", latest: {pypi_v}" if pypi_v else ""
             typer.echo(f"[colab] Colab CLI is up to date (version: {current}{suffix}).")
 
-        # Cache the highest observed version; never downgrade.
+        if matched:
+            announce_notices(matched, show_disable_hint=quiet)
+
         cached = settings.latest_version or "0"
         if _is_newer(pypi_v, cached):
             settings.latest_version = pypi_v
@@ -180,9 +278,6 @@ def check_for_updates(quiet: bool = False) -> None:
             typer.echo(f"[colab] Failed to check for updates: {e}")
 
 
-# ---------- Background hooks (called from cli.py) -----------------------
-
-
 def _is_throttled(settings: Settings, *, now: Optional[datetime] = None) -> bool:
     """True if the once-per-day fetch should be skipped."""
     if settings.last_check is None:
@@ -192,24 +287,26 @@ def _is_throttled(settings: Settings, *, now: Optional[datetime] = None) -> bool
 
 
 def maybe_show_cached_banner(settings: Settings) -> None:
-    """Print the cached upgrade banner if the cache reports a newer version.
+    """Print cached upgrade and/or standalone notice banners when throttled.
 
     Called from the global CLI callback when the daily fetch is throttled.
-    The banner uses a generic ``colab update`` install hint because the
-    cache does not record which source supplied the version; the disable
-    hint is shown because this is unsolicited output.
+    Both banners are evaluated independently so standalone notices still appear
+    when the user is already on the latest PyPI version.
     """
-    if not settings.latest_version:
-        return
     current = get_app_version()
-    if not _is_newer(settings.latest_version, current):
-        return
-    announce_upgrade(
-        settings.latest_version,
-        current,
-        "colab update",
-        show_disable_hint=True,
+    has_upgrade = bool(
+        settings.latest_version and _is_newer(settings.latest_version, current)
     )
+    matched = matching_notices(settings.update_notices, current)
+    if has_upgrade:
+        announce_upgrade(
+            settings.latest_version,
+            current,
+            "colab update",
+            show_disable_hint=not matched,
+        )
+    if matched:
+        announce_notices(matched, show_disable_hint=True)
 
 
 def run_background_check() -> None:
@@ -228,15 +325,10 @@ def run_background_check() -> None:
         check_for_updates(quiet=True)
 
 
-# ---------- Self-install ------------------------------------------------
-
-
 def self_install() -> None:
     """Upgrade the CLI in place, detecting uv vs pip."""
     import sys
 
-    # If the executable path contains "/uv/", we assume it was installed via
-    # `uv tool install` and use `uv` to upgrade it.
     if "/uv/tools/" in sys.executable:
         cmd = ["uv", "tool", "install", "-U", PYPI_PACKAGE_NAME]
     else:

@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-23: Added standalone version-gated update notices fetched from a movable GitHub tag (`notices_url`, defaulting to `https://raw.githubusercontent.com/googlecolab/google-colab-cli/refs/tags/notices/notices.json`) and cached as `update_notices` in `Settings`. Matching PEP 440 `affects` rules display via `announce_notices` independently of whether PyPI reports a newer version, HTTP 404 silently clears retracted notices without warning, transient errors preserve cached notices, and ANSI/control sequences are stripped.
 2026-11-13: `_get_adc_credentials` in `auth.py` now catches `DefaultCredentialsError` from `google.auth.default()` so missing local ADC prints the 4-scope `gcloud auth application-default login` command and exits 1 instead of surfacing `google-auth`'s stock unscoped setup message. Updated scope documentation to clarify that both `colaboratory` and `userinfo.email` are required by `colab.research.google.com`.
 2026-11-07: Optimized `_get_adc_credentials` in `auth.py` to stub `google.auth._cloud_sdk.get_project_id` around `google.auth.default()`. When ADC user credentials lack a `quota_project_id`, `google-auth` otherwise spawns `gcloud config get-value project` on every CLI invocation to resolve a `project_id` that `_get_adc_credentials` immediately discards (`_`).
 2026-11-04: `colab drivemount` now opens the Drive consent URL in the system browser (`utils.open_url_in_browser`, also used by `colab pay`/`colab url --open`) instead of only printing it. The URL is still printed first, and a missing browser opener (SSH, containers, CI) is treated as normal: the flow keeps waiting for the user exactly as before. The prompt moved into `commands/automation.py::show_drive_auth_url` so it can be unit-tested.
@@ -194,44 +195,67 @@ How each provider supplies the scopes:
         Git commit hash using `git rev-parse --short HEAD`.
     -   Dynamic versioning is supported in the build system via `hatch-vcs`.
 
-### 8. Auto-Update (`colab update`)
+### 8. Auto-Update & Standalone Notices (`colab update`)
 
--   **Action**: Check if a new version of the Colab CLI is available.
--   **Auto-check**: The CLI automatically checks for updates once every 24 hours
-    during the execution of any command. Independently, the cached
-    `latest_version` (see below) is consulted on **every** invocation so the
-    upgrade banner remains visible between fetches without requiring a network
+-   **Action**: Check if a new version of the Colab CLI or any standalone
+    version-gated advisory notice is available.
+-   **Auto-check**: The CLI automatically fetches PyPI and the standalone
+    notices feed once every 24 hours during the execution of any non-suppressed
+    command. Independently, the cached `latest_version` and `update_notices`
+    are consulted on **every** invocation so upgrade and standalone notice
+    banners remain visible between fetches without requiring a network
     round-trip.
 -   **Suppressed subcommands**: To keep machine-parseable output clean, the
-    daily fetch and the cached banner are suppressed for `update` (which
-    runs its own check), `version`, `log`, `pay`, `url`, `help`, and
-    `whoami`. The list lives as `_AUTO_UPDATE_SUPPRESSED` in the global
-    Typer callback in `cli.py`.
--   **Manual-check**: `colab update` forces a check and prints the status.
+    daily fetch and the cached banners are suppressed for subcommands listed in
+    `_AUTO_UPDATE_SUPPRESSED` (and non-TTY `ssh`) in the global Typer callback
+    in `cli.py`.
+-   **Manual-check**: `colab update` forces a check and prints the status plus
+    any matching standalone notices.
 -   **Implementation**:
-    -   Fetches a PyPI-style JSON document from a configurable `update_url`
+    -   Fetches a PyPI-style JSON document from `update_url`
         (default: `https://pypi.org/pypi/google-colab-cli/json`) and reads
         `info.version`.
     -   Compares the fetched version with the current CLI version using
         PEP 440 / semantic versioning, falling back to string equality when a
         version is unparseable.
+    -   Independently fetches standalone notices from `notices_url` (default:
+        `https://raw.githubusercontent.com/googlecolab/google-colab-cli/refs/tags/notices/notices.json`;
+        managed via `tools/notices.py`, see [07_update_notices.md](07_update_notices.md)).
+    -   Notice payload schema: a JSON array `[{"affects": "<1.0.0", "message": "..."}]`
+        (or `{"notices": [...]}`). Each entry's `affects` is evaluated against
+        the installed version with `packaging.specifiers.SpecifierSet(..., prereleases=True)`.
+        ANSI escape codes and control characters are stripped, messages are
+        truncated to 500 characters, and at most 3 deduplicated notices are
+        printed.
     -   Persists the following fields in `~/.config/colab-cli/settings.json`:
-        -   `update_url`: source configuration.
+        -   `update_url`: PyPI JSON source configuration.
+        -   `notices_url`: standalone notices JSON source configuration.
         -   `last_check`: timestamp of the last fetch (drives the daily
             throttle).
         -   `enable_update_check`: master switch for both the daily fetch and
-            the cached banner.
+            cached upgrade/notice banners.
         -   `latest_version`: highest version observed during the most
             recent successful check. Updated whenever a strictly-newer
             version is observed (never downgraded), and preserved verbatim
             across failed checks so transient network issues do not erase
             the cache.
--   **Notification**: If a new version is found, a non-intrusive message is
-    printed to the console with a `Run 'pip install --upgrade google-colab-cli' to
-    update.` hint. On Linux and macOS platforms where `--install` self-update is supported,
-    an additional hint `You can run 'colab update --install' to upgrade in place.`
-    is displayed above the pip/uv install command. The cached banner shown between
-    fetches uses the generic `Run 'colab update' to update.` hint.
+        -   `update_notices`: list of `{affects, message}` entries from the
+            most recent successful notices fetch. Overwritten on HTTP 200 or
+            cleared to `[]` on HTTP 404 (absent/deleted `notices` tag, with no
+            warning printed), and preserved across transient network failures.
+            `affects` is re-evaluated on every invocation so cached notices
+            stop appearing immediately once the user upgrades past the range.
+-   **Notification**:
+    -   If a new version is found, a non-intrusive banner is printed with a
+        `Run 'pip install --upgrade google-colab-cli' to update.` (or `uv tool
+        install -U`) hint, plus `You can run 'colab update --install' to upgrade
+        in place.` on Linux and macOS. Cached banners between fetches use the
+        generic `Run 'colab update' to update.` hint.
+    -   Any matching standalone notices are printed via `announce_notices` as
+        `[colab] Notice: <message>`, **even when the CLI is already on the
+        latest PyPI version**. When both an upgrade banner and notices are
+        shown unsolicited, the `"enable_update_check": false` silence hint is
+        printed only once at the bottom.
 -   **Self-install (`--install`)**: An opt-in `--install` flag (default
     `False`) makes `colab update` upgrade the CLI in place (**Linux and macOS**).
     It detects how the CLI was installed:
