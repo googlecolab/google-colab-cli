@@ -14,8 +14,10 @@
 
 """Native Windows regressions for the OpenSSH transport."""
 
+import importlib.util
 import json
 import os
+from pathlib import Path
 import signal
 import shutil
 import subprocess
@@ -23,8 +25,10 @@ import sys
 from types import SimpleNamespace
 import venv
 
+from keyring.errors import KeyringError
 import pytest
 
+from colab_cli.auth import KEYRING_SERVICE_NAME, KEYRING_USERNAME
 from colab_cli.commands import ssh
 
 
@@ -163,3 +167,71 @@ def test_rm_handlers_register_available_signals(mocker):
         if hasattr(signal, name)
     }
     assert {call.args[0] for call in register.call_args_list} == expected
+
+
+def _load_repro_windows_ssh():
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "integration"
+        / "repro_windows_ssh"
+        / "test.py"
+    )
+    spec = importlib.util.spec_from_file_location("repro_windows_ssh", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_repro_windows_ssh_skips_on_non_windows(monkeypatch, capsys):
+    module = _load_repro_windows_ssh()
+    monkeypatch.setattr(module.sys, "platform", "linux")
+
+    assert module.main() == 77
+    assert "SKIP: requires native Windows" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("token", [None, ""])
+def test_repro_windows_ssh_skips_without_keyring_token(
+    monkeypatch, mocker, capsys, token
+):
+    module = _load_repro_windows_ssh()
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    get_password = mocker.patch("keyring.get_password", return_value=token)
+    which = mocker.patch.object(module.shutil, "which")
+
+    assert module.main() == 77
+    get_password.assert_called_once_with(KEYRING_SERVICE_NAME, KEYRING_USERNAME)
+    which.assert_not_called()
+    assert "SKIP: no cached OAuth2 credentials" in capsys.readouterr().out
+
+
+def test_repro_windows_ssh_skips_on_keyring_error(monkeypatch, mocker, capsys):
+    module = _load_repro_windows_ssh()
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    get_password = mocker.patch(
+        "keyring.get_password", side_effect=KeyringError("keyring locked")
+    )
+    which = mocker.patch.object(module.shutil, "which")
+
+    assert module.main() == 77
+    get_password.assert_called_once_with(KEYRING_SERVICE_NAME, KEYRING_USERNAME)
+    which.assert_not_called()
+    out = capsys.readouterr().out
+    assert "SKIP:" in out and "keyring locked" in out
+
+
+def test_repro_windows_ssh_proceeds_past_credential_check(monkeypatch, mocker, capsys):
+    module = _load_repro_windows_ssh()
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    get_password = mocker.patch(
+        "keyring.get_password", return_value='{"token": "cached"}'
+    )
+    which = mocker.patch.object(module.shutil, "which", return_value=None)
+    colab = mocker.patch.object(module, "colab")
+
+    assert module.main() == 77
+    get_password.assert_called_once_with(KEYRING_SERVICE_NAME, KEYRING_USERNAME)
+    which.assert_called_once_with("ssh")
+    colab.assert_not_called()
+    assert "Windows OpenSSH Client" in capsys.readouterr().out
