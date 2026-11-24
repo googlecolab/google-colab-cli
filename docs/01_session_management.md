@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-23: `colab stop -s <name>` now exits 1 when the named session does not exist (or has already vanished from the backend), delegating missing-session handling to `State.get_session` (#251).
 2026-11-13: Documented `--auth {oauth2,adc}` (default `oauth2`) and required ADC `gcloud` scopes under Global Flags.
 2026-11-04: `--gpu` and `--tpu` now reject unknown values instead of silently selecting `A100` (GPU) or `v6e1` (TPU). `resolve_runtime_options()` uses the new `GPU_ACCELERATORS` / `TPU_ACCELERATORS` maps and raises a `typer.BadParameter` that names the flag and the supported list; `--help` is generated from the same maps so it cannot drift. Validation runs before any assignment request, in both `colab new` and `colab run`.
 2026-11-02: Added `_check_linux_keyring_locked` in `auth.py` to check if the active Linux `SecretService` keyring collection is locked via `secretstorage` before reading or writing OAuth tokens, logging and printing an immediate warning with the collection label, timeout, and `--auth=adc` hint while still attempting the keyring operation.
@@ -117,6 +118,7 @@ end to end; mocked timeouts alone do not establish backend compatibility.
     - `authuser`: 0.
     - `<endpoint>`: The unique session identifier returned during assignment (e.g., `tpu-v5e1-s-kkb-...`).
 - **Cleanup**: Remove the session from the local state file upon successful 204 response.
+- **Missing sessions**: Stopping a specific session (`colab stop` or `colab stop -s <name>`) exits with code 1 if no matching active session exists. `colab stop --all` exits 0 when no sessions are active.
 
 ### 4. Session Listing (`colab sessions`)
 - **API**: `GET https://colab.research.google.com/tun/m/assignments` (based on `colab-agent` implementation).
@@ -154,6 +156,7 @@ TDD is mandatory for all session management features.
 ### 1. Mock Assignment API
 - **Test Case**: Verify `colab new` correctly parses a `PostAssignmentResponse` and stores it in the local `StateStore`.
 - **Test Case**: Verify `colab stop` sends a `POST` request with the correct XSRF token to the unassign endpoint.
+- **Test Case**: Verify `colab stop -s <missing>` prints a not-found error and exits with status 1 without calling unassign.
 - **Test Case**: Verify that the path provided via `-c` is correctly passed to the authentication flow.
 - **Mocking**: Use `unittest.mock` to intercept `requests.Session.request` and return simulated XSSI-prefixed JSON payloads matching the HAR traces.
 

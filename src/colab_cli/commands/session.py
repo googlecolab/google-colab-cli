@@ -383,10 +383,7 @@ def stop(
         return
 
     name = state.resolve_session(session)
-    s = state.get_session(name, ignore_missing_session=True)
-    if not s:
-        typer.echo(f"[colab] Session '{name}' not found.")
-        return
+    s = state.get_session(name)
     _stopOne(name, s)
     typer.echo("[colab] Session terminated.")
 
