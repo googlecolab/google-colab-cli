@@ -17,7 +17,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-from colab_cli.contents import ContentsClient
+from colab_cli.contents import REQUEST_TIMEOUT, ContentsClient
 from requests import Response
 
 from colab_cli.state import SessionState
@@ -59,6 +59,7 @@ def test_list_dir(mock_request, client):
         "https://fake-endpoint.colab.dev/api/contents/content",
         params={"authuser": "0", "colab-runtime-proxy-token": "test-token"},
         json=None,
+        timeout=REQUEST_TIMEOUT,
     )
     assert res["type"] == "directory"
     assert len(res["content"]) == 2
@@ -77,6 +78,7 @@ def test_rm_file(mock_request, client):
         "https://fake-endpoint.colab.dev/api/contents/content/file.txt",
         params={"authuser": "0", "colab-runtime-proxy-token": "test-token"},
         json=None,
+        timeout=REQUEST_TIMEOUT,
     )
 
 
@@ -119,6 +121,7 @@ def test_download_file(mock_request, client, tmp_path):
             "content": "1",
         },
         json=None,
+        timeout=REQUEST_TIMEOUT,
     )
 
     assert local_file.read_bytes() == content_bytes
@@ -186,4 +189,38 @@ def test_upload_file(mock_request, client, tmp_path):
             "content": expected_b64,
             "chunk": 1,
         },
+        timeout=REQUEST_TIMEOUT,
     )
+
+
+def test_request_times_out_when_server_stops_responding(client, monkeypatch):
+    # A server that accepts the connection but never answers (e.g. the network
+    # dropped mid-transfer) must not make upload/download hang forever.
+    import socket
+    import threading
+
+    import requests
+
+    import colab_cli.contents as contents
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    client.base_url = f"http://127.0.0.1:{server.getsockname()[1]}"
+    monkeypatch.setattr(contents, "REQUEST_TIMEOUT", (1, 1))
+
+    errors = []
+
+    def call():
+        try:
+            client.list_dir("content")
+        except Exception as e:
+            errors.append(e)
+
+    worker = threading.Thread(target=call, daemon=True)
+    worker.start()
+    worker.join(10)
+    server.close()
+
+    assert not worker.is_alive(), "request hung with no timeout"
+    assert isinstance(errors[0], requests.exceptions.Timeout)

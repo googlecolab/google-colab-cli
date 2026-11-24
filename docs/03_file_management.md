@@ -32,6 +32,7 @@ File management on the Colab VM will be implemented using the Jupyter Contents A
 - **API**: `GET /api/contents/<remote_path>?content=1` (as seen in HAR).
 - **Response**: JSON with `content` field.
 - **Handling**: Decodes content based on `format` (`base64`, `json`, or plain `text`) and saves it locally.
+- **Timeouts**: Every Contents API request uses a `(connect, read)` timeout of `(30, 300)` seconds. The read timeout bounds the wait between bytes, not the whole transfer, so large files still finish while a dropped connection fails with an error instead of hanging `ls`, `rm`, `upload`, `download`, or `edit` forever.
 
 ### 4. Deleting Files (`colab rm`)
 - **API**: `DELETE /api/contents/<remote_path>`.
