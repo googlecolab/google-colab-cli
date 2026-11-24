@@ -219,7 +219,7 @@ def test_request_times_out_when_server_stops_responding(client, monkeypatch):
 
     worker = threading.Thread(target=call, daemon=True)
     worker.start()
-    worker.join(10)
+    worker.join(1)
     server.close()
 
     assert not worker.is_alive(), "request hung with no timeout"
