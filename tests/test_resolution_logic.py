@@ -17,6 +17,7 @@ import pytest
 import typer
 from colab_cli.auth import AuthProvider
 from colab_cli.common import State
+from colab_cli.state import SessionState
 
 
 def test_resolve_session_no_local_sessions():
@@ -37,9 +38,11 @@ def test_resolve_session_with_local_but_none_on_server():
     state._store = MagicMock()
     state._store.attached_name_for_endpoint.return_value = None
     # Local session exists
-    mock_session = MagicMock(attached=False)
-    mock_session.endpoint = "e1"
-    state._store.list.return_value = {"s1": mock_session}
+    state._store.list.return_value = {
+        "s1": SessionState(
+            name="s1", token="t", url="https://u", endpoint="e1", attached=False
+        )
+    }
 
     # But server says no assignments
     state._client = MagicMock()

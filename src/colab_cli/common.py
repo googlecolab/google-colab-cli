@@ -178,6 +178,7 @@ class State:
     def get_session(
         self,
         name: str,
+        *,
         ignore_missing_session: bool = False,
         allow_attached: bool = False,
     ) -> Optional[SessionState]:
@@ -263,7 +264,7 @@ class State:
         return self._sessions, assignments
 
     def resolve_session(
-        self, session_name: str | None, allow_attached: bool = False
+        self, session_name: str | None, *, allow_attached: bool = False
     ) -> str:
         """Resolves a target session name or selects the sole non-attached one.
 

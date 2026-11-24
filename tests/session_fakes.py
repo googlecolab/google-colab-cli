@@ -16,7 +16,7 @@
 
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, create_autospec
+from unittest.mock import create_autospec
 
 from colab_cli.auth import get_credentials as _real_get_credentials
 from colab_cli.state import SessionState
@@ -25,6 +25,22 @@ ATT = ("att", "att-ep", True)
 ATT2 = ("att2", "att2-ep", True)
 CLI = ("cli", "cli-ep", False)
 SHARED = ("cli2", "att-ep", False)
+
+
+class _FakeRequest:
+    headers: dict[str, str] = {}
+
+
+class _FakeResponse:
+    """Minimal stand-in for requests.Response in recorded HTTP sessions."""
+
+    def __init__(self, text: str, status_code: int = 200, reason: str = "OK"):
+        self.text = text
+        self.status_code = status_code
+        self.reason = reason
+        self.ok = 200 <= status_code < 400
+        self.headers: dict[str, str] = {}
+        self.request = _FakeRequest()
 
 
 class RecordingSession:
@@ -46,7 +62,7 @@ class UnassignSession(RecordingSession):
             return super().request(method, url, **kwargs)
         self.requests.append((method, url))
         body = '{"token": "xsrf"}' if method == "GET" else ""
-        return MagicMock(ok=True, status_code=200, reason="OK", text=body)
+        return _FakeResponse(body)
 
 
 class AssignmentsSession(UnassignSession):
@@ -72,7 +88,7 @@ class AssignmentsSession(UnassignSession):
             for ep in self.endpoints
         ]
         text = json.dumps({"assignments": listed})
-        return MagicMock(ok=True, status_code=200, reason="OK", text=text)
+        return _FakeResponse(text)
 
 
 def fresh_session(name: str, endpoint: str, attached: bool) -> SessionState:

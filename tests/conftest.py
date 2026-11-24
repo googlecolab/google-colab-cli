@@ -49,7 +49,7 @@ def mock_common_state(mocker, tmp_path):
     mock_state.config_path = None
 
     # Token refresh is covered in test_common.py; elsewhere just read the store.
-    def get_session(name, ignore_missing_session=False, allow_attached=False):
+    def get_session(name, *, ignore_missing_session=False, allow_attached=False):
         s = mock_state.store.get(name)
         if not s and not ignore_missing_session:
             typer.echo(f"[colab] Session '{name}' not found.")
