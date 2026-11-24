@@ -9,6 +9,8 @@ log:
 2026-10-24: `--timeout` for `colab exec` (and `colab run`) is now an idle limit: execution fails only after that many seconds without output, so code that keeps printing is never cut off, and `--timeout 0` means no limit. On 0.8.0/0.9.0 the old deadline was never enforced, so code that is silent for longer than `--timeout` now fails where it used to complete. `colab repl` and `colab install`, which pass no timeout, wait until execution finishes, or until the kernel dies or restarts. None of them busy-loop while waiting. `colab auth` and `colab drivemount` are unchanged. See #183.
 
 2026-10-29: Removed the `colab console` subcommand and its `/colab/tty` transport (`console.py`, its tests, and `integration/repro_piped_console/`). Use `colab ssh -s NAME` for an interactive shell and `colab ssh -s NAME -- CMD` for one-shot commands, or pipe `!`-prefixed shell commands to `colab exec` where ssh can't work.
+
+2026-11-11: Added `colab exec --json`. Each executed cell becomes one JSON object on stdout (NDJSON) instead of streamed text, `[colab]` progress lines move to stderr, and the exit status is 1 when any cell failed. Without the flag, `colab exec` is unchanged (it still exits 0 after a kernel error).
 ---
 
 # Design: Execution and Interactive Interaction (`repl`, `exec`)
@@ -33,6 +35,11 @@ Execution involves sending Python code (or shell commands) to the Jupyter kernel
     - If file path is remote: Execute `!python <path>`.
 - **Multi-Modal Output**: Handle `display_data` messages (e.g., `image/png`, `text/html`). For the CLI, we'll save images to temporary files and print their paths, or if the terminal supports it (e.g., iTerm2), inline them.
 - **Timeout Configuration**: Exposes a `--timeout` flag (default 30s): the longest silence allowed before execution fails. Raise it so long-running silent tasks (like model compilation or data downloading) are not prematurely killed; `0` means no limit.
+- **Machine-Readable Output (`--json`)**: For scripts and AI agents that must decide what to do next from the result. Plain `colab exec` exits 0 after a kernel error and prints an ANSI-coloured traceback, so a caller can only guess at failure by scraping text. With `--json`:
+    - stdout carries one JSON object per executed cell, one per line (NDJSON), written when the cell finishes. Nothing else is written to stdout; `[colab]` progress lines go to stderr.
+    - Fields: `cell_index`, `cell_id` (notebook cell id, else `null`), `status` (`"ok"` or `"error"`), `stdout`, `stderr` (the kernel's streams, concatenated), `data` (one object per `execute_result` / `display_data` output: its `output_type` plus its non-image MIME entries such as `text/plain`), `images` (paths of the PNG/JPEG outputs saved to disk, honouring `--output-image`; never inline base64), and `error` (`null`, or `ename`, `evalue` and `traceback` as plain text with ANSI escapes removed).
+    - The exit status is 1 when any cell has `status: "error"`. Notebook cells after a failing cell still run, as without the flag.
+    - A client-side failure (idle `--timeout`, lost connection) is reported as a final record whose `error.ename` is the exception type, before the command fails as it does without the flag.
 
 ## Implementation Details
 - **Kernel Management**: `ColabRuntime` (from `colab-agent`) already handles message signing and message types.
@@ -48,6 +55,7 @@ TDD is mandatory for all execution features.
 - **Test Case**: Verify `display_data` (specifically `image/png`) triggers the correct local handling (saving or display).
 
 ### 2. TTY and Piping
+- **Test Case**: `tests/test_exec_json.py` covers the `--json` record for success, kernel error (ANSI stripped, exit 1), images (saved, path reported, no base64 on stdout), per-cell notebook records, client-side failures, a lost session, and that the default mode still exits 0 on a kernel error.
 - **Test Case**: Mock `sys.stdin.isatty()` to verify `colab repl` correctly switches between interactive mode and one-shot piped execution.
 - **Test Case**: Verify large piped inputs are handled without buffer overflow or truncation.
 - **Test Case**: `print_kitty` is a no-op when `sys.stdout.isatty()` is false (regression: previously emitted ANSI/base64 into pipes and files).

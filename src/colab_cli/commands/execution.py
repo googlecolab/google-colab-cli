@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import datetime
+import json
 import nbformat
 import os
 import re
@@ -25,12 +26,20 @@ from typing import List, Optional
 from typing_extensions import Annotated
 
 from colab_cli.runtime import ColabRuntime
-from colab_cli.utils import handle_image, is_terminal_error, render_display_data
+from colab_cli.utils import (
+    handle_image,
+    is_terminal_error,
+    render_display_data,
+    save_image,
+)
 
 _console = Console()
 
 TITLE_REGEX = re.compile(r"^\s*#\s*@title\s+(.*)", re.MULTILINE)
 ENV_KEY_REGEX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# CSI escape sequences (colours, cursor moves) that IPython puts in tracebacks.
+ANSI_ESCAPE_REGEX = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+IMAGE_MIME_TYPES = ("image/png", "image/jpeg")
 
 
 def is_stdin_tty() -> bool:
@@ -142,6 +151,64 @@ def display_output(out, output_image=None):
         pass
 
 
+def _error_record(ename: str, evalue: str, traceback: List[str]) -> dict:
+    return {
+        "ename": ename,
+        "evalue": evalue,
+        "traceback": ANSI_ESCAPE_REGEX.sub("", "\n".join(traceback)),
+    }
+
+
+def build_json_record(
+    outputs: List[dict],
+    cell_index: int,
+    cell_id: Optional[str],
+    output_image: Optional[str] = None,
+) -> dict:
+    """Summarize one cell's kernel outputs as a JSON-serializable record.
+
+    This is the `colab exec --json` contract: streams are concatenated, images
+    are written to disk and reported by path (never inlined as base64), and
+    the traceback is plain text with ANSI colour codes removed.
+    """
+    record = {
+        "cell_index": cell_index,
+        "cell_id": cell_id,
+        "status": "ok",
+        "stdout": "",
+        "stderr": "",
+        "data": [],
+        "images": [],
+        "error": None,
+    }
+    for out in outputs:
+        output_type = out.get("output_type")
+        if output_type == "stream":
+            name = "stderr" if out.get("name") == "stderr" else "stdout"
+            record[name] += out.get("text", "")
+        elif output_type == "error":
+            record["status"] = "error"
+            record["error"] = _error_record(
+                out.get("ename", "Error"),
+                out.get("evalue", ""),
+                out.get("traceback", []),
+            )
+        elif "data" in out:
+            data = out["data"]
+            for mime_type in IMAGE_MIME_TYPES:
+                if mime_type in data:
+                    record["images"].append(
+                        save_image(data[mime_type], mime_type, output_image)
+                    )
+                    break
+            rest = {k: v for k, v in data.items() if not k.startswith("image/")}
+            if rest:
+                record["data"].append(
+                    {"output_type": output_type or "display_data", **rest}
+                )
+    return record
+
+
 def exec_command(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
@@ -169,9 +236,26 @@ def exec_command(
             ),
         ),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help=(
+                "Print one JSON object per executed cell on stdout instead of "
+                "streaming output, and exit 1 if any cell failed."
+            ),
+        ),
+    ] = False,
 ):
     """Execute code in a session"""
     from colab_cli.common import state
+
+    def info(message: str) -> None:
+        # With --json, stdout carries only JSON records.
+        if json_output:
+            typer.echo(message, err=True)
+        else:
+            typer.echo(message)
 
     env_vars = _parse_env_vars(env)
     name = state.resolve_session(session)
@@ -180,7 +264,7 @@ def exec_command(
     code_blocks = []
     if file:
         if file.endswith(".ipynb"):
-            typer.echo(f"[colab] Parsing notebook '{file}'...")
+            info(f"[colab] Parsing notebook '{file}'...")
             with open(file, "r", encoding="utf-8") as f:
                 nb = nbformat.read(f, as_version=4)
                 for cell in nb.cells:
@@ -227,13 +311,12 @@ def exec_command(
         )
     except Exception as e:
         if is_terminal_error(e):
-            typer.echo(
-                f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up."
-            )
+            info(f"[colab] Session '{name}' appears to be lost (404/401). Cleaning up.")
             state.prune_session(name)
             raise typer.Exit(1)
         raise e
 
+    failed = False
     try:
         is_nb = file and file.endswith(".ipynb")
         s.running = f"exec({file or 'stdin'})"
@@ -252,7 +335,7 @@ def exec_command(
                     identifier = ""
 
                 identifier_str = f" - {identifier}" if identifier else ""
-                typer.echo(
+                info(
                     f"[colab] Executing cell {i + 1}/{len(code_blocks)}{identifier_str}..."
                 )
 
@@ -263,11 +346,26 @@ def exec_command(
             )
             state.store.add(s)
 
-            outputs = runtime.execute_code(
-                code,
-                output_hook=lambda o: display_output(o, output_image),
-                timeout=timeout,
-            )
+            if json_output:
+                try:
+                    outputs = runtime.execute_code(code, timeout=timeout)
+                except Exception as e:
+                    # Timeouts and lost connections never reach the kernel's
+                    # outputs; report them in the same shape before failing.
+                    record = build_json_record([], i, block.get("id"))
+                    record["status"] = "error"
+                    record["error"] = _error_record(type(e).__name__, str(e), [])
+                    typer.echo(json.dumps(record))
+                    raise
+                record = build_json_record(outputs, i, block.get("id"), output_image)
+                failed = failed or record["status"] == "error"
+                typer.echo(json.dumps(record))
+            else:
+                outputs = runtime.execute_code(
+                    code,
+                    output_hook=lambda o: display_output(o, output_image),
+                    timeout=timeout,
+                )
             if "cell" in block:
                 save_output(outputs, block["cell"])
             state.history.log_event(
@@ -286,9 +384,11 @@ def exec_command(
         runtime.stop()
         if file and file.endswith(".ipynb"):
             output_file = os.path.splitext(file)[0] + "_output.ipynb"
-            typer.echo(f"[colab] Saving notebook with outputs to '{output_file}'...")
+            info(f"[colab] Saving notebook with outputs to '{output_file}'...")
             with open(output_file, "w", encoding="utf-8") as f:
                 nbformat.write(nb, f)
+    if failed:
+        raise typer.Exit(1)
 
 
 def repl(
