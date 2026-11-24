@@ -207,7 +207,7 @@ def test_request_times_out_when_server_stops_responding(client, monkeypatch):
     server.bind(("127.0.0.1", 0))
     server.listen(1)
     client.base_url = f"http://127.0.0.1:{server.getsockname()[1]}"
-    monkeypatch.setattr(contents, "REQUEST_TIMEOUT", (1, 1))
+    monkeypatch.setattr(contents, "REQUEST_TIMEOUT", (0.01, 0.01))
 
     errors = []
 
