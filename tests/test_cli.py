@@ -1027,6 +1027,21 @@ def test_stop_all_skips_unassign_when_attached_precedes_shared_cli(tmp_path, moc
     assert local_state.store.list() == {}
 
 
+def test_stop_missing_exits_1_keeps_attached_record(tmp_path, mocker):
+    local_state = _real_stop_state(tmp_path, mocker)
+    local_state.store.add(
+        SessionState(
+            name="nb1", token="t", url="https://u", endpoint="ep-nb1", attached=True
+        )
+    )
+
+    missing_res = runner.invoke(app, ["stop", "-s", "missing"])
+
+    assert missing_res.exit_code == 1
+    assert "[colab] Session 'missing' not found." in missing_res.output
+    assert local_state.store.get("nb1") is not None
+
+
 def test_sessions_and_status_use_store_key_when_name_differs(mock_common_state):
     mock_assignment = MagicMock()
     mock_assignment.endpoint = "ep1"
