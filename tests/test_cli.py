@@ -345,6 +345,42 @@ def test_cli_stop(mock_client, mock_store, mock_common_state):
     mock_store.remove.assert_called_with("s1")
 
 
+def test_cli_stop_missing_session(mock_client, mock_store, mock_common_state):
+    mock_store.get.return_value = None
+    mock_common_state.resolve_session.return_value = "no-such-session"
+
+    result = runner.invoke(app, ["stop", "-s", "no-such-session"])
+
+    assert result.exit_code == 1
+    assert "[colab] Session 'no-such-session' not found." in result.output
+    mock_client.unassign.assert_not_called()
+    mock_store.remove.assert_not_called()
+
+
+def test_cli_stop_pruned_session_exits_nonzero(tmp_path, mocker):
+    from colab_cli.common import State
+    from colab_cli.state import SessionState, StateStore
+
+    config_file = str(tmp_path / "sessions.json")
+    real_state = State()
+    real_state._client = MagicMock()
+    real_state._client.list_assignments.return_value = []
+    real_state._history = MagicMock()
+    StateStore(config_file).add(
+        SessionState(name="stale", token="tok", url="https://url", endpoint="ep1")
+    )
+    mocker.patch("colab_cli.common.state", real_state)
+    mocker.patch("colab_cli.cli.state", real_state)
+    mocker.patch("colab_cli.auto_update.run_background_check")
+
+    result = runner.invoke(app, ["--config", config_file, "stop", "-s", "stale"])
+
+    assert result.exit_code == 1
+    assert "[colab] Session 'stale' not found." in result.output
+    assert StateStore(config_file).get("stale") is None
+    real_state.client.unassign.assert_not_called()
+
+
 def test_cli_stop_all(mock_client, mock_store, mock_common_state):
     sessions = {"s1": MagicMock(endpoint="e1"), "s2": MagicMock(endpoint="e2")}
     mock_common_state.sync_sessions.return_value = (sessions, [])
