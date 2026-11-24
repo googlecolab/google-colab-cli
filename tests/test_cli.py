@@ -28,6 +28,7 @@ from colab_cli.client import (
     Assignment,
     Client,
     ColabRequestError,
+    ListedAssignment,
     PostAssignmentResponse,
     RuntimeProxyInfo,
     TooManyAssignmentsError,
@@ -1050,15 +1051,23 @@ def test_stop_missing_exits_1_keeps_attached_record(tmp_path, mocker):
 
 
 def test_sessions_and_status_use_store_key_when_name_differs(mock_common_state):
-    mock_assignment = MagicMock()
-    mock_assignment.endpoint = "ep1"
-    mock_assignment.variant.name = "DEFAULT"
-    mock_assignment.accelerator.value = "NONE"
-    mock_assignment.machine_shape.name = "STANDARD"
+    assignment = ListedAssignment.model_validate(
+        {
+            "accelerator": "NONE",
+            "endpoint": "ep1",
+            "variant": 0,
+            "machineShape": 0,
+            "runtimeProxyInfo": {
+                "token": "t",
+                "tokenExpiresInSeconds": 3600,
+                "url": "u",
+            },
+        }
+    )
     sess = SessionState(name="inner", token="t", url="u", endpoint="ep1")
     mock_common_state.sync_sessions.return_value = (
         {"alias": sess},
-        [mock_assignment],
+        [assignment],
     )
     mock_common_state.store.get.return_value = sess
 

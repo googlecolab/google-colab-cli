@@ -73,7 +73,7 @@ def test_proxy_mode_rm_stops_even_if_bridge_raises(mock_common_state, mocker):
     mock_common_state.store.get.return_value = sess
     mock_common_state.resolve_session.return_value = "colab-ephem"
     mocker.patch("signal.signal")
-    stop = mocker.patch("colab_cli.commands.session.stop_session")
+    stop = mocker.patch("colab_cli.commands.session.stop_session", autospec=True)
     mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
     mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
     mocker.patch.object(
@@ -92,7 +92,7 @@ def test_interactive_rm_stops_even_if_shell_raises(mock_common_state, mocker):
     mock_common_state.store.list.return_value = {}  # empty -> auto-create
     mock_common_state.store.get.return_value = sess
     mocker.patch("colab_cli.commands.session.new")
-    stop = mocker.patch("colab_cli.commands.session.stop_session")
+    stop = mocker.patch("colab_cli.commands.session.stop_session", autospec=True)
     mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
     mocker.patch.object(
         ssh_module, "_run_interactive_ssh", side_effect=RuntimeError("boom")
@@ -162,7 +162,9 @@ def test_proxy_bridge_routes_rm_output_to_stderr(mocker, capsys):
     def stop_echo(name):
         typer.echo("STOP-MARKER")
 
-    mocker.patch("colab_cli.commands.session.stop_session", side_effect=stop_echo)
+    mocker.patch(
+        "colab_cli.commands.session.stop_session", side_effect=stop_echo, autospec=True
+    )
 
     rc = ssh_module._run_proxy_bridge(sess, None, rm=True)
     assert rc == 0
@@ -237,7 +239,7 @@ def test_proxy_mode_rm_teardown_idempotent(mock_common_state, mocker):
         side_effect=lambda sig, h: handlers.__setitem__(sig, h),
     )
     mocker.patch("os._exit")  # keep the handler from killing the test process
-    stop = mocker.patch("colab_cli.commands.session.stop_session")
+    stop = mocker.patch("colab_cli.commands.session.stop_session", autospec=True)
     mocker.patch.object(ssh_module, "_resolve_pubkey", return_value="pk")
     mocker.patch.object(ssh_module, "_connect_websocket", return_value=MagicMock())
 
@@ -263,7 +265,7 @@ def test_proxy_mode_rm_stops_reused_session(mock_common_state, mocker):
     mock_common_state.store.get.return_value = sess  # already exists
     mock_common_state.resolve_session.return_value = "colab"
     mocker.patch("signal.signal")
-    stop = mocker.patch("colab_cli.commands.session.stop_session")
+    stop = mocker.patch("colab_cli.commands.session.stop_session", autospec=True)
     _patch_proxy(mocker)
 
     result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "colab", "--rm"])

@@ -240,7 +240,7 @@ def test_proxy_mode_rm_teardown(mock_common_state, mocker, rm, expect_stop):
         mock_common_state.store.get.return_value = created
 
     mocker.patch("colab_cli.commands.session.new", side_effect=after_new)
-    stop = mocker.patch("colab_cli.commands.session.stop_session")
+    stop = mocker.patch("colab_cli.commands.session.stop_session", autospec=True)
     mocker.patch("signal.signal")  # don't install real handlers during tests
     _patch_proxy(mocker)
 
@@ -272,7 +272,7 @@ def test_interactive_rm_teardown(mock_common_state, mocker, has_existing, expect
     mock_common_state.store.get.return_value = sess
 
     mocker.patch("colab_cli.commands.session.new")
-    stop = mocker.patch("colab_cli.commands.session.stop_session")
+    stop = mocker.patch("colab_cli.commands.session.stop_session", autospec=True)
     _patch_interactive(mocker)
 
     result = runner.invoke(app, ["ssh", "--rm"])
@@ -301,7 +301,7 @@ def test_proxy_mode_signal_handler_installation(
     mock_common_state.store.get.return_value = _make_session("colab")
     mock_common_state.resolve_session.return_value = "colab"
     sigmock = mocker.patch("signal.signal")
-    mocker.patch("colab_cli.commands.session.stop_session")
+    mocker.patch("colab_cli.commands.session.stop_session", autospec=True)
     _patch_proxy(mocker)
 
     args = ["ssh", "--proxy-mode", "-s", "colab"]
