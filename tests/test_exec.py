@@ -56,7 +56,9 @@ def test_cli_exec_file(mock_store, mock_runtime_class, mock_common_state, tmp_pa
     assert mock_session.last_execution[2] is not None
     mock_store.add.assert_called_with(mock_session)
     mock_runtime.execute_code.assert_any_call(
-        "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
+        "import os, warnings; "
+        "warnings.filterwarnings('ignore', message='To exit: use'); "
+        "os.makedirs('/content', exist_ok=True); os.chdir('/content')"
     )
     mock_runtime.execute_code.assert_any_call(
         "print('hello')", output_hook=ANY, timeout=30.0
@@ -299,6 +301,103 @@ def test_cli_exec_file_error_exits_nonzero(
     assert mock_session.running is None
     mock_common_state.history.log_event.assert_called_once()
     mock_runtime.stop.assert_called_once()
+
+
+def _systemexit_output(evalue: str) -> dict:
+    return {
+        "output_type": "error",
+        "ename": "SystemExit",
+        "evalue": evalue,
+        "traceback": [
+            "An exception has occurred, use %tb to see the full traceback.\n",
+            f"\x1b[0;31mSystemExit\x1b[0m\x1b[0;31m:\x1b[0m {evalue}\n",
+        ],
+    }
+
+
+@pytest.mark.parametrize("evalue", ["", "None", "0"])
+def test_cli_exec_systemexit_zero_exits_zero_silently(
+    mock_store, mock_runtime_class, mock_common_state, evalue
+):
+    mock_session = MagicMock()
+    mock_session.name = "s1"
+    mock_session.url = "http://url"
+    mock_session.token = "token"
+    mock_session.kernel_id = None
+    mock_session.session_id = None
+    mock_store.get.return_value = mock_session
+    mock_common_state.resolve_session.return_value = "s1"
+
+    def mock_execute_code(code, output_hook=None, **kwargs):
+        if output_hook is None:
+            return []
+        out = _systemexit_output(evalue)
+        output_hook(out)
+        return [out]
+
+    mock_runtime_class.return_value.execute_code.side_effect = mock_execute_code
+
+    result = runner.invoke(app, ["exec", "-s", "s1"], input="import sys; sys.exit(0)\n")
+
+    assert result.exit_code == 0
+    assert "An exception has occurred" not in result.output + result.stderr
+
+
+def test_cli_exec_systemexit_nonzero_propagates_code(
+    mock_store, mock_runtime_class, mock_common_state
+):
+    mock_session = MagicMock()
+    mock_session.name = "s1"
+    mock_session.url = "http://url"
+    mock_session.token = "token"
+    mock_session.kernel_id = None
+    mock_session.session_id = None
+    mock_store.get.return_value = mock_session
+    mock_common_state.resolve_session.return_value = "s1"
+
+    def mock_execute_code(code, output_hook=None, **kwargs):
+        if output_hook is None:
+            return []
+        out = _systemexit_output("7")
+        output_hook(out)
+        return [out]
+
+    mock_runtime_class.return_value.execute_code.side_effect = mock_execute_code
+
+    result = runner.invoke(app, ["exec", "-s", "s1"], input="import sys; sys.exit(7)\n")
+
+    assert result.exit_code == 7
+    assert "An exception has occurred" not in result.output + result.stderr
+
+
+def test_cli_exec_systemexit_string_prints_message_and_exits_one(
+    mock_store, mock_runtime_class, mock_common_state
+):
+    mock_session = MagicMock()
+    mock_session.name = "s1"
+    mock_session.url = "http://url"
+    mock_session.token = "token"
+    mock_session.kernel_id = None
+    mock_session.session_id = None
+    mock_store.get.return_value = mock_session
+    mock_common_state.resolve_session.return_value = "s1"
+
+    def mock_execute_code(code, output_hook=None, **kwargs):
+        if output_hook is None:
+            return []
+        out = _systemexit_output("fatal config error")
+        output_hook(out)
+        return [out]
+
+    mock_runtime_class.return_value.execute_code.side_effect = mock_execute_code
+
+    result = runner.invoke(
+        app, ["exec", "-s", "s1"], input="import sys; sys.exit('fatal config error')\n"
+    )
+
+    assert result.exit_code == 1
+    assert "fatal config error\n" in result.stderr
+    assert "An exception has occurred" not in result.output + result.stderr
 
 
 def test_cli_exec_empty_code(mock_runtime_class, mock_store, mock_common_state):

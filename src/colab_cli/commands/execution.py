@@ -142,6 +142,75 @@ def display_output(out, output_image=None):
         pass
 
 
+def _is_systemexit(out: dict) -> bool:
+    """True iff this kernel output represents `raise SystemExit(...)` / `sys.exit(...)`."""
+    return out.get("output_type") == "error" and out.get("ename") == "SystemExit"
+
+
+def _systemexit_code(out: dict) -> int:
+    """Map an IPython SystemExit error output to CPython's integer exit status.
+
+    Because a Colab Jupyter kernel must stay alive across executions, IPython
+    catches `SystemExit` and reports it as `output_type == "error"`
+    (`ename == "SystemExit"`) instead of terminating the kernel process.
+    Treating it like an uncaught exception would turn `sys.exit(0)` (e.g.
+    `argparse --help`, `unittest.main()`) into exit 1 and collapse `sys.exit(N)`
+    into 1. Mirror CPython instead:
+      - `sys.exit()` / `sys.exit(None)` / `sys.exit(0)` -> 0
+      - `sys.exit(<int>)`                                -> <int>
+      - `sys.exit('msg')` (any non-int)                  -> 1
+    """
+    evalue = (out.get("evalue") or "").strip()
+    if evalue in ("", "None", "0"):
+        return 0
+    try:
+        return int(evalue)
+    except ValueError:
+        return 1
+
+
+def _exit_code_from_outputs(outputs: list[dict]) -> int:
+    """Derive the CLI exit code from a cell's kernel outputs.
+
+    `SystemExit` follows CPython exit-code semantics (see `_systemexit_code`);
+    any other `output_type == "error"` (uncaught exception, SyntaxError) is 1.
+    """
+    code = 0
+    for out in outputs:
+        if out.get("output_type") != "error":
+            continue
+        if _is_systemexit(out):
+            ec = _systemexit_code(out)
+            code = ec if ec != 0 else code
+        else:
+            return 1
+    return code
+
+
+def _make_script_output_hook(output_image: Optional[str] = None):
+    """Build an `output_hook` that renders outputs while giving `SystemExit` CPython UX.
+
+    IPython renders `SystemExit` with `"An exception has occurred, use %tb to
+    see the full traceback."` even for `sys.exit(0)`. Suppress that banner for
+    empty/None/integer exit codes (silent in CPython), and for a non-integer
+    message like `sys.exit("boom")` write only the message to stderr.
+    """
+
+    def hook(out):
+        if _is_systemexit(out):
+            evalue = (out.get("evalue") or "").strip()
+            if evalue not in ("", "None"):
+                try:
+                    int(evalue)
+                except ValueError:
+                    sys.stderr.write(f"{evalue}\n")
+                    sys.stderr.flush()
+            return
+        display_output(out, output_image)
+
+    return hook
+
+
 def exec_command(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
@@ -221,9 +290,10 @@ def exec_command(
         on_session_started=on_sess_started,
     )
     try:
-        # Ensure we are in /content which is the standard Colab working directory
         runtime.execute_code(
-            "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
+            "import os, warnings; "
+            "warnings.filterwarnings('ignore', message='To exit: use'); "
+            "os.makedirs('/content', exist_ok=True); os.chdir('/content')"
         )
     except Exception as e:
         if is_terminal_error(e):
@@ -265,7 +335,7 @@ def exec_command(
 
             outputs = runtime.execute_code(
                 code,
-                output_hook=lambda o: display_output(o, output_image),
+                output_hook=_make_script_output_hook(output_image),
                 timeout=timeout,
             )
             if "cell" in block:
@@ -280,8 +350,9 @@ def exec_command(
                     "cell_id": block.get("id"),
                 },
             )
-            if any(o.get("output_type") == "error" for o in outputs):
-                raise typer.Exit(1)
+            cell_exit_code = _exit_code_from_outputs(outputs)
+            if cell_exit_code != 0:
+                raise typer.Exit(cell_exit_code)
     finally:
         s.running = None
         state.store.add(s)
@@ -324,7 +395,6 @@ def repl(
         on_session_started=on_sess_started,
     )
     try:
-        # Ensure we are in /content which is the standard Colab working directory
         runtime.execute_code(
             "import os; os.makedirs('/content', exist_ok=True); os.chdir('/content')"
         )

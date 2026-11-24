@@ -46,7 +46,12 @@ from colab_cli.client import (
     Shape,
     TooManyAssignmentsError,
 )
-from colab_cli.commands.execution import _build_env_prelude, _parse_env_vars
+from colab_cli.commands.execution import (
+    _build_env_prelude,
+    _exit_code_from_outputs,
+    _make_script_output_hook,
+    _parse_env_vars,
+)
 from colab_cli.commands.session import (
     GPU_ACCELERATORS,
     TPU_ACCELERATORS,
@@ -132,71 +137,6 @@ def _strip_shebang(body: str) -> str:
         nl = body.find("\n")
         return body[nl + 1 :] if nl != -1 else ""
     return body
-
-
-def _is_systemexit(out) -> bool:
-    """True iff this output is a `raise SystemExit(...)` (a.k.a. `sys.exit`)."""
-    return out.get("output_type") == "error" and out.get("ename") == "SystemExit"
-
-
-def _systemexit_code(out) -> int:
-    """Map a SystemExit kernel output back to a CPython-style integer exit code.
-
-    CPython conventions (mirrored):
-      - `sys.exit()` / `sys.exit(None)` / `sys.exit(0)` -> 0
-      - `sys.exit(<int>)`                                -> <int>
-      - `sys.exit('msg')` (any non-int)                  -> 1
-    """
-    evalue = (out.get("evalue") or "").strip()
-    if evalue in ("", "None", "0"):
-        return 0
-    try:
-        return int(evalue)
-    except ValueError:
-        return 1
-
-
-def _exit_code_from_outputs(outputs) -> int:
-    """Derive the CLI's exit code from the kernel's outputs for a single cell.
-
-    A `SystemExit` is treated like CPython would treat the same call from a
-    plain `python script.py` invocation. Any *other* error (uncaught
-    exception, NameError, etc.) is exit 1.
-    """
-    code = 0
-    for o in outputs:
-        if o.get("output_type") != "error":
-            continue
-        if _is_systemexit(o):
-            ec = _systemexit_code(o)
-            # Last SystemExit wins, matching the runtime — and any non-zero
-            # eclipses any prior zero.
-            code = ec if ec != 0 else code
-        else:
-            return 1
-    return code
-
-
-def _make_run_output_hook(output_image=None):
-    """Build an `output_hook` for `runtime.execute_code` that:
-      - Routes normal output to `display_output` (stream/image/error).
-      - Suppresses the `SystemExit` traceback so `sys.exit(0)` is silent (it
-        wouldn't print anything under `python script.py` either) and
-        `sys.exit(N)` doesn't dump a noisy IPython-styled traceback when the
-        intent is "shell exit code N".
-
-    The kernel still RETURNS the SystemExit output to us (so we can derive the
-    exit code in `_exit_code_from_outputs`); we just don't render it.
-    """
-    # Imported here to avoid a circular import via execution.py at module load.
-    from colab_cli.commands.execution import display_output
-
-    def hook(out):
-        if _is_systemexit(out):
-            return
-        display_output(out, output_image)
-
-    return hook
 
 
 def run_command(
@@ -436,7 +376,7 @@ def run_command(
 
         try:
             outputs = runtime.execute_code(
-                payload, output_hook=_make_run_output_hook(), timeout=timeout
+                payload, output_hook=_make_script_output_hook(), timeout=timeout
             )
         except Exception:
             # Genuine transport-level failure. Cleanup still happens via the
