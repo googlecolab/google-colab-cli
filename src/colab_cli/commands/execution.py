@@ -280,6 +280,8 @@ def exec_command(
                     "cell_id": block.get("id"),
                 },
             )
+            if any(o.get("output_type") == "error" for o in outputs):
+                raise typer.Exit(1)
     finally:
         s.running = None
         state.store.add(s)

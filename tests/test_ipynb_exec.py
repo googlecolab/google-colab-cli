@@ -211,6 +211,52 @@ class TestIpynbExec(unittest.TestCase):
             self.assertEqual(len(output_nb.cells[2].outputs), 1)
             self.assertEqual(output_nb.cells[2].outputs[0].text, "cell 2\n")
 
+    @patch("colab_cli.commands.execution.ColabRuntime")
+    @patch("colab_cli.state.StateStore")
+    @patch("colab_cli.commands.execution.typer.echo")
+    def test_exec_ipynb_cell_error_stops_and_exits_nonzero(
+        self,
+        mock_echo,
+        mock_store_class,
+        mock_runtime_class,
+    ):
+        with patch.object(
+            sys, "argv", ["colab", "exec", "-s", "test-s", "-f", self.nb_path]
+        ):
+            mock_store = mock_store_class.return_value
+            mock_store.get.return_value = MagicMock(
+                name="test-s", url="http://url", token="token"
+            )
+
+            mock_runtime = mock_runtime_class.return_value
+            mock_runtime.execute_code.side_effect = [
+                [],
+                [
+                    {
+                        "output_type": "error",
+                        "ename": "RuntimeError",
+                        "evalue": "cell 1 failed",
+                        "traceback": ["RuntimeError: cell 1 failed"],
+                    }
+                ],
+                [{"output_type": "stream", "name": "stdout", "text": "cell 2\n"}],
+            ]
+
+            with patch("builtins.print"), pytest.raises(SystemExit) as error:
+                main()
+
+            assert error.value.code == 1
+            self.assertEqual(mock_runtime.execute_code.call_count, 2)
+
+            output_nb_path = self.nb_path.replace(".ipynb", "_output.ipynb")
+            self.assertTrue(os.path.exists(output_nb_path))
+            with open(output_nb_path, "r", encoding="utf-8") as f:
+                output_nb = nbformat.read(f, as_version=4)
+
+            self.assertEqual(len(output_nb.cells[0].outputs), 1)
+            self.assertEqual(output_nb.cells[0].outputs[0].output_type, "error")
+            self.assertEqual(len(output_nb.cells[2].outputs), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
