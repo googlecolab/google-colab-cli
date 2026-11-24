@@ -88,7 +88,7 @@ def test_attached_session_is_ssh_only(
     (tmp_path / "job.py").write_text("print(1)\n")
     real_state.store.add(fresh_session(*ATT))
     real_state.store.add(fresh_session(*CLI))
-    contents = mocker.patch("colab_cli.contents.requests.request")
+    contents = mocker.patch("colab_cli.contents.requests.request", autospec=True)
     before = (tmp_path / "sessions.json").read_bytes()
 
     args = [command, "-s", "att", *ATTACHED_REFUSED[command]]
@@ -108,7 +108,7 @@ def test_cli_session_on_an_attached_runtime_is_refused(
     (tmp_path / "job.py").write_text("print(1)\n")
     real_state.store.add(fresh_session(*ATT))
     real_state.store.add(fresh_session(*SHARED))
-    contents = mocker.patch("colab_cli.contents.requests.request")
+    contents = mocker.patch("colab_cli.contents.requests.request", autospec=True)
     before = (tmp_path / "sessions.json").read_bytes()
 
     args = [command, "-s", "cli2", *ATTACHED_REFUSED[command]]
@@ -163,6 +163,7 @@ def test_teardown_reads_attached_record_without_ssh_only_refusal(
             ),
             variant=AssignmentVariant.DEFAULT,
         ),
+        autospec=True,
     )
     script = tmp_path / "job.py"
     script.write_text("print(1)\n")
@@ -225,7 +226,7 @@ def test_only_attached_sessions_need_an_explicit_command(
     monkeypatch.chdir(tmp_path)
     (tmp_path / "job.py").write_text("print(1)\n")
     _seed_store(real_state, mocker, records, ())
-    contents = mocker.patch("colab_cli.contents.requests.request")
+    contents = mocker.patch("colab_cli.contents.requests.request", autospec=True)
     before = (tmp_path / "sessions.json").read_bytes()
 
     args = [command, *ATTACHED_REFUSED.get(command, ())]
@@ -251,7 +252,7 @@ def test_stale_cli_and_attached_session_need_explicit_command(real_state, mocker
 
 def test_bare_ssh_with_cli_and_attached_is_ambiguous(real_state, mocker):
     _seed_store(real_state, mocker, (ATT, CLI), BOTH_ASSIGNED)
-    ssh_call = mocker.patch("subprocess.call", return_value=0)
+    ssh_call = mocker.patch("subprocess.call", return_value=0, autospec=True)
 
     result = runner.invoke(app, ["ssh"])
 
@@ -263,7 +264,7 @@ def test_bare_ssh_with_cli_and_attached_is_ambiguous(real_state, mocker):
 @pytest.mark.parametrize("name", ["att", None], ids=["named", "unique"])
 def test_ssh_resolves_attached_session(real_state, mocker, name):
     _seed_store(real_state, mocker, (ATT,), ("att-ep",))
-    ssh_call = mocker.patch("subprocess.call", return_value=0)
+    ssh_call = mocker.patch("subprocess.call", return_value=0, autospec=True)
 
     args = ["ssh", "-s", name] if name else ["ssh"]
     result = runner.invoke(app, args)

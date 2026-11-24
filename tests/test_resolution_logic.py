@@ -35,6 +35,7 @@ def test_resolve_session_no_local_sessions():
 def test_resolve_session_with_local_but_none_on_server():
     state = State()
     state._store = MagicMock()
+    state._store.attached_name_for_endpoint.return_value = None
     # Local session exists
     mock_session = MagicMock(attached=False)
     mock_session.endpoint = "e1"

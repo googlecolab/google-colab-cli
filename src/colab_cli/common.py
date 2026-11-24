@@ -92,9 +92,9 @@ def _exit_only_attached(sessions: Mapping[str, SessionState]) -> NoReturn:
     exit_ssh_only(first, remove + also)
 
 
-def _is_attached_session(store, s: SessionState) -> bool:
-    return s.attached is True or isinstance(
-        store.attached_name_for_endpoint(s.endpoint), str
+def _is_attached_session(store: StateStore, s: SessionState) -> bool:
+    return (
+        s.attached is True or store.attached_name_for_endpoint(s.endpoint) is not None
     )
 
 
@@ -207,7 +207,7 @@ class State:
             if s.attached is True:
                 exit_ssh_only(name)
             attached_name = self.store.attached_name_for_endpoint(s.endpoint)
-            if isinstance(attached_name, str):
+            if attached_name is not None:
                 exit_attached_runtime(name, attached_name)
         if s and (
             not s.token_expires_at
@@ -263,7 +263,7 @@ class State:
         return self._sessions, assignments
 
     def resolve_session(
-        self, session_name: Optional[str], allow_attached: bool = False
+        self, session_name: str | None, allow_attached: bool = False
     ) -> str:
         """Resolves a target session name or selects the sole non-attached one.
 

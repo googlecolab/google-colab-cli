@@ -16,8 +16,9 @@
 
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, create_autospec
 
+from colab_cli.auth import get_credentials as _real_get_credentials
 from colab_cli.state import SessionState
 
 ATT = ("att", "att-ep", True)
@@ -88,8 +89,10 @@ def fresh_session(name: str, endpoint: str, attached: bool) -> SessionState:
 
 def use_guarded_client(local_state, mocker, http_session=None):
     local_state._client = None
-    credentials = mocker.patch("colab_cli.common.get_credentials")
-    credentials.return_value = http_session or RecordingSession()
+    credentials = create_autospec(
+        _real_get_credentials, return_value=http_session or RecordingSession()
+    )
+    mocker.patch("colab_cli.common.get_credentials", new=credentials)
 
 
 def unassigned_endpoints(local_state) -> set[str]:

@@ -97,7 +97,7 @@ def url(
     if s.attached is True:
         exit_ssh_only(name)
     attached_name = state.store.attached_name_for_endpoint(s.endpoint)
-    if isinstance(attached_name, str):
+    if attached_name is not None:
         exit_attached_runtime(name, attached_name)
 
     # Strip a trailing slash so we don't produce `https://host//notebooks/...`

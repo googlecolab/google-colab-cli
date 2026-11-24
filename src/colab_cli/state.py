@@ -185,18 +185,18 @@ class StateStore(_LockedFileStore):
                 return {}
             return self._load_raw(f)
 
-    def attached_name_for_endpoint(self, endpoint: str) -> Optional[str]:
-        """Returns the attached session name using ``endpoint``, if any.
+    def attached_name_for_endpoint(self, endpoint: str) -> str | None:
+        """Returns the attached session key using ``endpoint``, if any.
 
         Args:
           endpoint: Colab runtime endpoint identifier.
 
         Returns:
-          The stored attached session name matching ``endpoint``, or None.
+          The stored attached session key matching ``endpoint``, or None.
         """
-        for session in self.list().values():
+        for key, session in self.list().items():
             if session.attached is True and session.endpoint == endpoint:
-                return session.name
+                return key
         return None
 
     def is_attached_endpoint(self, endpoint: str) -> bool:
