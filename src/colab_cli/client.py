@@ -18,10 +18,11 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -249,8 +250,18 @@ class Client:
         logger=None,
         use_public_api: bool = False,
         settings_store=None,
-        is_attached: Optional[Callable[[str], bool]] = None,
+        is_attached: Callable[[str], bool] | None = None,
     ):
+        """Initializes a Colab API client.
+
+        Args:
+          env: Target Colab environment URLs.
+          session: Authenticated HTTP session for API requests.
+          logger: Optional logger instance.
+          use_public_api: Whether to list runtimes via the public API.
+          settings_store: Optional settings store for caching API support.
+          is_attached: Optional predicate returning True for attached endpoints.
+        """
         self.colab_domain = env.domain
         self.colab_api_domain = env.api
         self.colab_public_api = env.public_api
@@ -427,6 +438,14 @@ class Client:
         return assignments
 
     def unassign(self, endpoint: str):
+        """Unassigns a Colab runtime endpoint.
+
+        Args:
+          endpoint: Runtime endpoint identifier to unassign.
+
+        Raises:
+          AttachedRuntimeError: If the endpoint belongs to an attached runtime.
+        """
         if self._is_attached(endpoint) is True:
             raise AttachedRuntimeError(
                 f"Refusing to unassign '{endpoint}': it is an attached runtime."

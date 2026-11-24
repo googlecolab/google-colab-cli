@@ -46,7 +46,7 @@ def _apply_proxy_info(s: SessionState, info: RuntimeProxyInfo):
 class State:
     def __init__(self):
         self.client_oauth_config = os.path.expanduser("~/.colab-cli-oauth-config.json")
-        self.config_path: Optional[str] = None
+        self.config_path: str | None = None
         self.logtostderr = False
         self.auth_provider = AuthProvider.OAUTH2
         self.use_public_api: Optional[bool] = None
@@ -252,10 +252,7 @@ def setup_logging(log_to_stderr: bool):
     # Its DEBUG output includes stdin replies to the kernel, such as passwords.
     logging.getLogger("jupyter_kernel_client").setLevel(logging.INFO)
 
-    settings_path = state.settings_store.path
-    if not isinstance(settings_path, str):
-        settings_path = SettingsStore().path
-    log_dir = os.path.dirname(settings_path)
+    log_dir = os.path.dirname(state.settings_store.path)
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, "colab.log")
     # FileHandler can't set permissions, so create the file owner-only first.

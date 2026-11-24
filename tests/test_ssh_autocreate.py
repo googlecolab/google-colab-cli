@@ -28,6 +28,7 @@ from unittest.mock import MagicMock
 from click import unstyle
 from colab_cli.cli import app
 from colab_cli.commands import ssh as ssh_module
+from colab_cli.runtime import ColabRuntime
 from colab_cli.state import SessionState, StateStore
 import pytest
 from typer.testing import CliRunner
@@ -356,8 +357,10 @@ def test_ssh_rm_removes_attached_session_without_stopping_runtime(
             )
         )
 
-    mocker.patch("colab_cli.commands.session.new", side_effect=attach_on_create)
-    runtime = mocker.patch("colab_cli.commands.session.ColabRuntime")
+    mocker.patch(
+        "colab_cli.commands.session.new", side_effect=attach_on_create, autospec=True
+    )
+    runtime = mocker.patch("colab_cli.commands.session.ColabRuntime", spec=ColabRuntime)
     _patch_interactive(mocker)
 
     result = runner.invoke(app, ["ssh", "--rm"])
@@ -387,8 +390,8 @@ def test_ssh_rm_proxy_removes_shared_attached_endpoint(
     mock_common_state.store = store
     mock_common_state.resolve_session.side_effect = lambda name, **_: name
     mock_common_state.get_session.side_effect = lambda name, **_: store.get(name)
-    runtime = mocker.patch("colab_cli.commands.session.ColabRuntime")
-    mocker.patch("signal.signal")
+    runtime = mocker.patch("colab_cli.commands.session.ColabRuntime", spec=ColabRuntime)
+    mocker.patch("signal.signal", autospec=True)
     _patch_proxy(mocker)
 
     result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "cli2", "--rm"])

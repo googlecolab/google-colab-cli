@@ -304,7 +304,7 @@ def sessions_command():
         )
 
 
-def _print_status_for(s: SessionState, name: Optional[str] = None) -> None:
+def _print_status_for(s: SessionState, name: str | None = None) -> None:
     """Print one session's status line plus optional last-execution detail."""
     status = f"BUSY ({s.running})" if s.running else "IDLE"
     typer.echo(

@@ -26,6 +26,7 @@ from colab_cli.auth import AuthProvider
 from colab_cli.cli import app
 from colab_cli.client import (
     Assignment,
+    Client,
     ColabRequestError,
     PostAssignmentResponse,
     RuntimeProxyInfo,
@@ -34,6 +35,7 @@ from colab_cli.client import (
 from colab_cli.commands import session as session_cmd
 from colab_cli.common import State
 from colab_cli.consumption import ConsumptionUserInfo
+from colab_cli.history import HistoryLogger
 from colab_cli.state import SessionState, Settings, StateStore
 
 runner = CliRunner()
@@ -886,11 +888,11 @@ def test_cli_logout_adc_prints_gcloud_hint(mock_common_state, mocker):
 
 
 def _real_stop_state(tmp_path, mocker):
-    mocker.patch("colab_cli.cli.auto_update.run_background_check")
+    mocker.patch("colab_cli.cli.auto_update.run_background_check", autospec=True)
     local_state = State()
     local_state._store = StateStore(str(tmp_path / "sessions.json"))
-    local_state._client = MagicMock()
-    local_state._history = MagicMock()
+    local_state._client = MagicMock(spec=Client)
+    local_state._history = MagicMock(spec=HistoryLogger)
     mocker.patch("colab_cli.common.state", local_state)
     mocker.patch("colab_cli.cli.state", local_state)
     return local_state
@@ -967,6 +969,7 @@ def test_stop_all_skips_unassign_for_attached_sessions(tmp_path, mocker):
         local_state,
         "sync_sessions",
         return_value=({"cli1": cli_sess, "nb1": att_sess}, []),
+        autospec=True,
     )
 
     result = runner.invoke(app, ["stop", "--all"])
@@ -988,7 +991,10 @@ def test_stop_all_attached_only_omits_stopped_count(tmp_path, mocker):
     )
     local_state.store.add(att_sess)
     mocker.patch.object(
-        local_state, "sync_sessions", return_value=({"nb1": att_sess}, [])
+        local_state,
+        "sync_sessions",
+        return_value=({"nb1": att_sess}, []),
+        autospec=True,
     )
 
     result = runner.invoke(app, ["stop", "--all"])
@@ -1014,6 +1020,7 @@ def test_stop_all_skips_unassign_when_attached_precedes_shared_cli(tmp_path, moc
         local_state,
         "sync_sessions",
         return_value=({"nb1": att_sess, "cli2": shared_cli}, []),
+        autospec=True,
     )
 
     result = runner.invoke(app, ["stop", "--all"])

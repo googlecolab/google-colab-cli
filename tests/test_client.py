@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import requests
+from google.auth.transport.requests import AuthorizedSession
 
 from colab_cli.client import (
     Accelerator,
@@ -529,8 +530,10 @@ def test_state_client_wires_attached_endpoint_guard(tmp_path, mocker):
     local_state.store.add(
         SessionState(name="nb1", token="t", url="u", endpoint="att-ep", attached=True)
     )
-    mock_http = MagicMock()
-    mocker.patch("colab_cli.common.get_credentials", return_value=mock_http)
+    mock_http = MagicMock(spec=AuthorizedSession)
+    mocker.patch(
+        "colab_cli.common.get_credentials", return_value=mock_http, autospec=True
+    )
 
     with pytest.raises(AttachedRuntimeError, match="att-ep"):
         local_state.client.unassign("att-ep")
