@@ -44,9 +44,15 @@ def mock_session():
     )
 
 
+@pytest.fixture
+def mock_state(mocker, tmp_path):
+    state = mocker.patch("colab_cli.common.state")
+    state.settings_store.path = str(tmp_path / "settings.json")
+    return state
+
+
 @patch("colab_cli.commands.automation.ColabRuntime")
-@patch("colab_cli.common.state")
-def test_cli_auth(mock_state, mock_runtime_class, mock_session):
+def test_cli_auth(mock_runtime_class, mock_state, mock_session):
     mock_state.get_session.return_value = mock_session
     mock_state.resolve_session.return_value = "test-session"
 
@@ -70,8 +76,7 @@ def test_cli_auth(mock_state, mock_runtime_class, mock_session):
 
 
 @patch("colab_cli.commands.automation.ColabRuntime")
-@patch("colab_cli.common.state")
-def test_cli_install(mock_state, mock_runtime_class, mock_session):
+def test_cli_install(mock_runtime_class, mock_state, mock_session):
     mock_state.get_session.return_value = mock_session
     mock_state.resolve_session.return_value = "test-session"
 
@@ -94,8 +99,7 @@ def test_cli_install(mock_state, mock_runtime_class, mock_session):
 
 
 @patch("colab_cli.commands.automation.ColabRuntime")
-@patch("colab_cli.common.state")
-def test_cli_drivemount(mock_state, mock_runtime_class, mock_session):
+def test_cli_drivemount(mock_runtime_class, mock_state, mock_session):
     mock_state.get_session.return_value = mock_session
     mock_state.resolve_session.return_value = "test-session"
 
@@ -120,8 +124,7 @@ def test_cli_drivemount(mock_state, mock_runtime_class, mock_session):
 
 
 @patch("colab_cli.commands.automation.ColabRuntime")
-@patch("colab_cli.common.state")
-def test_cli_auth_uses_long_timeout(mock_state, mock_runtime_class, mock_session):
+def test_cli_auth_uses_long_timeout(mock_runtime_class, mock_state, mock_session):
     """`colab auth` walks the user through a paste-the-code flow that
     routinely takes >10s, so it must pass a generous timeout to
     runtime.execute_code or the call will TimeoutError mid-flow."""
@@ -194,9 +197,8 @@ def _invoke_drivemount_and_get_hook(mock_state, mock_runtime_class, mock_session
 
 @patch("colab_cli.commands.automation.get_credentials")
 @patch("colab_cli.commands.automation.ColabRuntime")
-@patch("colab_cli.common.state")
 def test_drivefs_hook_reports_400_without_raw_html(
-    mock_state, mock_runtime_class, mock_creds, mock_session, capsys
+    mock_runtime_class, mock_creds, mock_state, mock_session, capsys
 ):
     """The multi-account 400 must not echo HTML or re-prompt for consent."""
     hook = _invoke_drivemount_and_get_hook(mock_state, mock_runtime_class, mock_session)
@@ -227,9 +229,8 @@ def test_drivefs_hook_reports_400_without_raw_html(
 
 @patch("colab_cli.commands.automation.get_credentials")
 @patch("colab_cli.commands.automation.ColabRuntime")
-@patch("colab_cli.common.state")
 def test_drivefs_hook_does_not_prompt_when_auth_is_not_the_cause(
-    mock_state, mock_runtime_class, mock_creds, mock_session, capsys
+    mock_runtime_class, mock_creds, mock_state, mock_session, capsys
 ):
     """A refusal without an auth URL must not claim Drive authorization is needed."""
     hook = _invoke_drivemount_and_get_hook(mock_state, mock_runtime_class, mock_session)
@@ -250,9 +251,8 @@ def test_drivefs_hook_does_not_prompt_when_auth_is_not_the_cause(
 
 @patch("colab_cli.commands.automation.get_credentials")
 @patch("colab_cli.commands.automation.ColabRuntime")
-@patch("colab_cli.common.state")
 def test_drivefs_hook_reports_token_request_failure(
-    mock_state, mock_runtime_class, mock_creds, mock_session, capsys
+    mock_runtime_class, mock_creds, mock_state, mock_session, capsys
 ):
     hook = _invoke_drivemount_and_get_hook(mock_state, mock_runtime_class, mock_session)
     mock_creds.return_value.request.side_effect = [
@@ -270,9 +270,8 @@ def test_drivefs_hook_reports_token_request_failure(
 
 @patch("colab_cli.commands.automation.get_credentials")
 @patch("colab_cli.commands.automation.ColabRuntime")
-@patch("colab_cli.common.state")
 def test_drivefs_hook_replies_after_successful_propagation(
-    mock_state, mock_runtime_class, mock_creds, mock_session, capsys
+    mock_runtime_class, mock_creds, mock_state, mock_session, capsys
 ):
     hook = _invoke_drivemount_and_get_hook(mock_state, mock_runtime_class, mock_session)
     mock_creds.return_value.request.side_effect = [
@@ -291,6 +290,8 @@ def test_drivefs_hook_replies_after_successful_propagation(
     out = capsys.readouterr().out
     assert "Credentials propagated" in out
     wsclient.stdin_channel.send.assert_called_once()
+
+
 @patch("colab_cli.commands.automation.open_url_in_browser", return_value=True)
 def test_show_drive_auth_url_opens_browser(mock_open, capsys):
     """The consent URL is printed and handed to the browser opener."""

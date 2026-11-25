@@ -33,12 +33,13 @@ def isolate_keyring():
 
 
 @pytest.fixture(autouse=True)
-def mock_common_state(mocker):
+def mock_common_state(mocker, tmp_path):
     # Patch the state singleton in common.py
     mock_state = mocker.patch("colab_cli.common.state")
 
     # Setup standard mocks for properties
     mock_state.store = MagicMock()
+    mock_state.settings_store.path = str(tmp_path / "settings.json")
     mock_state.client = MagicMock()
     mock_state.history = MagicMock()
     mock_state.auth_provider = AuthProvider.OAUTH2

@@ -18,6 +18,7 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -237,6 +238,10 @@ class TooManyAssignmentsError(Exception):
     pass
 
 
+class AttachedRuntimeError(Exception):
+    """Unassign was refused for an attached runtime."""
+
+
 class Client:
     def __init__(
         self,
@@ -245,7 +250,18 @@ class Client:
         logger=None,
         use_public_api: bool = False,
         settings_store=None,
+        is_attached: Callable[[str], bool] | None = None,
     ):
+        """Initializes a Colab API client.
+
+        Args:
+          env: Target Colab environment URLs.
+          session: Authenticated HTTP session for API requests.
+          logger: Optional logger instance.
+          use_public_api: Whether to list runtimes via the public API.
+          settings_store: Optional settings store for caching API support.
+          is_attached: Optional predicate returning True for attached endpoints.
+        """
         self.colab_domain = env.domain
         self.colab_api_domain = env.api
         self.colab_public_api = env.public_api
@@ -253,6 +269,7 @@ class Client:
         self.logger = logger or logging.getLogger(__name__)
         self.use_public_api = use_public_api
         self.settings_store = settings_store
+        self._is_attached = is_attached or (lambda endpoint: False)
 
     def _auth_error_hint(self, endpoint: str, status_code: int) -> str:
         if status_code not in (401, 403) or self.settings_store is None:
@@ -421,6 +438,18 @@ class Client:
         return assignments
 
     def unassign(self, endpoint: str):
+        """Unassigns a Colab runtime endpoint.
+
+        Args:
+          endpoint: Runtime endpoint identifier to unassign.
+
+        Raises:
+          AttachedRuntimeError: If the endpoint belongs to an attached runtime.
+        """
+        if self._is_attached(endpoint) is True:
+            raise AttachedRuntimeError(
+                f"Refusing to unassign '{endpoint}': it is an attached runtime."
+            )
         url = urljoin(self.colab_domain, f"{TUN_ENDPOINT}/unassign/{endpoint}")
         resp = self._issue_request(url, schema=GetUnassignRequest)
         headers = {COLAB_XSRF_TOKEN_HEADER["key"]: resp.token}

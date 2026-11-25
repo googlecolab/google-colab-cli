@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
@@ -19,8 +20,8 @@ import pytest
 import typer
 
 from colab_cli.client import ListedAssignment
-from colab_cli.common import State
-from colab_cli.state import SessionState, StateStore
+from colab_cli.common import State, setup_logging
+from colab_cli.state import SessionState, SettingsStore, StateStore
 
 
 def _assignment(endpoint, token, expires_in=3600):
@@ -146,3 +147,61 @@ def test_state_client_use_public_api_precedence(
     mocker.patch("colab_cli.common.get_credentials", return_value=MagicMock())
 
     assert st.client.use_public_api is expected
+
+
+def test_get_session_refresh_preserves_attached_flag(real_state):
+    attached_session = _session(None)
+    attached_session.attached = True
+    real_state.store.add(attached_session)
+    real_state.client.list_assignments.return_value = [_assignment("ep1", "new-token")]
+
+    refreshed = real_state.get_session("s1")
+
+    assert refreshed is not None and refreshed.attached is True
+    assert refreshed.token == "new-token"
+    assert real_state.store.get("s1").attached is True
+
+
+def test_sync_sessions_preserves_attached_flag(real_state):
+    attached_session = _session(None)
+    attached_session.attached = True
+    real_state.store.add(attached_session)
+    real_state.client.list_assignments.return_value = [_assignment("ep1", "new-token")]
+
+    sessions, _ = real_state.sync_sessions()
+
+    assert sessions["s1"].attached is True
+    assert real_state.store.get("s1").attached is True
+
+
+def test_state_store_derives_default_path_from_settings_store(tmp_path):
+    settings_dir = tmp_path / "cfg"
+    local_state = State()
+    local_state._settings_store = SettingsStore(str(settings_dir / "settings.json"))
+
+    assert local_state.store.path == str(settings_dir / "sessions.json")
+
+
+def test_state_store_uses_explicit_config_path(tmp_path):
+    override = tmp_path / "override.json"
+    local_state = State()
+    local_state._settings_store = SettingsStore(str(tmp_path / "cfg" / "settings.json"))
+    local_state.config_path = str(override)
+
+    assert local_state.store.path == str(override)
+
+
+def test_setup_logging_uses_settings_store_directory(tmp_path, monkeypatch):
+    settings_dir = tmp_path / "custom-log-dir"
+    local_state = State()
+    local_state._settings_store = SettingsStore(str(settings_dir / "settings.json"))
+    monkeypatch.setattr("colab_cli.common.state", local_state)
+    root_logger = logging.getLogger()
+    monkeypatch.setattr(root_logger, "handlers", [])
+    try:
+        setup_logging(False)
+        logging.getLogger("colab_cli.test").info("hello-from-settings-dir")
+    finally:
+        root_logger.handlers[0].close()
+
+    assert "hello-from-settings-dir" in (settings_dir / "colab.log").read_text()

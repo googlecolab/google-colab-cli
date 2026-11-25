@@ -25,12 +25,13 @@ from typer.testing import CliRunner
 from colab_cli.cli import app
 from colab_cli.client import (
     Accelerator,
+    AttachedRuntimeError,
     PostAssignmentResponse,
     RuntimeProxyInfo,
     TooManyAssignmentsError,
     Variant,
 )
-from colab_cli.state import SessionState
+from colab_cli.state import SessionState, StateStore
 
 runner = CliRunner()
 
@@ -719,3 +720,67 @@ def test_run_with_timeout_flag(
     code_calls = mock_runtime.execute_code.call_args_list
     body_call = next(c for c in code_calls if "hello from script" in c.args[0])
     assert body_call.kwargs.get("timeout") == 3600.0
+
+
+def test_teardown_skips_kernel_and_keeps_attached_record(
+    mock_common_state,
+    mock_client,
+    mock_runtime_class,
+    assign_response,
+    script_path,
+    tmp_path,
+):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    mock_common_state.store = store
+    mock_common_state.get_session.side_effect = lambda name, **_: store.get(name)
+    mock_client.assign.return_value = assign_response
+    mock_client.unassign.side_effect = AttachedRuntimeError("attached")
+
+    def add_attached_mid_run(code, **kwargs):
+        if "hello from script" in code:
+            store.add(
+                SessionState(
+                    name="nb1",
+                    token="t",
+                    url="http://u",
+                    endpoint="ep-123",
+                    attached=True,
+                )
+            )
+        return []
+
+    mock_runtime_class.return_value.execute_code.side_effect = add_attached_mid_run
+
+    result = runner.invoke(app, ["run", "-s", "job1", str(script_path)])
+
+    assert result.exit_code == 0, result.output
+    mock_runtime_class.return_value.stop.assert_called_once_with()
+    assert store.get("job1") is not None
+    assert store.get("nb1") is not None
+    assert "colab stop -s job1" in result.stderr
+
+
+def test_teardown_keeps_record_and_prints_retry_hint_when_unassign_fails(
+    mock_common_state,
+    mock_client,
+    mock_runtime_class,
+    assign_response,
+    script_path,
+    tmp_path,
+):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    mock_common_state.store = store
+    mock_common_state.get_session.side_effect = lambda name, **_: store.get(name)
+    mock_client.assign.return_value = assign_response
+    mock_runtime_class.return_value.execute_code.return_value = []
+    mock_client.unassign.side_effect = RuntimeError("network error")
+
+    result = runner.invoke(app, ["run", "-s", "job1", str(script_path)])
+
+    assert result.exit_code == 0, result.output
+    mock_runtime_class.return_value.stop.assert_any_call(shutdown_kernel=True)
+    assert store.get("job1") is not None
+    assert (
+        "[colab] Could not release runtime 'ep-123'; run 'colab stop -s job1'"
+        " to retry." in result.stderr
+    )

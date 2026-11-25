@@ -423,7 +423,11 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
     try:
         # The script may have outlived the proxy token.
         fresh = state.get_session(name, ignore_missing_session=True)
-        if fresh:
+        if (
+            fresh
+            and fresh.attached is not True
+            and state.store.is_attached_endpoint(fresh.endpoint) is not True
+        ):
             rt = ColabRuntime(fresh.url, fresh.token, kernel_id=fresh.kernel_id)
             rt.stop(shutdown_kernel=True)
     except Exception:
@@ -432,10 +436,17 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
     try:
         state.client.unassign(s.endpoint)
     except Exception:
-        pass
+        typer.echo(
+            f"[colab] Could not release runtime '{s.endpoint}'; run"
+            f" 'colab stop -s {name}' to retry.",
+            err=True,
+        )
+        return
 
     try:
-        state.store.remove(name)
+        stored = state.store.get(name)
+        if stored is None or stored.attached is not True:
+            state.store.remove(name)
     except Exception:
         pass
 

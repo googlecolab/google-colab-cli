@@ -28,6 +28,8 @@ from unittest.mock import MagicMock
 from click import unstyle
 from colab_cli.cli import app
 from colab_cli.commands import ssh as ssh_module
+from colab_cli.runtime import ColabRuntime
+from colab_cli.state import SessionState, StateStore
 import pytest
 from typer.testing import CliRunner
 import typer
@@ -238,7 +240,7 @@ def test_proxy_mode_rm_teardown(mock_common_state, mocker, rm, expect_stop):
         mock_common_state.store.get.return_value = created
 
     mocker.patch("colab_cli.commands.session.new", side_effect=after_new)
-    stop = mocker.patch("colab_cli.commands.session.stop")
+    stop = mocker.patch("colab_cli.commands.session.stop_session", autospec=True)
     mocker.patch("signal.signal")  # don't install real handlers during tests
     _patch_proxy(mocker)
 
@@ -248,7 +250,7 @@ def test_proxy_mode_rm_teardown(mock_common_state, mocker, rm, expect_stop):
     result = runner.invoke(app, args)
     assert result.exit_code == 0
     if expect_stop:
-        stop.assert_called_once_with(session="colab-ephem")
+        stop.assert_called_once_with("colab-ephem")
     else:
         stop.assert_not_called()
 
@@ -270,13 +272,13 @@ def test_interactive_rm_teardown(mock_common_state, mocker, has_existing, expect
     mock_common_state.store.get.return_value = sess
 
     mocker.patch("colab_cli.commands.session.new")
-    stop = mocker.patch("colab_cli.commands.session.stop")
+    stop = mocker.patch("colab_cli.commands.session.stop_session", autospec=True)
     _patch_interactive(mocker)
 
     result = runner.invoke(app, ["ssh", "--rm"])
     assert result.exit_code == 0
     if expect_stop:
-        stop.assert_called_once_with(session="auto-rm")
+        stop.assert_called_once_with("auto-rm")
     else:
         stop.assert_not_called()
 
@@ -299,7 +301,7 @@ def test_proxy_mode_signal_handler_installation(
     mock_common_state.store.get.return_value = _make_session("colab")
     mock_common_state.resolve_session.return_value = "colab"
     sigmock = mocker.patch("signal.signal")
-    mocker.patch("colab_cli.commands.session.stop")
+    mocker.patch("colab_cli.commands.session.stop_session", autospec=True)
     _patch_proxy(mocker)
 
     args = ["ssh", "--proxy-mode", "-s", "colab"]
@@ -331,3 +333,75 @@ def test_ssh_help_advertises_autocreate_flags(mocker, force_color):
     assert result.exit_code == 0
     for flag in ("--rm", "--gpu", "--tpu"):
         assert flag in unstyle(result.output)
+
+
+def test_ssh_rm_removes_attached_session_without_stopping_runtime(
+    mock_common_state, tmp_path, mocker
+):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    mock_common_state.store = store
+    mock_common_state.resolve_session.side_effect = lambda name, **_: name
+    mock_common_state.get_session.side_effect = lambda name, **_: store.get(name)
+    created_names = []
+
+    def attach_on_create(session=None, **_):
+        assert session is not None
+        created_names.append(session)
+        store.add(
+            SessionState(
+                name=session,
+                token="t",
+                url="https://u",
+                endpoint="ep-nb1",
+                attached=True,
+            )
+        )
+
+    mocker.patch(
+        "colab_cli.commands.session.new", side_effect=attach_on_create, autospec=True
+    )
+    runtime = mocker.patch("colab_cli.commands.session.ColabRuntime", spec=ColabRuntime)
+    _patch_interactive(mocker)
+
+    result = runner.invoke(app, ["ssh", "--rm"])
+
+    assert result.exit_code == 0, result.output
+    assert len(created_names) == 1
+    name = created_names[0]
+    runtime.assert_not_called()
+    mock_common_state.client.unassign.assert_not_called()
+    assert store.get(name) is None
+    assert (
+        f"[colab] {name!r} wasn't created by the cli and isn't stopped,"
+        " only removed from sessions list" in result.output
+    )
+
+
+def test_ssh_rm_proxy_removes_shared_attached_endpoint(
+    mock_common_state, tmp_path, mocker
+):
+    store = StateStore(str(tmp_path / "sessions.json"))
+    store.add(
+        SessionState(
+            name="nb1", token="t", url="https://u", endpoint="ep1", attached=True
+        )
+    )
+    store.add(SessionState(name="cli2", token="t", url="https://u", endpoint="ep1"))
+    mock_common_state.store = store
+    mock_common_state.resolve_session.side_effect = lambda name, **_: name
+    mock_common_state.get_session.side_effect = lambda name, **_: store.get(name)
+    runtime = mocker.patch("colab_cli.commands.session.ColabRuntime", spec=ColabRuntime)
+    mocker.patch("signal.signal", autospec=True)
+    _patch_proxy(mocker)
+
+    result = runner.invoke(app, ["ssh", "--proxy-mode", "-s", "cli2", "--rm"])
+
+    assert result.exit_code == 0, result.output
+    runtime.assert_not_called()
+    mock_common_state.client.unassign.assert_not_called()
+    assert store.get("cli2") is None
+    assert store.get("nb1") is not None
+    assert (
+        "[colab] 'cli2' wasn't created by the cli and isn't stopped,"
+        " only removed from sessions list" in result.stderr
+    )

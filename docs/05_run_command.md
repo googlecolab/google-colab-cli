@@ -1,6 +1,10 @@
 ---
 log:
 2026-11-23: Moved CPython `SystemExit` helpers (`_exit_code_from_outputs`, `_make_script_output_hook`) to `commands/execution.py` so `colab exec` and `colab run` share identical exit-code and `stderr` message semantics (including printing non-integer `sys.exit("msg")` messages to `stderr`).
+2026-11-18: `colab run` teardown skips kernel shutdown when the session or
+  endpoint is attached, keeps the session record with a `colab stop -s <name>`
+  retry hint when `unassign` fails (including `AttachedRuntimeError`), and
+  preserves any concurrently written attached record under the same name.
 2026-09-25: Removed keep-alive daemon spawning from session allocation and teardown. `--keep` remains supported and skips unassignment on completion.
 2026-08-09: Added `--high-mem` flag (passthrough to session creation; sends `shape=hm` on assign when supported).
 2026-05-12: Initial design and implementation of `colab run <script.py> [args...]`. Combines `colab new` + `colab exec` + `colab stop` into a single fire-and-forget invocation so a Python file can use `#!/usr/bin/env -S colab run` as a shebang line and execute on a freshly-allocated Colab VM. Adds `--keep` (skip auto-stop), `--gpu` / `--tpu` (passthrough to session creation), `-s/--session` (name the ephemeral session), and propagates the script's exit status (non-zero on any uncaught exception in the kernel). The script's `sys.argv` is re-set inside the kernel to mirror native `python script.py arg1 arg2` semantics, and `__name__` is set to `"__main__"`.
@@ -62,9 +66,13 @@ print(torch.cuda.get_device_name(0))
    Then executes the script body in the same kernel cell so any `if __name__ == "__main__":` guard fires.
 3. **Detect failure**: If the kernel returns any output of `output_type == "error"` (uncaught exception, syntax error, etc.) the CLI exits non-zero.
 4. **Tear down**: In a `finally` block, unless `--keep` was passed, the CLI:
-   - Sends `runtime.stop(shutdown_kernel=True)` (best-effort).
-   - Calls `state.client.unassign(endpoint)` to free the billable VM.
-   - Removes the session from `StateStore`.
+   - Sends `runtime.stop(shutdown_kernel=True)` (best-effort) unless the
+     session or its endpoint is marked `attached` in `StateStore`.
+   - Calls `state.client.unassign(endpoint)` to free the billable VM. If
+     unassignment fails (including `AttachedRuntimeError`), keeps the local
+     session record and prints a `colab stop -s <name>` retry hint.
+   - Removes the session from `StateStore` once unassigned, unless a concurrent
+     attached record replaced it under the same name.
    - Logs `session_terminated` with `reason="run_completed"` (or `"run_failed"`).
 
 If `--keep` is set, the session remains visible in `colab sessions` and `colab status` and can be reused with `colab exec -s <name>`, `colab repl -s <name>`, etc., until the user runs `colab stop` (or the backend reclaims it due to inactivity).

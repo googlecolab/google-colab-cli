@@ -38,9 +38,12 @@ SESSION = SessionState(name="s", token="t", url="https://h", endpoint="e")
 
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
+def home(tmp_path, monkeypatch, mock_common_state):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    mock_common_state.settings_store.path = str(
+        tmp_path / ".config" / "colab-cli" / "settings.json"
+    )
     monkeypatch.setattr(logging.getLogger(), "handlers", [])
     levels = {name: logging.getLogger(name).level for name in LOGGER_NAMES}
     yield tmp_path

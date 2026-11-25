@@ -230,7 +230,7 @@ def _stop_session(name: str) -> None:
     from colab_cli.commands import session as session_cmd
 
     try:
-        session_cmd.stop(session=name)
+        session_cmd.stop_session(name)
     except typer.Exit:
         raise
     except Exception as e:  # Cleanup must not mask the shell's own exit.
