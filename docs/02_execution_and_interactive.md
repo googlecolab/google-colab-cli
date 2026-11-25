@@ -38,7 +38,9 @@ Execution involves sending Python code (or shell commands) to the Jupyter kernel
 - **Multi-Modal Output**: Handle `display_data` messages (e.g., `image/png`, `text/html`). For the CLI, we'll save images to temporary files and print their paths, or if the terminal supports it (e.g., iTerm2), inline them.
 - **Timeout Configuration**: Exposes a `--timeout` flag (default 30s): the longest silence allowed before execution fails. Raise it so long-running silent tasks (like model compilation or data downloading) are not prematurely killed; `0` means no limit.
 - **Error & `SystemExit` Semantics**:
-    - Any uncaught exception (`ValueError`, `SyntaxError`, etc.) causes `colab exec` to exit with status `1` (stopping remaining cells in a `.ipynb` notebook while still writing `*_output.ipynb`).
+    - Any uncaught exception (`ValueError`, `SyntaxError`, etc.) causes `colab exec` to exit with status `1`
+    - Any executed code block that returns an `output_type == "error"` causes colab to exit with status `11
+    - Any exit code stops remaining cells in a `.ipynb` notebook while still writing `*_output.ipynb`.
     - **Why `SystemExit` is handled specially**: Unlike CPython—where `sys.exit(...)` terminates the process directly—an IPython/Jupyter kernel must stay alive across executions, so it catches `SystemExit` and reports it as `output_type == "error"` (`ename == "SystemExit"`), accompanied by an interactive `"An exception has occurred, use %tb..."` banner and `"To exit: use 'exit', 'quit', or Ctrl-D."` `UserWarning`. Treating `SystemExit` like an uncaught exception breaks well-formed scripts passed to `colab exec -f script.py` (such as `argparse --help`, `unittest.main()`, or early-exit guards calling `sys.exit(0)`) and loses custom integer exit codes (`sys.exit(N)`). `colab exec` therefore shares `colab run`'s CPython mapping: `sys.exit()` / `sys.exit(None)` / `sys.exit(0)` exit `0` silently, `sys.exit(N)` exits `N` silently, and `sys.exit("msg")` prints `msg` to `stderr` and exits `1`.
 
 ## Implementation Details
