@@ -17,11 +17,14 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, call, patch
 
 import click
+from keyring.errors import KeyringError
 import pytest
 import typer
 from typer.testing import CliRunner
 
+from colab_cli.auth import AuthProvider
 from colab_cli.cli import app
+from colab_cli.state import SessionState, Settings
 from colab_cli.client import (
     Assignment,
     ColabRequestError,
@@ -773,3 +776,108 @@ def test_cli_test_public_api_hidden_and_reports_status(mock_common_state):
     assert res.exit_code == 0
     assert "Public API" in res.output
     assert "Tunnel API" in res.output
+
+
+def test_cli_logout_removes_token(mock_common_state, mock_store, mocker):
+    mock_store.list.return_value = {}
+    mock_common_state.settings_store.load.return_value = Settings()
+    m_clear = mocker.patch("colab_cli.auth.clear_oauth_token", return_value=True)
+    m_creds = mocker.patch("colab_cli.auth.get_credentials")
+    m_update = mocker.patch("colab_cli.auto_update.run_background_check")
+
+    res = runner.invoke(app, ["logout"])
+
+    assert res.exit_code == 0
+    m_clear.assert_called_once_with()
+    m_creds.assert_not_called()
+    m_update.assert_not_called()
+    assert "Logged out." in res.stdout
+
+
+def test_cli_logout_already_logged_out(mock_common_state, mock_store, mocker):
+    mock_store.list.return_value = {}
+    mock_common_state.settings_store.load.return_value = Settings()
+    m_clear = mocker.patch("colab_cli.auth.clear_oauth_token", return_value=False)
+
+    res = runner.invoke(app, ["logout"])
+
+    assert res.exit_code == 0
+    m_clear.assert_called_once_with()
+    assert "Already logged out." in res.stdout
+
+
+def test_cli_logout_invalidates_session_tokens_and_warns(
+    mock_common_state, mock_store, mocker
+):
+    sess = SessionState(
+        name="s1",
+        token="live-proxy-token",
+        url="https://u",
+        endpoint="e1",
+        token_expires_at=datetime.now(timezone.utc) + timedelta(minutes=50),
+    )
+    mock_store.list.return_value = {"s1": sess}
+    mock_common_state.settings_store.load.return_value = Settings()
+    mocker.patch("colab_cli.auth.clear_oauth_token", return_value=True)
+
+    res = runner.invoke(app, ["logout"])
+
+    assert res.exit_code == 0
+    assert sess.token == ""
+    assert sess.token_expires_at is None
+    mock_store.add.assert_called_once_with(sess)
+    assert "Logged out." in res.stdout
+    assert "1 local session(s)" in res.stderr
+    assert "previous account" in res.stderr
+
+
+def test_cli_logout_resets_cached_api_capabilities(
+    mock_common_state, mock_store, mocker
+):
+    mock_store.list.return_value = {}
+    settings = Settings(public_api_supported=True, tunnel_api_supported=False)
+    mock_common_state.settings_store.load.return_value = settings
+    mocker.patch("colab_cli.auth.clear_oauth_token", return_value=True)
+
+    res = runner.invoke(app, ["logout"])
+
+    assert res.exit_code == 0
+    assert settings.public_api_supported is None
+    assert settings.tunnel_api_supported is None
+    mock_common_state.settings_store.save.assert_called_once_with(settings)
+
+
+def test_cli_logout_store_error_warns_without_crashing(
+    mock_common_state, mock_store, mocker
+):
+    mock_store.list.side_effect = TimeoutError("lock timeout")
+    mock_common_state.settings_store.load.return_value = Settings()
+    mocker.patch("colab_cli.auth.clear_oauth_token", return_value=True)
+
+    res = runner.invoke(app, ["logout"])
+
+    assert res.exit_code == 0
+    assert "Logged out." in res.stdout
+    assert "Warning:" in res.stderr
+
+
+def test_cli_logout_keyring_error_exits_nonzero(mock_common_state, mock_store, mocker):
+    mock_store.list.return_value = {}
+    mocker.patch("colab_cli.auth.clear_oauth_token", side_effect=KeyringError("denied"))
+
+    res = runner.invoke(app, ["logout"])
+
+    assert res.exit_code == 1
+    assert "Failed to clear OAuth token" in res.stderr
+
+
+def test_cli_logout_adc_prints_gcloud_hint(mock_common_state, mocker):
+    mocker.patch("colab_cli.cli.state", mock_common_state)
+    m_clear = mocker.patch("colab_cli.auth.clear_oauth_token")
+
+    res = runner.invoke(app, ["--auth", "adc", "logout"])
+
+    assert res.exit_code == 0
+    assert mock_common_state.auth_provider == AuthProvider.ADC
+    m_clear.assert_not_called()
+    assert "gcloud auth application-default revoke" in res.output

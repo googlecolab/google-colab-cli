@@ -24,6 +24,9 @@ from typing import Optional
 
 import google.auth
 import keyring
+from keyring.backends import chainer
+from keyring.backends.null import Keyring as _NullKeyring
+from keyring.errors import NoKeyringError, PasswordDeleteError
 import typer
 from google.auth.transport import requests
 from google.auth.transport.requests import Request
@@ -139,6 +142,73 @@ def _save_token_to_keyring(token_json: str) -> None:
         keyring.set_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME, token_json)
 
     _run_with_timeout(set_password, timeout=KEYRING_TIMEOUT_SECONDS)
+
+
+def _is_not_found_delete_error(backend, exc: PasswordDeleteError) -> bool:
+    cause = exc.__cause__
+    if cause is not None:
+        if type(cause).__name__ == "NotFound":
+            return True
+        if type(cause).__module__.startswith("keyring.backends.macOS"):
+            return False
+    return backend.get_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME) is None
+
+
+def _delete_token_from_keyring() -> bool:
+    def delete_password() -> bool:
+        _check_linux_keyring_locked()
+        kr = keyring.get_keyring()
+        backends = list(kr.backends) if isinstance(kr, chainer.ChainerBackend) else [kr]
+        removed = False
+        errors: list[Exception] = []
+        no_keyring_warned = False
+        for backend in backends:
+            if isinstance(backend, _NullKeyring):
+                continue
+            try:
+                backend.delete_password(KEYRING_SERVICE_NAME, KEYRING_USERNAME)
+                removed = True
+            except NotImplementedError:
+                continue
+            except NoKeyringError:
+                if not no_keyring_warned:
+                    typer.echo(
+                        "[colab] Warning: No OS keyring available; could not "
+                        "check or clear keyring credentials.",
+                        err=True,
+                    )
+                    no_keyring_warned = True
+            except PasswordDeleteError as exc:
+                try:
+                    if not _is_not_found_delete_error(backend, exc):
+                        errors.append(exc)
+                except Exception as check_exc:
+                    errors.append(check_exc)
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
+        return removed
+
+    return _run_with_timeout(delete_password, timeout=KEYRING_TIMEOUT_SECONDS)
+
+
+def clear_oauth_token() -> bool:
+    """Remove any stored OAuth2 token from legacy disk storage and the OS keyring."""
+    errors: list[Exception] = []
+    removed_legacy = False
+    removed_keyring = False
+    try:
+        removed_legacy = _remove_legacy_token(raise_on_error=True)
+    except Exception as exc:
+        errors.append(exc)
+    try:
+        removed_keyring = _delete_token_from_keyring()
+    except Exception as exc:
+        errors.append(exc)
+    if errors:
+        raise errors[0]
+    return removed_legacy or removed_keyring
 
 
 # Remote copy-paste OAuth flow.
@@ -266,14 +336,20 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
     return creds
 
 
-def _remove_legacy_token() -> None:
-    """Removes the legacy token file if it exists."""
+def _remove_legacy_token(raise_on_error: bool = False) -> bool:
+    """Removes the legacy token file if it exists and reports whether it was removed."""
     if not os.path.exists(LEGACY_TOKEN_PATH):
-        return
+        return False
     try:
         os.remove(LEGACY_TOKEN_PATH)
+        return True
+    except FileNotFoundError:
+        return False
     except OSError as e:
+        if raise_on_error:
+            raise
         logger.warning(f"Failed to remove legacy token {LEGACY_TOKEN_PATH}: {e}")
+        return False
 
 
 def _get_adc_credentials() -> Credentials:
