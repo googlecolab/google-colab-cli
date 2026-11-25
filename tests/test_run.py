@@ -663,6 +663,8 @@ def test_run_systemexit_string_message_exits_one(
 
     result = runner.invoke(app, ["run", str(script_path)])
     assert result.exit_code == 1
+    assert "boom\n" in result.stderr
+    assert "An exception has occurred" not in result.output + result.stderr
     mock_client.unassign.assert_called_once_with("ep-123")
 
 

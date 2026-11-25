@@ -1,5 +1,7 @@
 ---
 log:
+2026-11-23: Shared `colab run`'s CPython `SystemExit` handling (`_exit_code_from_outputs`, `_make_script_output_hook`) with `colab exec` and muted IPython's `"To exit: use ..."` warning during `exec` setup. Because a persistent IPython kernel catches `SystemExit` and emits it as `output_type == "error"` to avoid killing the kernel process, treating every kernel error output as exit 1 wrongly failed scripts that call `sys.exit(0)` (e.g. `argparse --help`, `unittest.main()`) and collapsed `sys.exit(N)` codes into 1.
+
 2026-11-23: `colab exec` now exits 1 when executed code produces a kernel `error` output (after recording history and saving `*_output.ipynb` for notebooks, stopping further notebook cells) (#250).
 
 2026-05-07: Fixed `colab console` piped-stdin handling. Previously a piped invocation (e.g. `echo 'cmd' | colab console -s s`) sent the command and then hung indefinitely because the previous EOF handler emitted a bare `\x04` (Ctrl-D), which the remote `tmux`-wrapped bash treats as a literal character rather than a session terminator. The new handler sends `exit\n` (which bash actually exits on) and then closes the websocket from the client side after a short grace period (`PIPED_EOF_GRACE_SECONDS = 0.5s`) so any tail output (bash `logout`, tmux `[exited]`) makes it back to the user. TTY mode is unchanged: real-terminal EOF is left to the remote shell. Verified live: `echo 'echo HELLO' | colab console -s s` now exits in ~1.2s instead of hanging.
@@ -35,7 +37,11 @@ Execution involves sending Python code (or shell commands) to the Jupyter kernel
     - If file path is remote: Execute `!python <path>`.
 - **Multi-Modal Output**: Handle `display_data` messages (e.g., `image/png`, `text/html`). For the CLI, we'll save images to temporary files and print their paths, or if the terminal supports it (e.g., iTerm2), inline them.
 - **Timeout Configuration**: Exposes a `--timeout` flag (default 30s): the longest silence allowed before execution fails. Raise it so long-running silent tasks (like model compilation or data downloading) are not prematurely killed; `0` means no limit.
-- **Error Exit Status**: Exits with status 1 if any executed code block returns an `output_type == "error"` output from the kernel (stopping remaining cells when executing a `.ipynb` notebook while still writing `*_output.ipynb`).
+- **Error & `SystemExit` Semantics**:
+    - Any uncaught exception (`ValueError`, `SyntaxError`, etc.) causes `colab exec` to exit with status `1`
+    - Any executed code block that returns an `output_type == "error"` causes colab to exit with status `11
+    - Any exit code stops remaining cells in a `.ipynb` notebook while still writing `*_output.ipynb`.
+    - **Why `SystemExit` is handled specially**: Unlike CPython—where `sys.exit(...)` terminates the process directly—an IPython/Jupyter kernel must stay alive across executions, so it catches `SystemExit` and reports it as `output_type == "error"` (`ename == "SystemExit"`), accompanied by an interactive `"An exception has occurred, use %tb..."` banner and `"To exit: use 'exit', 'quit', or Ctrl-D."` `UserWarning`. Treating `SystemExit` like an uncaught exception breaks well-formed scripts passed to `colab exec -f script.py` (such as `argparse --help`, `unittest.main()`, or early-exit guards calling `sys.exit(0)`) and loses custom integer exit codes (`sys.exit(N)`). `colab exec` therefore shares `colab run`'s CPython mapping: `sys.exit()` / `sys.exit(None)` / `sys.exit(0)` exit `0` silently, `sys.exit(N)` exits `N` silently, and `sys.exit("msg")` prints `msg` to `stderr` and exits `1`.
 
 ## Implementation Details
 - **Kernel Management**: `ColabRuntime` (from `colab-agent`) already handles message signing and message types.
@@ -50,6 +56,7 @@ TDD is mandatory for all execution features.
 - **Test Case**: Verify `iopub.stream` messages are correctly handled and printed to `stdout` in real-time.
 - **Test Case**: Verify `display_data` (specifically `image/png`) triggers the correct local handling (saving or display).
 - **Test Case**: Verify `colab exec` exits with status 1 when the kernel emits an `error` output, and halts multi-cell `.ipynb` execution at the failing cell while still saving `*_output.ipynb`.
+- **Test Case**: Verify `colab exec` applies CPython `SystemExit` semantics (`sys.exit(0)`/`None` → `0` silently, `sys.exit(N)` → `N`, `sys.exit("msg")` → prints `msg` to `stderr` and exits `1`) without IPython `%tb` or exit-warning noise.
 
 ### 2. TTY and Piping
 - **Test Case**: Mock `sys.stdin.isatty()` to verify `colab repl` correctly switches between interactive mode and one-shot piped execution.
