@@ -21,6 +21,11 @@ import requests
 from colab_cli.state import SessionState
 from colab_cli.utils import get_status_code
 
+# (connect, read) seconds. The read timeout bounds the wait between bytes, not
+# the whole transfer, so large uploads/downloads still finish; a dropped
+# connection fails instead of hanging forever.
+REQUEST_TIMEOUT = (30, 300)
+
 
 class ContentsClient:
     def __init__(self, session_state: SessionState):
@@ -38,7 +43,9 @@ class ContentsClient:
         if params:
             req_params.update(params)
 
-        response = requests.request(method, url, params=req_params, json=json_data)
+        response = requests.request(
+            method, url, params=req_params, json=json_data, timeout=REQUEST_TIMEOUT
+        )
 
         if get_status_code(response) == 404:
             raise FileNotFoundError(f"File or directory not found: {path}")
