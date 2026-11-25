@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Dict, Optional, Tuple, Iterator, IO
 
 import filelock
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SessionState(BaseModel):
@@ -37,12 +37,23 @@ class SessionState(BaseModel):
     running: Optional[str] = None
 
 
+class UpdateNotice(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    affects: str
+    message: str
+
+
 class Settings(BaseModel):
     update_url: str = "https://pypi.org/pypi/google-colab-cli/json"
+    notices_url: str = (
+        "https://raw.githubusercontent.com/googlecolab/google-colab-cli/"
+        "refs/tags/notices/notices.json"
+    )
     last_check: Optional[datetime] = None
     enable_update_check: bool = True
-    # Highest version seen on the update source; cached for the banner.
     latest_version: Optional[str] = None
+    update_notices: list[UpdateNotice] = Field(default_factory=list)
     use_public_api: bool = False
     public_api_supported: Optional[bool] = None
     tunnel_api_supported: Optional[bool] = None

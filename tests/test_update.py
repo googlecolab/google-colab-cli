@@ -12,14 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import io
 import json
+import urllib.error
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from typer.testing import CliRunner
 
 from colab_cli.cli import app
-from colab_cli.state import Settings
+from colab_cli.state import Settings, UpdateNotice
 
 runner = CliRunner()
 
@@ -42,6 +44,7 @@ def fake_settings(mocker):
     def _build(**overrides):
         kwargs = {
             "update_url": "http://test.url",
+            "notices_url": "http://notices.url",
             "last_check": None,
             **overrides,
         }
@@ -581,3 +584,291 @@ def test_install_flag_propagates_pip_failure(
 
     result = runner.invoke(app, ["update", "--install"])
     assert result.exit_code == 2
+
+
+@pytest.fixture
+def mock_update_sources(mocker):
+    """Stub ``urllib.request.urlopen`` separately for PyPI and notices URLs."""
+
+    def _http_404(url):
+        return urllib.error.HTTPError(url, 404, "Not Found", {}, io.BytesIO(b""))
+
+    def _mock(*, pypi=None, notices="404"):
+        def _urlopen(req, timeout=5):
+            url = req.full_url if hasattr(req, "full_url") else req
+            target = notices if "notices" in url else pypi
+            if target == "404":
+                raise _http_404(url)
+            if isinstance(target, BaseException):
+                raise target
+            cm = mocker.MagicMock()
+            cm.__enter__.return_value.read.return_value = json.dumps(target).encode(
+                "utf-8"
+            )
+            return cm
+
+        return mocker.patch("urllib.request.urlopen", side_effect=_urlopen)
+
+    return _mock
+
+
+def test_standalone_notice_shown_when_up_to_date_on_explicit_update(
+    app_version, fake_settings, mock_update_sources
+):
+    app_version("1.0.0")
+    mock_update_sources(
+        pypi={"info": {"version": "1.0.0"}},
+        notices=[
+            {
+                "affects": "<=1.0.0",
+                "message": "Tunnel backend retires soon; enable --public-api.",
+            }
+        ],
+    )
+    fake_settings()
+
+    result = runner.invoke(app, ["update"])
+    assert result.exit_code == 0
+    assert "up to date (version: 1.0.0, latest: 1.0.0)" in result.output
+    assert (
+        "[colab] Notice: Tunnel backend retires soon; enable --public-api."
+        in result.output
+    )
+    assert "To silence this check" not in result.output
+
+
+def test_standalone_notice_shown_when_up_to_date_in_background_check(
+    app_version, fake_settings, mock_update_sources
+):
+    app_version("1.0.0")
+    mock_update_sources(
+        pypi={"info": {"version": "1.0.0"}},
+        notices=[{"affects": "<1.1.0", "message": "Advisory for 1.0 users."}],
+    )
+    fake_settings(last_check=datetime.now(timezone.utc) - timedelta(days=2))
+
+    result = runner.invoke(app, ["sessions"])
+    assert result.exit_code == 0
+    assert "A new version" not in result.output
+    assert "[colab] Notice: Advisory for 1.0 users." in result.output
+    assert result.output.count("To silence this check") == 1
+
+
+def test_standalone_notice_shown_from_cache_when_throttled_and_up_to_date(
+    mocker, app_version, fake_settings
+):
+    app_version("1.0.0")
+    fake_settings(
+        last_check=datetime.now(timezone.utc) - timedelta(hours=1),
+        latest_version="1.0.0",
+        update_notices=[
+            UpdateNotice(affects="<=1.0.0", message="Cached standalone advisory.")
+        ],
+    )
+    mock_check = mocker.patch("colab_cli.auto_update.check_for_updates")
+
+    result = runner.invoke(app, ["sessions"])
+    assert result.exit_code == 0
+    assert mock_check.call_count == 0
+    assert "A new version" not in result.output
+    assert "[colab] Notice: Cached standalone advisory." in result.output
+    assert result.output.count("To silence this check") == 1
+
+
+def test_upgrade_and_notice_shown_together_without_duplicate_disable_hint(
+    app_version, fake_settings, mock_update_sources
+):
+    app_version("0.8.0")
+    mock_update_sources(
+        pypi={"info": {"version": "1.0.0"}},
+        notices=[
+            {
+                "affects": "<1.0.0",
+                "message": "colab console was removed; use colab ssh instead.",
+            }
+        ],
+    )
+    fake_settings(last_check=datetime.now(timezone.utc) - timedelta(days=2))
+
+    result = runner.invoke(app, ["sessions"])
+    assert result.exit_code == 0
+    assert "available: 1.0.0 (current: 0.8.0)" in result.output
+    assert (
+        "[colab] Notice: colab console was removed; use colab ssh instead."
+        in result.output
+    )
+    assert result.output.count("To silence this check") == 1
+
+
+@pytest.mark.parametrize(
+    "installed,expected_present,expected_absent",
+    [
+        ("0.7.5", ["Security fix in 0.8.0", "Breaking in 1.0.0"], ["Only 2.x"]),
+        ("0.8.0", ["Breaking in 1.0.0"], ["Security fix in 0.8.0", "Only 2.x"]),
+        (
+            "1.0.0",
+            [],
+            ["Security fix in 0.8.0", "Breaking in 1.0.0", "Only 2.x"],
+        ),
+    ],
+)
+def test_notice_specifier_filtering_across_skipped_versions(
+    app_version,
+    fake_settings,
+    mock_update_sources,
+    installed,
+    expected_present,
+    expected_absent,
+):
+    app_version(installed)
+    mock_update_sources(
+        pypi={"info": {"version": "1.0.0"}},
+        notices={
+            "notices": [
+                {
+                    "affects": "<0.8.0",
+                    "message": "Security fix in 0.8.0",
+                    "extra_field": "ignored",
+                },
+                {"affects": "<1.0.0", "message": "Breaking in 1.0.0"},
+                {"affects": ">=2.0.0", "message": "Only 2.x"},
+                {"affects": "", "message": "Empty specifier ignored"},
+                {"affects": "not-a-specifier", "message": "Invalid specifier ignored"},
+            ]
+        },
+    )
+    fake_settings()
+
+    result = runner.invoke(app, ["update"])
+    assert result.exit_code == 0
+    for msg in expected_present:
+        assert f"[colab] Notice: {msg}" in result.output
+    for msg in expected_absent:
+        assert msg not in result.output
+    assert "Empty specifier ignored" not in result.output
+    assert "Invalid specifier ignored" not in result.output
+
+
+def test_cached_notice_stops_showing_immediately_after_upgrade(
+    mocker, app_version, fake_settings
+):
+    app_version("1.0.0")
+    fake_settings(
+        last_check=datetime.now(timezone.utc) - timedelta(hours=1),
+        latest_version="1.0.0",
+        update_notices=[UpdateNotice(affects="<1.0.0", message="Old notice")],
+    )
+    mocker.patch("colab_cli.auto_update.check_for_updates")
+
+    result = runner.invoke(app, ["sessions"])
+    assert result.exit_code == 0
+    assert "Old notice" not in result.output
+
+
+def test_notices_404_is_silent_and_clears_cached_notices(
+    app_version, fake_settings, mock_update_sources
+):
+    app_version("1.0.0")
+    mock_update_sources(pypi={"info": {"version": "1.0.0"}}, notices="404")
+    settings = fake_settings(
+        update_notices=[UpdateNotice(affects="<=1.0.0", message="Retracted notice")]
+    )
+
+    result = runner.invoke(app, ["update"])
+    assert result.exit_code == 0
+    assert "Warning" not in result.output
+    assert "Retracted notice" not in result.output
+    assert settings.update_notices == []
+
+
+def test_notices_fetch_failure_preserves_cached_notices(
+    app_version, fake_settings, mock_update_sources
+):
+    app_version("1.0.0")
+    mock_update_sources(
+        pypi={"info": {"version": "1.0.0"}},
+        notices=OSError("github cdn unreachable"),
+    )
+    settings = fake_settings(
+        update_notices=[UpdateNotice(affects="<=1.0.0", message="Cached notice")]
+    )
+
+    result = runner.invoke(app, ["update"])
+    assert result.exit_code == 0
+    assert len(settings.update_notices) == 1
+    assert "[colab] Notice: Cached notice" in result.output
+
+
+def test_notice_still_works_when_pypi_fails(
+    app_version, fake_settings, mock_update_sources
+):
+    app_version("1.0.0")
+    mock_update_sources(
+        pypi=OSError("pypi unreachable"),
+        notices=[{"affects": "<=1.0.0", "message": "Standalone GitHub notice"}],
+    )
+    fake_settings()
+
+    result = runner.invoke(app, ["update"])
+    assert result.exit_code == 0
+    assert "[colab] Notice: Standalone GitHub notice" in result.output
+
+
+def test_notice_sanitizes_ansi_and_caps_count_and_length(
+    app_version, fake_settings, mock_update_sources
+):
+    app_version("1.0.0")
+    long_msg = "x" * 700
+    mock_update_sources(
+        pypi={"info": {"version": "1.0.0"}},
+        notices=[
+            {
+                "affects": "<=1.0.0",
+                "message": "\x1b[31mRed\x1b[0m\rOverwrite\x07\nLine2",
+            },
+            {"affects": "<=1.0.0", "message": long_msg},
+            {"affects": "<=1.0.0", "message": "Third notice"},
+            {"affects": "<=1.0.0", "message": "Fourth notice dropped"},
+        ],
+    )
+    fake_settings()
+
+    result = runner.invoke(app, ["update"])
+    assert result.exit_code == 0
+    assert "\x1b" not in result.output
+    assert "\x07" not in result.output
+    assert "[colab] Notice: Red Overwrite Line2" in result.output
+    assert "[colab] Notice: " + ("x" * 500) in result.output
+    assert "x" * 501 not in result.output
+    assert "[colab] Notice: Third notice" in result.output
+    assert "Fourth notice dropped" not in result.output
+
+
+def test_standalone_notice_suppressed_for_dev_git_sha_version(
+    app_version, fake_settings, mock_update_sources
+):
+    app_version("0abf82d")
+    mock_update_sources(
+        pypi={"info": {"version": "1.0.0"}},
+        notices=[{"affects": "<2.0.0", "message": "Should not crash dev version"}],
+    )
+    fake_settings()
+
+    result = runner.invoke(app, ["update"])
+    assert result.exit_code == 0
+    assert "Should not crash dev version" not in result.output
+
+
+def test_standalone_notice_suppressed_when_update_check_disabled(
+    mocker, app_version, fake_settings
+):
+    app_version("1.0.0")
+    fake_settings(
+        enable_update_check=False,
+        update_notices=[UpdateNotice(affects="<=1.0.0", message="Silenced notice")],
+    )
+    mocker.patch("colab_cli.auto_update.check_for_updates")
+
+    result = runner.invoke(app, ["sessions"])
+    assert result.exit_code == 0
+    assert "Silenced notice" not in result.output
