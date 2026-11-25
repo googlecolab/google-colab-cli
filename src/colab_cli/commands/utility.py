@@ -87,13 +87,18 @@ def url(
     # elsewhere in this module and avoid a circular import via colab_cli.common.
     from urllib.parse import quote
 
-    from colab_cli.common import state
+    from colab_cli.common import exit_attached_runtime, exit_ssh_only, state
 
     name = state.resolve_session(session)
     s = state.store.get(name)
     if not s:
         typer.echo(f"[colab] Session '{name}' not found.", err=True)
         raise typer.Exit(code=1)
+    if s.attached is True:
+        exit_ssh_only(name)
+    attached_name = state.store.attached_name_for_endpoint(s.endpoint)
+    if attached_name is not None:
+        exit_attached_runtime(name, attached_name)
 
     # Strip a trailing slash so we don't produce `https://host//notebooks/...`
     # or `https://host//tun/m/...` in the fragment URL.

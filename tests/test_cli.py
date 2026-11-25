@@ -1081,3 +1081,45 @@ def test_sessions_and_status_use_store_key_when_name_differs(mock_common_state):
     assert status_res.output.startswith("[alias] ep1 |")
     assert single_res.exit_code == 0
     assert single_res.output.startswith("[alias] ep1 |")
+
+
+def test_new_refuses_attached_name_before_assign(tmp_path, mocker):
+    local_state = _real_stop_state(tmp_path, mocker)
+    local_state.store.add(
+        SessionState(name="nb1", token="t", url="u", endpoint="ep-nb1", attached=True)
+    )
+
+    result = runner.invoke(app, ["new", "-s", "nb1"])
+
+    assert result.exit_code == 1
+    assert "colab ssh -s nb1" in result.output
+    assert "colab stop -s nb1" in result.output
+    local_state.client.assign.assert_not_called()
+
+
+def test_run_refuses_attached_name_before_assign(tmp_path, mocker):
+    local_state = _real_stop_state(tmp_path, mocker)
+    local_state.store.add(
+        SessionState(name="nb1", token="t", url="u", endpoint="ep-nb1", attached=True)
+    )
+    script = tmp_path / "job.py"
+    script.write_text("print(1)\n")
+
+    result = runner.invoke(app, ["run", "-s", "nb1", str(script)])
+
+    assert result.exit_code == 1
+    assert "colab ssh -s nb1" in result.output
+    assert "colab stop -s nb1" in result.output
+    local_state.client.assign.assert_not_called()
+
+
+@pytest.mark.parametrize("name", ["cli1", "fresh"], ids=["cli-owned", "unknown"])
+def test_refuse_attached_name_allows_cli_and_unknown_names(
+    tmp_path, mocker, capsys, name
+):
+    local_state = _real_stop_state(tmp_path, mocker)
+    local_state.store.add(SessionState(name="cli1", token="t", url="u", endpoint="ep1"))
+
+    local_state.refuse_attached_name(name)
+
+    assert capsys.readouterr().err == ""

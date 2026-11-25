@@ -162,6 +162,7 @@ def new(
             err=True,
         )
 
+    state.refuse_attached_name(name)
     typer.echo(f"[colab] Creating session '{name}'...")
     try:
         res = state.client.assign(
@@ -401,7 +402,7 @@ def stop_session(name: str) -> None:
     ):
         _stopOne(name, record)
         return
-    s = state.get_session(name)
+    s = state.get_session(name, allow_attached=True)
     if _stopOne(name, s):
         typer.echo("[colab] Session terminated.")
 

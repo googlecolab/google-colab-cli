@@ -19,6 +19,8 @@ import typer
 from unittest.mock import MagicMock
 
 from colab_cli.auth import AuthProvider
+from colab_cli.common import State
+from colab_cli.history import HistoryLogger
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +41,7 @@ def mock_common_state(mocker, tmp_path):
 
     # Setup standard mocks for properties
     mock_state.store = MagicMock()
+    mock_state.store.attached_name_for_endpoint.return_value = None
     mock_state.settings_store.path = str(tmp_path / "settings.json")
     mock_state.client = MagicMock()
     mock_state.history = MagicMock()
@@ -46,7 +49,7 @@ def mock_common_state(mocker, tmp_path):
     mock_state.config_path = None
 
     # Token refresh is covered in test_common.py; elsewhere just read the store.
-    def get_session(name, ignore_missing_session=False):
+    def get_session(name, *, ignore_missing_session=False, allow_attached=False):
         s = mock_state.store.get(name)
         if not s and not ignore_missing_session:
             typer.echo(f"[colab] Session '{name}' not found.")
@@ -54,6 +57,9 @@ def mock_common_state(mocker, tmp_path):
         return s
 
     mock_state.get_session.side_effect = get_session
+    mock_state.refuse_attached_name.side_effect = lambda name: (
+        State.refuse_attached_name(mock_state, name)
+    )
 
     # Default behavior for sync_sessions
     mock_state.sync_sessions.return_value = ({}, [])
@@ -66,3 +72,27 @@ def mock_common_state(mocker, tmp_path):
     mocker.patch("colab_cli.commands.run.ColabRuntime")
 
     return mock_state
+
+
+@pytest.fixture
+def real_state(tmp_path, monkeypatch, mocker):
+    from session_fakes import RecordingSession
+
+    from colab_cli.client import Client, Prod
+    from colab_cli.state import SettingsStore, StateStore
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    mocker.patch("colab_cli.cli.auto_update.run_background_check", autospec=True)
+    local_state = State()
+    local_state._settings_store = SettingsStore(str(tmp_path / "settings.json"))
+    local_state._store = StateStore(str(tmp_path / "sessions.json"))
+    local_state._client = Client(
+        Prod(),
+        RecordingSession(),
+        settings_store=local_state._settings_store,
+        is_attached=local_state._store.is_attached_endpoint,
+    )
+    local_state._history = MagicMock(spec=HistoryLogger)
+    mocker.patch("colab_cli.common.state", local_state)
+    mocker.patch("colab_cli.cli.state", local_state)
+    return local_state

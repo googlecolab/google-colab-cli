@@ -53,6 +53,7 @@ def _make_session(name: str = "s1", endpoint: str = "abc123def"):
     s = MagicMock()
     s.name = name
     s.endpoint = endpoint
+    s.attached = False
     return s
 
 

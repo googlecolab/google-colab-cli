@@ -1,0 +1,118 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Session records, fake HTTP sessions and store helpers shared by tests."""
+
+import json
+from datetime import datetime, timedelta, timezone
+from unittest.mock import create_autospec
+
+from colab_cli.auth import get_credentials as _real_get_credentials
+from colab_cli.state import SessionState
+
+ATT = ("att", "att-ep", True)
+ATT2 = ("att2", "att2-ep", True)
+CLI = ("cli", "cli-ep", False)
+SHARED = ("cli2", "att-ep", False)
+
+
+class _FakeRequest:
+    headers: dict[str, str] = {}
+
+
+class _FakeResponse:
+    """Minimal stand-in for requests.Response in recorded HTTP sessions."""
+
+    def __init__(self, text: str, status_code: int = 200, reason: str = "OK"):
+        self.text = text
+        self.status_code = status_code
+        self.reason = reason
+        self.ok = 200 <= status_code < 400
+        self.headers: dict[str, str] = {}
+        self.request = _FakeRequest()
+
+
+class RecordingSession:
+    """Stands in for the authorized HTTP session and records every request."""
+
+    def __init__(self):
+        self.requests = []
+
+    def request(self, method, url, **kwargs):
+        self.requests.append((method, url))
+        raise RuntimeError(f"unexpected request: {method} {url}")
+
+
+class UnassignSession(RecordingSession):
+    """Records every request and accepts unassign calls."""
+
+    def request(self, method, url, **kwargs):
+        if "/unassign/" not in url:
+            return super().request(method, url, **kwargs)
+        self.requests.append((method, url))
+        body = '{"token": "xsrf"}' if method == "GET" else ""
+        return _FakeResponse(body)
+
+
+class AssignmentsSession(UnassignSession):
+    """Records requests, lists `endpoints` as assigned and accepts unassign."""
+
+    def __init__(self, *endpoints: str):
+        super().__init__()
+        self.endpoints = endpoints
+
+    def request(self, method, url, **kwargs):
+        if not url.endswith("/tun/m/assignments"):
+            return super().request(method, url, **kwargs)
+        self.requests.append((method, url))
+        info = {"token": "t", "tokenExpiresInSeconds": 3600}
+        listed = [
+            {
+                "accelerator": "NONE",
+                "endpoint": ep,
+                "variant": 0,
+                "machineShape": 0,
+                "runtimeProxyInfo": dict(info, url=f"https://{ep}"),
+            }
+            for ep in self.endpoints
+        ]
+        text = json.dumps({"assignments": listed})
+        return _FakeResponse(text)
+
+
+def fresh_session(name: str, endpoint: str, attached: bool) -> SessionState:
+    expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    return SessionState(
+        name=name,
+        token="t",
+        url=f"https://{endpoint}",
+        endpoint=endpoint,
+        token_expires_at=expires,
+        attached=attached,
+    )
+
+
+def use_guarded_client(local_state, mocker, http_session=None):
+    local_state._client = None
+    credentials = create_autospec(
+        _real_get_credentials, return_value=http_session or RecordingSession()
+    )
+    mocker.patch("colab_cli.common.get_credentials", new=credentials)
+
+
+def unassigned_endpoints(local_state) -> set[str]:
+    urls = [
+        url for _, url in local_state.client.session.requests if "/unassign/" in url
+    ]
+    return {url.rsplit("/", 1)[-1] for url in urls}

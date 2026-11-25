@@ -246,6 +246,7 @@ def run_command(
         raise typer.Exit(2)
 
     name = session or f"run-{uuid.uuid4().hex[:6]}"
+    state.refuse_attached_name(name)
     variant, accelerator, shape = resolve_runtime_options(gpu, tpu, high_mem=high_mem)
 
     if high_mem and accelerator in HIGH_MEM_ONLY_ACCELERATORS:
@@ -422,7 +423,9 @@ def _teardown(name: str, s: SessionState, *, reason: str) -> None:
     typer.echo(f"[colab] Stopping session '{name}'...", err=True)
     try:
         # The script may have outlived the proxy token.
-        fresh = state.get_session(name, ignore_missing_session=True)
+        fresh = state.get_session(
+            name, ignore_missing_session=True, allow_attached=True
+        )
         if (
             fresh
             and fresh.attached is not True

@@ -410,6 +410,28 @@ def test_is_attached_endpoint(tmp_path):
     assert store.is_attached_endpoint("att-ep") is True
     assert store.is_attached_endpoint("cli-ep") is False
     assert store.is_attached_endpoint("missing") is False
+    assert store.attached_name_for_endpoint("att-ep") == "att"
+    assert store.attached_name_for_endpoint("cli-ep") is None
+    assert store.attached_name_for_endpoint("missing") is None
+
+
+def test_attached_name_for_endpoint_uses_store_key_when_name_differs(tmp_path):
+    path = tmp_path / "sessions.json"
+    path.write_text(
+        json.dumps(
+            {
+                "alias": {
+                    "name": "inner",
+                    "token": "t",
+                    "url": "u",
+                    "endpoint": "att-ep",
+                    "attached": True,
+                }
+            }
+        )
+    )
+
+    assert StateStore(str(path)).attached_name_for_endpoint("att-ep") == "alias"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")

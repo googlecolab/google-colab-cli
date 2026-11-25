@@ -16,9 +16,11 @@ import contextlib
 import logging
 import os
 import re
+import shlex
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import NoReturn, Optional
 
 import typer
 
@@ -41,6 +43,59 @@ def _apply_proxy_info(s: SessionState, info: RuntimeProxyInfo):
     s.token = info.token
     s.url = info.url
     s.token_expires_at = info.expires_at()
+
+
+def exit_ssh_only(name: str, more: str = "") -> NoReturn:
+    """Prints an ssh-only error for an attached session and exits.
+
+    Args:
+      name: Session name the caller tried to use.
+      more: Optional trailing text appended after the ``colab ssh`` command.
+
+    Raises:
+      typer.Exit: Always exits with code 1.
+    """
+    typer.echo(
+        f"[colab] Error: Session '{name}' uses a runtime the CLI did not"
+        f" create. Use it with `colab ssh -s {shlex.quote(name)}`{more}.",
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
+def exit_attached_runtime(name: str, attached_name: str) -> NoReturn:
+    """Prints an error for a CLI session sharing an attached runtime and exits.
+
+    Args:
+      name: CLI session name that shares the attached endpoint.
+      attached_name: Attached session name that owns the runtime locally.
+
+    Raises:
+      typer.Exit: Always exits with code 1.
+    """
+    ssh_cmd = f"`colab ssh -s {shlex.quote(attached_name)}`"
+    stop_cmd = f"`colab stop -s {shlex.quote(name)}`"
+    typer.echo(
+        f"[colab] Error: Session '{name}' uses the same runtime as attached"
+        f" session '{attached_name}'. Use {ssh_cmd}, or remove '{name}' with"
+        f" {stop_cmd}.",
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
+def _exit_only_attached(sessions: Mapping[str, SessionState]) -> NoReturn:
+    attached = [n for n, s in sessions.items() if s.attached is True]
+    first, *others = sorted(attached or sessions)
+    also = f" (also attached: {', '.join(others)})" if others else ""
+    remove = f", or remove it with `colab stop -s {shlex.quote(first)}`"
+    exit_ssh_only(first, remove + also)
+
+
+def _is_attached_session(store: StateStore, s: SessionState) -> bool:
+    return (
+        s.attached is True or store.attached_name_for_endpoint(s.endpoint) is not None
+    )
 
 
 class State:
@@ -99,6 +154,20 @@ class State:
             )
         return self._client
 
+    def refuse_attached_name(self, name: str) -> None:
+        """Exits if ``name`` already refers to an attached session in the store.
+
+        Args:
+          name: Candidate session name for ``colab new`` or ``colab run``.
+
+        Raises:
+          typer.Exit: With code 1 if ``name`` is an attached session.
+        """
+        record = self.store.get(name)
+        if record is not None and record.attached is True:
+            remove = f", remove it with `colab stop -s {shlex.quote(name)}`"
+            exit_ssh_only(name, f"{remove}, or pick another name")
+
     def prune_session(self, name: str):
         """Removes a session from local state."""
         self.store.remove(name)
@@ -107,7 +176,11 @@ class State:
         self.history.log_event(name, "session_terminated", {"reason": "pruned"})
 
     def get_session(
-        self, name: str, ignore_missing_session: bool = False
+        self,
+        name: str,
+        *,
+        ignore_missing_session: bool = False,
+        allow_attached: bool = False,
     ) -> Optional[SessionState]:
         """Load a session, refreshing its runtime proxy token if it's near expiry.
 
@@ -115,8 +188,28 @@ class State:
         server-side (in which case it's pruned). Missing sessions print an error
         and exit, unless ignore_missing_session is set, in which case this
         returns None.
+
+        Args:
+          name: Session name to load from the local store.
+          ignore_missing_session: Return None instead of exiting when missing.
+          allow_attached: Allow loading attached sessions and CLI records
+            whose endpoint is attached (for ``ssh``, ``stop``, and teardown).
+
+        Returns:
+          The loaded ``SessionState``, or None when missing and
+          ``ignore_missing_session`` is True.
+
+        Raises:
+          typer.Exit: With code 1 if missing (and not ignored) or refused as
+            ssh-only.
         """
         s = self.store.get(name)
+        if s and not allow_attached:
+            if s.attached is True:
+                exit_ssh_only(name)
+            attached_name = self.store.attached_name_for_endpoint(s.endpoint)
+            if attached_name is not None:
+                exit_attached_runtime(name, attached_name)
         if s and (
             not s.token_expires_at
             or s.token_expires_at - datetime.now(timezone.utc) <= TOKEN_REFRESH_MARGIN
@@ -170,7 +263,25 @@ class State:
 
         return self._sessions, assignments
 
-    def resolve_session(self, session_name: Optional[str]) -> str:
+    def resolve_session(
+        self, session_name: str | None, *, allow_attached: bool = False
+    ) -> str:
+        """Resolves a target session name or selects the sole non-attached one.
+
+        Args:
+          session_name: Explicit session name, or None to auto-select when
+            exactly one eligible active session exists.
+          allow_attached: Whether attached sessions (and CLI records sharing an
+            attached endpoint) are eligible for auto-selection.
+
+        Returns:
+          The resolved session name.
+
+        Raises:
+          typer.Exit: With code 1 if no eligible active sessions exist, multiple
+            eligible sessions remain, or only attached sessions exist when
+            ``allow_attached`` is False.
+        """
         if session_name:
             return session_name
 
@@ -181,26 +292,35 @@ class State:
                 "[colab] Error: No active sessions found. Create one with 'colab new'."
             )
             raise typer.Exit(1)
+        if not allow_attached and all(
+            _is_attached_session(self.store, s) for s in local_sessions.values()
+        ):
+            _exit_only_attached(local_sessions)
 
         # If we have local sessions, we need to sync to make sure they are still valid.
         # This will trigger auth if valid credentials are not present.
         sessions, _ = self.sync_sessions()
-        active_names = list(sessions.keys())
+        active_names = [
+            n
+            for n, s in sessions.items()
+            if allow_attached or not _is_attached_session(self.store, s)
+        ]
 
         if len(active_names) == 1:
             name = active_names[0]
             typer.echo(f"[colab] Using unique session '{name}'.")
             return name
-        elif len(active_names) > 1:
+        if len(active_names) > 1:
             typer.echo(
                 f"[colab] Error: Multiple active sessions found. Specify one with -s: {', '.join(active_names)}"
             )
             raise typer.Exit(1)
-        else:
-            typer.echo(
-                "[colab] Error: No active sessions found. Create one with 'colab new'."
-            )
-            raise typer.Exit(1)
+        if sessions and not allow_attached:
+            _exit_only_attached(sessions)
+        typer.echo(
+            "[colab] Error: No active sessions found. Create one with 'colab new'."
+        )
+        raise typer.Exit(1)
 
 
 state = State()
