@@ -1,5 +1,7 @@
 ---
 log:
+2026-11-23: `colab exec` now exits 1 when executed code produces a kernel `error` output (after recording history and saving `*_output.ipynb` for notebooks, stopping further notebook cells) (#250).
+
 2026-05-07: Fixed `colab console` piped-stdin handling. Previously a piped invocation (e.g. `echo 'cmd' | colab console -s s`) sent the command and then hung indefinitely because the previous EOF handler emitted a bare `\x04` (Ctrl-D), which the remote `tmux`-wrapped bash treats as a literal character rather than a session terminator. The new handler sends `exit\n` (which bash actually exits on) and then closes the websocket from the client side after a short grace period (`PIPED_EOF_GRACE_SECONDS = 0.5s`) so any tail output (bash `logout`, tmux `[exited]`) makes it back to the user. TTY mode is unchanged: real-terminal EOF is left to the remote shell. Verified live: `echo 'echo HELLO' | colab console -s s` now exits in ~1.2s instead of hanging.
 
 2026-05-07: Fixed `print_kitty` (used by `colab exec --output-image` and any image-producing exec) to no-op when `sys.stdout.isatty()` is false. The Kitty Graphics Protocol escape sequence is meaningless when stdout is a file or pipe and was visually corrupting captured output (a multi-KB base64 PNG blob would land in log files, grep targets, or showboat captures). Image bytes are still saved to disk via `handle_image`'s file-write path; only the inline-render attempt is suppressed.
@@ -33,6 +35,7 @@ Execution involves sending Python code (or shell commands) to the Jupyter kernel
     - If file path is remote: Execute `!python <path>`.
 - **Multi-Modal Output**: Handle `display_data` messages (e.g., `image/png`, `text/html`). For the CLI, we'll save images to temporary files and print their paths, or if the terminal supports it (e.g., iTerm2), inline them.
 - **Timeout Configuration**: Exposes a `--timeout` flag (default 30s): the longest silence allowed before execution fails. Raise it so long-running silent tasks (like model compilation or data downloading) are not prematurely killed; `0` means no limit.
+- **Error Exit Status**: Exits with status 1 if any executed code block returns an `output_type == "error"` output from the kernel (stopping remaining cells when executing a `.ipynb` notebook while still writing `*_output.ipynb`).
 
 ## Implementation Details
 - **Kernel Management**: `ColabRuntime` (from `colab-agent`) already handles message signing and message types.
@@ -46,6 +49,7 @@ TDD is mandatory for all execution features.
 - **Test Case**: Verify `ColabRuntime` correctly sends an `execute_request` message over the websocket.
 - **Test Case**: Verify `iopub.stream` messages are correctly handled and printed to `stdout` in real-time.
 - **Test Case**: Verify `display_data` (specifically `image/png`) triggers the correct local handling (saving or display).
+- **Test Case**: Verify `colab exec` exits with status 1 when the kernel emits an `error` output, and halts multi-cell `.ipynb` execution at the failing cell while still saving `*_output.ipynb`.
 
 ### 2. TTY and Piping
 - **Test Case**: Mock `sys.stdin.isatty()` to verify `colab repl` correctly switches between interactive mode and one-shot piped execution.
