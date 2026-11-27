@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import base64
+import io
 import json
 from urllib.parse import quote
 
@@ -21,9 +22,13 @@ import requests
 from colab_cli.state import SessionState
 from colab_cli.utils import get_status_code
 
-# (connect, read) seconds. The read timeout bounds the wait between bytes, not
-# the whole transfer, so large uploads/downloads still finish; a dropped
-# connection fails instead of hanging forever.
+# (connect, read) seconds. The read timeout bounds each wait for response
+# bytes. urllib3 applies the connect timeout to the socket writes of the
+# request body, so _request sends a body as a file object, which goes out in
+# small writes with a timeout each; a body passed as bytes is written in one
+# call that would have to finish within the connect timeout. Neither timeout
+# bounds a whole transfer, so large uploads/downloads still finish, while a
+# dropped connection fails instead of hanging forever.
 REQUEST_TIMEOUT = (30, 300)
 
 
@@ -43,8 +48,19 @@ class ContentsClient:
         if params:
             req_params.update(params)
 
+        body = None
+        headers = None
+        if json_data is not None:
+            body = io.BytesIO(json.dumps(json_data, allow_nan=False).encode())
+            headers = {"Content-Type": "application/json"}
+
         response = requests.request(
-            method, url, params=req_params, json=json_data, timeout=REQUEST_TIMEOUT
+            method,
+            url,
+            params=req_params,
+            data=body,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
         )
 
         if get_status_code(response) == 404:

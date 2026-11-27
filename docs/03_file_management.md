@@ -1,3 +1,8 @@
+---
+log:
+2026-11-27: The Contents API request body is sent as a file object, in small writes, so that the 30-second connect timeout bounds each write instead of the whole upload. Before, any upload whose body took longer than 30 seconds to send failed.
+---
+
 # Design: File Management (`ls`, `rm`, `upload`, `download`, `edit`)
 
 ## Overview
@@ -32,7 +37,7 @@ File management on the Colab VM will be implemented using the Jupyter Contents A
 - **API**: `GET /api/contents/<remote_path>?content=1` (as seen in HAR).
 - **Response**: JSON with `content` field.
 - **Handling**: Decodes content based on `format` (`base64`, `json`, or plain `text`) and saves it locally.
-- **Timeouts**: Every Contents API request uses a `(connect, read)` timeout of `(30, 300)` seconds. The read timeout bounds the wait between bytes, not the whole transfer, so large files still finish while a dropped connection fails with an error instead of hanging `ls`, `rm`, `upload`, `download`, or `edit` forever.
+- **Timeouts**: Every Contents API request uses a `(connect, read)` timeout of `(30, 300)` seconds. The read timeout bounds each wait for response bytes. urllib3 applies the connect timeout to the socket writes of the request body, so a body passed as bytes, which is written in one call, would have to be sent within 30 seconds: an upload of a large file over a slow link would fail even while it keeps moving. `_request` therefore sends the JSON body as a file object, which urllib3 writes in small blocks with a timeout each. Neither timeout bounds the whole transfer, so large files still finish while a dropped connection fails with an error instead of hanging `ls`, `rm`, `upload`, `download`, or `edit` forever.
 
 ### 4. Deleting Files (`colab rm`)
 - **API**: `DELETE /api/contents/<remote_path>`.
