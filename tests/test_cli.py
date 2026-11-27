@@ -226,7 +226,7 @@ def test_cli_status(mock_store, mock_common_state):
     # Test with missing session
     mock_store.get.return_value = None
     result = runner.invoke(app, ["status", "-s", "missing"])
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert "Session 'missing' not found" in result.output
 
     # Test list all sessions: same unified format
