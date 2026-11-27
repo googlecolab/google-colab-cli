@@ -39,6 +39,13 @@ def windows_python(tmp_path_factory):
     return str(path / "Scripts" / "python.exe")
 
 
+@pytest.fixture(scope="module")
+def windows_python_nospace(tmp_path_factory):
+    path = tmp_path_factory.mktemp("python") / "venv"
+    venv.EnvBuilder().create(path)
+    return str(path / "Scripts" / "python.exe")
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="requires CreateProcessW")
 @pytest.mark.parametrize(
     "name",
@@ -79,8 +86,56 @@ def test_proxy_command_launches_with_literal_arguments(
     )
     expected = ["ssh", "--proxy-mode", "-s", name]
     if identity:
-        expected.extend(["--identity", identity])
+        expected.extend(["--identity", identity.replace("\\", "/")])
     expected.extend(["--colab-internal-mode", "interactive"])
+    assert json.loads(result.stdout) == expected
+
+
+def _git_bash() -> str | None:
+    git = shutil.which("git")
+    if not git:
+        return None
+    root = Path(git).resolve().parent.parent
+    bash = root / "bin" / "bash.exe"
+    return str(bash) if bash.exists() else None
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or not _git_bash(), reason="requires Git for Windows"
+)
+@pytest.mark.parametrize("name", ["simple", "with space"])
+@pytest.mark.parametrize("identity", [None, "C:\\SSH keys\\id_ed25519"])
+@pytest.mark.parametrize("python_fixture", ["windows_python", "windows_python_nospace"])
+def test_proxy_command_survives_msys_ssh_shell(
+    tmp_path, request, monkeypatch, name, identity, python_fixture
+):
+    """Git for Windows' ssh runs ProxyCommand as `bash -c "exec <cmd>"`.
+
+    Backslash paths from list2cmdline are eaten as escapes by that shell, so
+    `colab ssh` from Git Bash failed with `D:Projects...python.exe: not found`.
+    """
+    package = tmp_path / "colab_cli"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "cli.py").write_text(
+        "import json, sys; print(json.dumps(sys.argv[1:]))", encoding="utf-8"
+    )
+    monkeypatch.setattr(ssh.sys, "executable", request.getfixturevalue(python_fixture))
+    command = ssh._proxy_command(SimpleNamespace(name=name), identity, "cmd")
+    env = {**os.environ, "PYTHONPATH": str(tmp_path)}
+    result = subprocess.run(
+        [_git_bash(), "-c", f"exec {command}"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    expected = ["ssh", "--proxy-mode", "-s", name]
+    if identity:
+        expected.extend(["--identity", identity.replace("\\", "/")])
+    expected.extend(["--colab-internal-mode", "cmd"])
     assert json.loads(result.stdout) == expected
 
 
@@ -132,7 +187,7 @@ def test_windows_openssh_starts_proxy(tmp_path, windows_python, monkeypatch):
         "-s",
         "session with spaces",
         "--identity",
-        "C:\\SSH keys\\id_ed25519",
+        "C:/SSH keys/id_ed25519",
         "--colab-internal-mode",
         "interactive",
     ]
@@ -153,9 +208,31 @@ def test_rm_handlers_without_sighup(mocker):
     exit_process.assert_called_once_with(0)
 
 
-def test_ssh_uses_local_null_device():
+def test_ssh_uses_local_null_device(monkeypatch):
+    monkeypatch.setattr(ssh.shutil, "which", lambda _: None)
     args = ssh._ssh_base_args("proxy", None)
     assert f"UserKnownHostsFile={os.devnull}" in args
+
+
+@pytest.mark.parametrize("dll", ["msys-2.0.dll", "cygwin1.dll"])
+def test_msys_ssh_gets_posix_null_device(tmp_path, monkeypatch, dll):
+    """Git for Windows' ssh treats `nul` as a regular file and writes the
+    host key into `./nul`; it needs `/dev/null` instead."""
+    (tmp_path / "ssh.exe").write_bytes(b"")
+    (tmp_path / dll).write_bytes(b"")
+    monkeypatch.setattr(ssh.sys, "platform", "win32")
+    monkeypatch.setattr(ssh.shutil, "which", lambda _: str(tmp_path / "ssh.exe"))
+    args = ssh._ssh_base_args("proxy", None)
+    assert "UserKnownHostsFile=/dev/null" in args
+
+
+def test_native_windows_ssh_keeps_nul(tmp_path, monkeypatch):
+    (tmp_path / "ssh.exe").write_bytes(b"")
+    monkeypatch.setattr(ssh.sys, "platform", "win32")
+    monkeypatch.setattr(ssh.os, "devnull", "nul")
+    monkeypatch.setattr(ssh.shutil, "which", lambda _: str(tmp_path / "ssh.exe"))
+    args = ssh._ssh_base_args("proxy", None)
+    assert "UserKnownHostsFile=nul" in args
 
 
 def test_rm_handlers_register_available_signals(mocker):

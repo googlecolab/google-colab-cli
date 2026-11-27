@@ -42,6 +42,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -480,18 +481,47 @@ def _proxy_command(session: SessionState, identity: Optional[str], mode: str) ->
     """
     from colab_cli.common import state
 
-    argv = [sys.executable, "-m", "colab_cli.cli"]
+    win = sys.platform == "win32"
+
+    def path_arg(p: str) -> str:
+        """Forward slashes on Windows: Git for Windows' ssh runs ProxyCommand
+        through bash, which eats unquoted backslashes as escapes, while
+        CreateProcessW and Python accept `D:/...` paths just the same."""
+        return p.replace("\\", "/") if win else p
+
+    argv = [path_arg(sys.executable), "-m", "colab_cli.cli"]
     if state.auth_provider is not AuthProvider.OAUTH2:
         argv += ["--auth", state.auth_provider.value]
     if state.config_path:
-        argv += ["--config", os.path.abspath(state.config_path)]
+        argv += ["--config", path_arg(os.path.abspath(state.config_path))]
     argv += ["ssh", "--proxy-mode", "-s", session.name]
     if identity:
-        argv += ["--identity", identity]
+        argv += ["--identity", path_arg(identity)]
     argv += ["--colab-internal-mode", mode]
-    if sys.platform == "win32":
+    if win:
         return subprocess.list2cmdline(argv)
     return shlex.join(argv)
+
+
+def _ssh_null_device() -> str:
+    """Null device path understood by the ``ssh`` on PATH.
+
+    Native Windows OpenSSH wants ``nul``, but MSYS/Cygwin builds (Git for
+    Windows' ``/usr/bin/ssh``) treat ``nul`` as a regular file and write the
+    host key into ``./nul``. Those builds ship ``msys-2.0.dll`` or
+    ``cygwin1.dll`` next to ``ssh.exe`` and understand ``/dev/null``.
+    """
+    if sys.platform != "win32":
+        return os.devnull
+    ssh_path = shutil.which("ssh")
+    if ssh_path:
+        bin_dir = os.path.dirname(ssh_path)
+        if any(
+            os.path.exists(os.path.join(bin_dir, dll))
+            for dll in ("msys-2.0.dll", "cygwin1.dll")
+        ):
+            return "/dev/null"
+    return os.devnull
 
 
 def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:
@@ -503,7 +533,7 @@ def _ssh_base_args(proxy_command: str, identity: Optional[str]) -> list[str]:
         "-o",
         "StrictHostKeyChecking=no",
         "-o",
-        f"UserKnownHostsFile={os.devnull}",
+        f"UserKnownHostsFile={_ssh_null_device()}",
         "-o",
         "LogLevel=ERROR",
     ]
