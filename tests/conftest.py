@@ -33,6 +33,16 @@ def isolate_keyring():
 
 
 @pytest.fixture(autouse=True)
+def block_real_browser(monkeypatch):
+    """Never launch the host browser during unit tests.
+
+    On Linux CI `webbrowser.open` silently fails, but on Windows/macOS it opens
+    real tabs for any test that reaches a browser-opening path unmocked.
+    """
+    monkeypatch.setattr("webbrowser.open", lambda *a, **k: False)
+
+
+@pytest.fixture(autouse=True)
 def mock_common_state(mocker):
     # Patch the state singleton in common.py
     mock_state = mocker.patch("colab_cli.common.state")
