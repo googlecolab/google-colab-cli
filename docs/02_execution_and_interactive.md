@@ -1,5 +1,7 @@
 ---
 log:
+2026-11-27: Fixed `colab exec` exiting 1 after `sys.exit()` / `sys.exit(None)` / `sys.exit(0)`. A leftover `any(output_type == "error")` check after `_exit_code_from_outputs` re-flagged the `SystemExit` error output as a failure, overriding the CPython mapping; `_exit_code_from_outputs` already returns 1 for every non-`SystemExit` error, so the check was removed. `test_cli_exec_systemexit_zero_exits_zero_silently` now passes.
+
 2026-11-23: Shared `colab run`'s CPython `SystemExit` handling (`_exit_code_from_outputs`, `_make_script_output_hook`) with `colab exec` and muted IPython's `"To exit: use ..."` warning during `exec` setup. Because a persistent IPython kernel catches `SystemExit` and emits it as `output_type == "error"` to avoid killing the kernel process, treating every kernel error output as exit 1 wrongly failed scripts that call `sys.exit(0)` (e.g. `argparse --help`, `unittest.main()`) and collapsed `sys.exit(N)` codes into 1.
 
 2026-11-23: `colab exec` now exits 1 when executed code produces a kernel `error` output (after recording history and saving `*_output.ipynb` for notebooks, stopping further notebook cells) (#250).

@@ -353,8 +353,6 @@ def exec_command(
             cell_exit_code = _exit_code_from_outputs(outputs)
             if cell_exit_code != 0:
                 raise typer.Exit(cell_exit_code)
-            if any(o.get("output_type") == "error" for o in outputs):
-                raise typer.Exit(1)
     finally:
         s.running = None
         state.store.add(s)
