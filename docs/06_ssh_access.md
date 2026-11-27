@@ -1,5 +1,6 @@
 ---
 log:
+2026-11-27: Fixed `colab ssh` under Git for Windows' MSYS `ssh` (`/usr/bin/ssh` in Git Bash): ProxyCommand path arguments now use forward slashes on Windows (bash stripped the backslashes, failing with `D:Projects...python.exe: not found`), and `UserKnownHostsFile` is `/dev/null` when `ssh.exe` is an MSYS/Cygwin build (it wrote the host key to a `./nul` file). Native Windows OpenSSH keeps `nul`. Verified live from Git Bash and PowerShell (OpenSSH_for_Windows 9.5), and `integration/repro_windows_ssh/test.py` passed.
 2026-11-23: Updated `integration/repro_windows_ssh/test.py` to check cached OAuth2 credentials via the OS `keyring` (`KEYRING_SERVICE_NAME` / `KEYRING_USERNAME`) instead of the removed `TOKEN_CONFIG_PATH`, and added portable import and prerequisite-skip regression tests in `tests/test_windows_ssh.py`.
 2026-11-09: `--identity/-i` now accepts either a `.pub` public key or a private key path: `_resolve_pubkey` reads the `.pub` file directly when present before falling back to `_pubkey_from_identity` (`ssh-keygen -y -f`), and `_ssh_base_args` strips `.pub` for `ssh -i` when the sibling private key exists on disk.
 2026-10-29: Removed the `colab console` subcommand, so `colab ssh` is the interactive shell on the runtime. Dropped console behavior from the Windows validation caveat.
@@ -104,7 +105,14 @@ session (never creating one); every word from CMD on goes to CMD, flags too.
    falls back to the login home.
    On native Windows, the ProxyCommand uses `subprocess.list2cmdline` for
    CreateProcessW argument parsing; POSIX systems continue to use `shlex.join`.
-   The local `UserKnownHostsFile` uses `os.devnull` (`nul` on Windows).
+   Path arguments (the interpreter, `--config`, `--identity`) are emitted with
+   forward slashes on Windows: Git for Windows' MSYS `ssh` (`/usr/bin/ssh` in
+   Git Bash) runs ProxyCommand as `bash -c "exec <cmd>"`, which strips unquoted
+   backslashes, while CreateProcessW and Python accept `D:/...` unchanged.
+   The local `UserKnownHostsFile` uses `os.devnull` (`nul` on Windows), except
+   when the `ssh` on PATH is an MSYS/Cygwin build (`msys-2.0.dll` or
+   `cygwin1.dll` beside `ssh.exe`): those treat `nul` as a regular file and
+   write the host key to `./nul`, so they get `/dev/null`.
 4. **`--proxy-mode` bridge**: Bridges the WebSocket ↔ stdin/stdout for use as an
    OpenSSH `ProxyCommand`. Honors every flag: `-s NAME` creates the session if
    missing (creation output routed to stderr so stdout stays the clean ssh byte
@@ -192,6 +200,10 @@ interpreter installed under a path with spaces. Assertions check exact argv
 preservation for spaces, quotes, shell punctuation, backslashes, Unicode, and
 identity paths. A separate test launches the real Windows OpenSSH client with
 a local stub ProxyCommand and verifies its argv, without contacting Colab.
+When Git for Windows is installed, the ProxyCommand is also run through its
+`bash -c "exec ..."` (how MSYS `ssh` launches it) with interpreters under
+paths with and without spaces. The null-device choice is checked for native
+OpenSSH and for MSYS/Cygwin `ssh.exe` layouts.
 Portable tests also check registration without SIGHUP, the local null
 device, and `integration/repro_windows_ssh/test.py` import and prerequisite
 skip paths across platforms. Existing POSIX shell quoting and teardown tests
