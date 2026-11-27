@@ -337,7 +337,8 @@ def status(
         if s:
             _print_status_for(s)
         else:
-            typer.echo(f"[colab] Session '{session}' not found.")
+            typer.echo(f"[colab] Session '{session}' not found.", err=True)
+            raise typer.Exit(1)
         return
 
     if not local_sessions:
